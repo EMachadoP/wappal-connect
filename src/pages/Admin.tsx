@@ -298,8 +298,18 @@ export default function AdminPage() {
       return;
     }
 
-    if (newAgentPassword.length < 6) {
-      toast({ variant: 'destructive', title: 'Erro', description: 'A senha deve ter pelo menos 6 caracteres' });
+    // Strong password validation
+    const hasMinLength = newAgentPassword.length >= 8;
+    const hasLowercase = /[a-z]/.test(newAgentPassword);
+    const hasUppercase = /[A-Z]/.test(newAgentPassword);
+    const hasNumber = /[0-9]/.test(newAgentPassword);
+
+    if (!hasMinLength || !hasLowercase || !hasUppercase || !hasNumber) {
+      toast({ 
+        variant: 'destructive', 
+        title: 'Senha fraca', 
+        description: 'A senha deve ter pelo menos 8 caracteres, incluindo letras maiúsculas, minúsculas e números.' 
+      });
       return;
     }
 
