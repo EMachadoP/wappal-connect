@@ -305,40 +305,29 @@ export default function AdminPage() {
 
     setCreatingAgent(true);
     try {
-      // Create user with Supabase Auth
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: newAgentEmail.trim(),
-        password: newAgentPassword,
-        options: {
-          data: {
-            name: newAgentName.trim(),
-          },
+      // Create user via edge function (doesn't log in)
+      const { data, error } = await supabase.functions.invoke('create-agent', {
+        body: {
+          email: newAgentEmail.trim(),
+          password: newAgentPassword,
+          name: newAgentName.trim(),
+          team_id: newAgentTeamId !== 'none' ? newAgentTeamId : null,
         },
       });
 
-      if (authError) {
-        toast({ variant: 'destructive', title: 'Erro ao criar usuário', description: authError.message });
+      if (error) {
+        toast({ variant: 'destructive', title: 'Erro ao criar agente', description: error.message });
         return;
       }
 
-      if (authData.user) {
-        // Update profile with team if selected
-        if (newAgentTeamId !== 'none') {
-          await supabase
-            .from('profiles')
-            .update({ team_id: newAgentTeamId })
-            .eq('id', authData.user.id);
-        }
-
-        // Add agent role
-        await supabase
-          .from('user_roles')
-          .insert({ user_id: authData.user.id, role: 'agent' });
-
-        toast({ title: 'Agente criado com sucesso!', description: 'O novo agente pode fazer login com o email e senha informados.' });
-        setDialogOpen(null);
-        fetchData();
+      if (data?.error) {
+        toast({ variant: 'destructive', title: 'Erro ao criar agente', description: data.error });
+        return;
       }
+
+      toast({ title: 'Agente criado com sucesso!', description: 'O novo agente pode fazer login com o email e senha informados.' });
+      setDialogOpen(null);
+      fetchData();
     } catch (err) {
       toast({ variant: 'destructive', title: 'Erro', description: 'Falha ao criar agente' });
     } finally {
