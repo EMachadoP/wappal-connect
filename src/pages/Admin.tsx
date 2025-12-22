@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
-import { Plus, Trash2, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, History } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useUserRole } from '@/hooks/useUserRole';
@@ -46,6 +46,7 @@ export default function AdminPage() {
   const [userRoles, setUserRoles] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [syncingHistory, setSyncingHistory] = useState(false);
 
   // Form states
   const [newTeamName, setNewTeamName] = useState('');
@@ -194,6 +195,36 @@ export default function AdminPage() {
     }
   };
 
+  const handleSyncHistory = async () => {
+    setSyncingHistory(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('zapi-sync-history', {
+        body: { pageSize: 50, maxPages: 10 }
+      });
+      
+      if (error) {
+        toast({
+          variant: 'destructive',
+          title: 'Erro na sincronização',
+          description: error.message,
+        });
+      } else if (data) {
+        toast({
+          title: 'Sincronização de histórico concluída!',
+          description: data.message || `${data.created} novos, ${data.updated} atualizados`,
+        });
+      }
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: 'Erro',
+        description: 'Falha ao conectar com o serviço de sincronização de histórico',
+      });
+    } finally {
+      setSyncingHistory(false);
+    }
+  };
+
   if (authLoading || roleLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -215,15 +246,26 @@ export default function AdminPage() {
       <div className="p-6 space-y-6 overflow-auto h-full">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">Administração</h1>
-          <Button 
-            variant="outline" 
-            className="gap-2"
-            onClick={handleSyncContacts}
-            disabled={syncing}
-          >
-            <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-            {syncing ? 'Sincronizando...' : 'Sincronizar Contatos'}
-          </Button>
+          <div className="flex gap-2">
+            <Button 
+              variant="outline" 
+              className="gap-2"
+              onClick={handleSyncHistory}
+              disabled={syncingHistory}
+            >
+              <History className={`w-4 h-4 ${syncingHistory ? 'animate-spin' : ''}`} />
+              {syncingHistory ? 'Sincronizando...' : 'Sincronizar Histórico'}
+            </Button>
+            <Button 
+              variant="outline" 
+              className="gap-2"
+              onClick={handleSyncContacts}
+              disabled={syncing}
+            >
+              <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
+              {syncing ? 'Sincronizando...' : 'Sincronizar Contatos'}
+            </Button>
+          </div>
         </div>
 
         {loading ? (

@@ -11,3 +11,6 @@ verify_jwt = true
 
 [functions.zapi-send-file]
 verify_jwt = true
+
+[functions.zapi-sync-history]
+verify_jwt = true
