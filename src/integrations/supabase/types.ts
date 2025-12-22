@@ -265,7 +265,9 @@ export type Database = {
           name: string
           phone: string | null
           profile_picture_url: string | null
+          tags: string[] | null
           updated_at: string
+          whatsapp_display_name: string | null
         }
         Insert: {
           chat_lid?: string | null
@@ -279,7 +281,9 @@ export type Database = {
           name: string
           phone?: string | null
           profile_picture_url?: string | null
+          tags?: string[] | null
           updated_at?: string
+          whatsapp_display_name?: string | null
         }
         Update: {
           chat_lid?: string | null
@@ -293,7 +297,9 @@ export type Database = {
           name?: string
           phone?: string | null
           profile_picture_url?: string | null
+          tags?: string[] | null
           updated_at?: string
+          whatsapp_display_name?: string | null
         }
         Relationships: []
       }
@@ -329,6 +335,51 @@ export type Database = {
             columns: ["label_id"]
             isOneToOne: false
             referencedRelation: "labels"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      conversation_participant_state: {
+        Row: {
+          conversation_id: string
+          created_at: string
+          current_participant_id: string | null
+          id: string
+          identification_asked: boolean
+          last_confirmed_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          conversation_id: string
+          created_at?: string
+          current_participant_id?: string | null
+          id?: string
+          identification_asked?: boolean
+          last_confirmed_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          conversation_id?: string
+          created_at?: string
+          current_participant_id?: string | null
+          id?: string
+          identification_asked?: boolean
+          last_confirmed_at?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "conversation_participant_state_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: true
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversation_participant_state_current_participant_id_fkey"
+            columns: ["current_participant_id"]
+            isOneToOne: false
+            referencedRelation: "participants"
             referencedColumns: ["id"]
           },
         ]
@@ -389,6 +440,30 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      entities: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          type: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          type?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          type?: string
+          updated_at?: string
+        }
+        Relationships: []
       }
       labels: {
         Row: {
@@ -457,6 +532,57 @@ export type Database = {
             columns: ["conversation_id"]
             isOneToOne: false
             referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      participants: {
+        Row: {
+          confidence: number
+          contact_id: string
+          created_at: string
+          entity_id: string | null
+          id: string
+          is_primary: boolean
+          name: string
+          role_type: string | null
+          updated_at: string
+        }
+        Insert: {
+          confidence?: number
+          contact_id: string
+          created_at?: string
+          entity_id?: string | null
+          id?: string
+          is_primary?: boolean
+          name: string
+          role_type?: string | null
+          updated_at?: string
+        }
+        Update: {
+          confidence?: number
+          contact_id?: string
+          created_at?: string
+          entity_id?: string | null
+          id?: string
+          is_primary?: boolean
+          name?: string
+          role_type?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "participants_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "participants_entity_id_fkey"
+            columns: ["entity_id"]
+            isOneToOne: false
+            referencedRelation: "entities"
             referencedColumns: ["id"]
           },
         ]
@@ -555,6 +681,10 @@ export type Database = {
       }
       cleanup_old_ai_logs: { Args: never; Returns: undefined }
       cleanup_old_messages: { Args: never; Returns: undefined }
+      detect_display_name_type: {
+        Args: { display_name: string }
+        Returns: string
+      }
       get_user_team_id: { Args: { _user_id: string }; Returns: string }
       has_role: {
         Args: {

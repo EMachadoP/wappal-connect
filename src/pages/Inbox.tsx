@@ -18,6 +18,7 @@ interface Contact {
   phone: string | null;
   lid: string | null;
   is_group?: boolean;
+  whatsapp_display_name?: string | null;
 }
 
 interface Conversation {
@@ -140,7 +141,8 @@ export default function InboxPage() {
             profile_picture_url,
             phone,
             lid,
-            is_group
+            is_group,
+            whatsapp_display_name
           )
         `)
         .order('last_message_at', { ascending: false, nullsFirst: false });

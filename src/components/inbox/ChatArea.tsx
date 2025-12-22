@@ -6,7 +6,9 @@ import { ConversationAvatar } from './ConversationAvatar';
 import { ChatMessage } from './ChatMessage';
 import { EmojiPicker } from './EmojiPicker';
 import { ConversationActionsMenu } from './ConversationActionsMenu';
-
+import { ParticipantHeader } from './ParticipantHeader';
+import { IdentifyParticipantModal } from './IdentifyParticipantModal';
+import { useParticipantInfo } from '@/hooks/useParticipantInfo';
 interface Message {
   id: string;
   content?: string | null;
@@ -26,6 +28,7 @@ interface Contact {
   phone?: string | null;
   lid?: string | null;
   is_group?: boolean;
+  whatsapp_display_name?: string | null;
 }
 
 interface Profile {
@@ -97,12 +100,20 @@ export function ChatArea({
   isMobile = false,
 }: ChatAreaProps) {
   const [message, setMessage] = useState('');
+  const [identifyModalOpen, setIdentifyModalOpen] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
   const prevMessagesLengthRef = useRef(messages.length);
 
+  // Fetch participant info for sender identification
+  const {
+    participant,
+    contactInfo,
+    displayNameType,
+    refetch: refetchParticipant,
+  } = useParticipantInfo(contact?.id, conversationId ?? undefined);
   // Smart auto-scroll: only scroll if user is at bottom
   const checkIfAtBottom = useCallback(() => {
     const container = messagesContainerRef.current;
@@ -237,6 +248,17 @@ export function ChatArea({
         </div>
       )}
 
+      {/* Participant Header - Sender Identification */}
+      {!contact.is_group && (
+        <ParticipantHeader
+          phone={contact.phone}
+          whatsappDisplayName={contactInfo?.whatsapp_display_name || contact.whatsapp_display_name}
+          participant={participant}
+          displayNameType={displayNameType}
+          onIdentify={() => setIdentifyModalOpen(true)}
+        />
+      )}
+
       {/* Messages - Independent scroll area */}
       <div 
         ref={messagesContainerRef}
@@ -305,6 +327,18 @@ export function ChatArea({
           </div>
         )}
       </div>
+
+      {/* Identify Participant Modal */}
+      {contact?.id && conversationId && (
+        <IdentifyParticipantModal
+          open={identifyModalOpen}
+          onOpenChange={setIdentifyModalOpen}
+          contactId={contact.id}
+          conversationId={conversationId}
+          existingParticipant={participant}
+          onSaved={refetchParticipant}
+        />
+      )}
     </div>
   );
 }

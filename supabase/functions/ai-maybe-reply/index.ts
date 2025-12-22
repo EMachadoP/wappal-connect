@@ -408,15 +408,94 @@ serve(async (req) => {
     let systemPrompt = teamSettings?.prompt_override || settings.base_system_prompt;
     
     const contact = conversation.contacts;
+    
+    // Fetch participant info for context
+    let participantContext = '';
+    let shouldUsePersonalName = true;
+    
+    if (contact?.id) {
+      // Get primary participant for this contact
+      const { data: participantData } = await supabase
+        .from('participants')
+        .select('*, entities:entity_id(id, name, type)')
+        .eq('contact_id', contact.id)
+        .eq('is_primary', true)
+        .limit(1)
+        .single();
+
+      // Get conversation participant state
+      const { data: convParticipantState } = await supabase
+        .from('conversation_participant_state')
+        .select('*')
+        .eq('conversation_id', conversation_id)
+        .single();
+
+      // Check display name type
+      let displayNameType = 'UNKNOWN';
+      if (contact.whatsapp_display_name) {
+        const { data: typeResult } = await supabase
+          .rpc('detect_display_name_type', { display_name: contact.whatsapp_display_name });
+        displayNameType = typeResult || 'UNKNOWN';
+      }
+
+      // Build context header
+      participantContext = `
+--- CONTEXTO DO CONTATO ---
+Telefone: ${contact.phone || 'N/A'}
+Nome WhatsApp: ${contact.whatsapp_display_name || 'N/A'} (${displayNameType === 'ENTITY_NAME' ? 'Nome de entidade - NÃO usar como nome pessoal' : 'Possível nome pessoal'})
+Tags: ${(contact.tags || []).join(', ') || 'Nenhuma'}
+`;
+
+      if (participantData) {
+        const entity = participantData.entities as { id: string; name: string; type: string } | null;
+        participantContext += `
+--- IDENTIDADE CONFIRMADA ---
+Nome: ${participantData.name}
+Função: ${participantData.role_type || 'N/A'}
+Entidade: ${entity?.name || 'N/A'}
+Confiança: ${Math.round(participantData.confidence * 100)}%
+`;
+        // Use personal name only if confidence is high enough
+        shouldUsePersonalName = participantData.confidence >= 0.7;
+      } else {
+        participantContext += `
+--- IDENTIDADE NÃO CONFIRMADA ---
+O remetente ainda não foi identificado. NÃO use nomes pessoais até que a identidade seja confirmada.
+`;
+        shouldUsePersonalName = false;
+      }
+
+      // Check if we need to ask for identification
+      if (!participantData && (!convParticipantState || !convParticipantState.identification_asked)) {
+        participantContext += `
+INSTRUÇÃO: Na próxima resposta, pergunte educadamente: "Por gentileza, poderia me informar seu nome, de qual condomínio/empresa fala e qual sua função?"
+Após perguntar, isso será registrado e não precisará perguntar novamente.
+`;
+        // Mark that we asked
+        await supabase
+          .from('conversation_participant_state')
+          .upsert({
+            conversation_id,
+            identification_asked: true,
+          }, { onConflict: 'conversation_id' });
+      }
+    }
+
     const variables: Record<string, string> = {
-      '{{customer_name}}': contact?.name || 'Cliente',
+      '{{customer_name}}': shouldUsePersonalName ? (contact?.name || 'Cliente') : 'Cliente',
       '{{timezone}}': settings.timezone,
       '{{business_hours}}': 'Seg-Sex 08:00-18:00, Sáb 08:00-12:00',
       '{{policies}}': JSON.stringify(settings.policies_json || {}),
+      '{{participant_context}}': participantContext,
     };
 
     for (const [key, value] of Object.entries(variables)) {
       systemPrompt = systemPrompt.replace(new RegExp(key, 'g'), value);
+    }
+
+    // Prepend participant context to system prompt if not using variable
+    if (!systemPrompt.includes('{{participant_context}}') && participantContext) {
+      systemPrompt = participantContext + '\n\n' + systemPrompt;
     }
 
     // Call AI generate function
