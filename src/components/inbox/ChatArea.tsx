@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback, memo } from 'react';
 import { Send, Paperclip, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -66,7 +66,11 @@ interface ChatAreaProps {
   onAssignTeam?: (teamId: string) => void;
   onAddLabel?: (labelId: string) => void;
   loading?: boolean;
+  isMobile?: boolean;
 }
+
+// Memoized message component for performance
+const MemoizedChatMessage = memo(ChatMessage);
 
 export function ChatArea({ 
   contact, 
@@ -89,54 +93,89 @@ export function ChatArea({
   onAssignAgent,
   onAssignTeam,
   onAddLabel,
-  loading 
+  loading,
+  isMobile = false,
 }: ChatAreaProps) {
   const [message, setMessage] = useState('');
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+  const prevMessagesLengthRef = useRef(messages.length);
 
+  // Smart auto-scroll: only scroll if user is at bottom
+  const checkIfAtBottom = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return true;
+    const threshold = 100;
+    return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
+  }, []);
+
+  const scrollToBottom = useCallback((smooth = true) => {
+    bottomRef.current?.scrollIntoView({ 
+      behavior: smooth ? 'smooth' : 'auto',
+      block: 'end' 
+    });
+  }, []);
+
+  // Handle scroll to detect if user is at bottom
+  const handleScroll = useCallback(() => {
+    setShouldAutoScroll(checkIfAtBottom());
+  }, [checkIfAtBottom]);
+
+  // Auto-scroll on new messages if user was at bottom
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: 'end' });
-  }, [messages]);
+    if (messages.length > prevMessagesLengthRef.current && shouldAutoScroll) {
+      scrollToBottom();
+    }
+    prevMessagesLengthRef.current = messages.length;
+  }, [messages.length, shouldAutoScroll, scrollToBottom]);
 
-  const handleSend = () => {
+  // Scroll to bottom on initial load or conversation change
+  useEffect(() => {
+    scrollToBottom(false);
+    setShouldAutoScroll(true);
+  }, [conversationId, scrollToBottom]);
+
+  const handleSend = useCallback(() => {
     if (message.trim()) {
       onSendMessage(message.trim());
       setMessage('');
+      setShouldAutoScroll(true);
+      setTimeout(() => scrollToBottom(), 100);
     }
-  };
+  }, [message, onSendMessage, scrollToBottom]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
-  };
+  }, [handleSend]);
 
-  const handleEmojiSelect = (emoji: string) => {
+  const handleEmojiSelect = useCallback((emoji: string) => {
     setMessage((prev) => prev + emoji);
-  };
+  }, []);
 
-  const handleFileClick = () => {
+  const handleFileClick = useCallback(() => {
     fileInputRef.current?.click();
-  };
+  }, []);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file && onSendFile) {
       onSendFile(file);
     }
-    // Reset input
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-  };
+  }, [onSendFile]);
 
-  const getSenderName = (senderId: string | null | undefined): string | null => {
+  const getSenderName = useCallback((senderId: string | null | undefined): string | null => {
     if (!senderId) return null;
     const profile = profiles.find(p => p.id === senderId);
     return profile?.name || null;
-  };
+  }, [profiles]);
 
   if (!contact) {
     return (
@@ -153,51 +192,57 @@ export function ChatArea({
 
   return (
     <div className="flex-1 flex flex-col bg-background h-full overflow-hidden">
-      {/* Chat Header */}
-      <div className="h-14 shrink-0 border-b border-border flex items-center justify-between px-4">
-        <div className="flex items-center gap-3">
-          {contact.is_group ? (
-            <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
-              <Users className="w-5 h-5 text-primary" />
+      {/* Chat Header - Hidden on mobile (header is in parent) */}
+      {!isMobile && (
+        <div className="h-14 shrink-0 border-b border-border flex items-center justify-between px-4">
+          <div className="flex items-center gap-3">
+            {contact.is_group ? (
+              <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
+                <Users className="w-5 h-5 text-primary" />
+              </div>
+            ) : (
+              <ConversationAvatar name={contact.name} imageUrl={contact.profile_picture_url} />
+            )}
+            <div>
+              <div className="flex items-center gap-2">
+                <p className="font-medium">{contact.name}</p>
+                {contact.is_group && (
+                  <span className="text-xs bg-primary/20 text-primary px-2 py-0.5 rounded">Grupo</span>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {contact.phone || contact.lid || 'Sem identificação'}
+              </p>
             </div>
-          ) : (
-            <ConversationAvatar name={contact.name} imageUrl={contact.profile_picture_url} />
-          )}
-          <div>
-            <div className="flex items-center gap-2">
-              <p className="font-medium">{contact.name}</p>
-              {contact.is_group && (
-                <span className="text-xs bg-primary/20 text-primary px-2 py-0.5 rounded">Grupo</span>
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {contact.phone || contact.lid || 'Sem identificação'}
-            </p>
+          </div>
+          
+          <div className="flex items-center gap-2">
+            <ConversationActionsMenu
+              isResolved={isResolved}
+              priority={conversationPriority}
+              profiles={profiles}
+              teams={teams}
+              labels={labels}
+              assignedTo={assignedTo}
+              onResolve={onResolveConversation}
+              onReopen={onReopenConversation}
+              onMarkUnread={onMarkUnread}
+              onSetPriority={onSetPriority}
+              onSnooze={onSnooze}
+              onAssignAgent={onAssignAgent}
+              onAssignTeam={onAssignTeam}
+              onAddLabel={onAddLabel}
+            />
           </div>
         </div>
-        
-        <div className="flex items-center gap-2">
-          <ConversationActionsMenu
-            isResolved={isResolved}
-            priority={conversationPriority}
-            profiles={profiles}
-            teams={teams}
-            labels={labels}
-            assignedTo={assignedTo}
-            onResolve={onResolveConversation}
-            onReopen={onReopenConversation}
-            onMarkUnread={onMarkUnread}
-            onSetPriority={onSetPriority}
-            onSnooze={onSnooze}
-            onAssignAgent={onAssignAgent}
-            onAssignTeam={onAssignTeam}
-            onAddLabel={onAddLabel}
-          />
-        </div>
-      </div>
+      )}
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4">
+      {/* Messages - Independent scroll area */}
+      <div 
+        ref={messagesContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto p-4 scrollbar-thin"
+      >
         {loading ? (
           <div className="flex items-center justify-center h-full">
             <p className="text-muted-foreground">Carregando mensagens...</p>
@@ -209,7 +254,7 @@ export function ChatArea({
         ) : (
           <div className="flex flex-col">
             {messages.map((msg) => (
-              <ChatMessage
+              <MemoizedChatMessage
                 key={msg.id}
                 content={msg.content}
                 messageType={msg.message_type}
@@ -221,16 +266,17 @@ export function ChatArea({
                 senderName={msg.sender_type === 'agent' ? getSenderName(msg.sender_id) : null}
               />
             ))}
-            <div ref={bottomRef} />
+            <div ref={bottomRef} className="h-1" />
           </div>
         )}
       </div>
 
-      {/* Input */}
-      <div className="p-4 border-t border-border">
+      {/* Input - Sticky at bottom with safe area */}
+      <div className={`p-3 border-t border-border bg-card ${isMobile ? 'pb-safe' : ''}`}>
         {isResolved ? (
           <div className="text-center text-muted-foreground text-sm py-2">
-            Conversa resolvida. Use o menu para reabrir.
+            Conversa resolvida. 
+            {!isMobile && ' Use o menu para reabrir.'}
           </div>
         ) : (
           <div className="flex items-center gap-2">
@@ -251,6 +297,7 @@ export function ChatArea({
               onChange={(e) => setMessage(e.target.value)}
               onKeyDown={handleKeyDown}
               className="flex-1"
+              autoComplete="off"
             />
             <Button onClick={handleSend} disabled={!message.trim()} className="shrink-0">
               <Send className="w-5 h-5" />

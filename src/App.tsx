@@ -10,6 +10,7 @@ import Inbox from "./pages/Inbox";
 import Dashboard from "./pages/Dashboard";
 import Admin from "./pages/Admin";
 import AdminAI from "./pages/AdminAI";
+import Status from "./pages/Status";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -28,6 +29,8 @@ const App = () => (
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/admin" element={<Admin />} />
             <Route path="/admin/ai" element={<AdminAI />} />
+            <Route path="/inbox/:id" element={<Inbox />} />
+            <Route path="/status" element={<Status />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
