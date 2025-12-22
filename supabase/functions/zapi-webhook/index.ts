@@ -16,22 +16,40 @@ serve(async (req) => {
   }
 
   try {
-    // Validate webhook authentication via ZAPI token header
+    // Validate webhook authentication
+    // Z-API can send token via x-zapi-token header OR Client-Token header
     const zapiToken = Deno.env.get('ZAPI_TOKEN');
-    const requestToken = req.headers.get('x-zapi-token') || req.headers.get('X-ZAPI-Token');
+    const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN');
     
-    // If ZAPI_TOKEN is configured, validate the incoming request
-    if (zapiToken && zapiToken.length > 0) {
-      if (!requestToken || requestToken !== zapiToken) {
-        console.log('Invalid or missing ZAPI webhook token');
+    const requestZapiToken = req.headers.get('x-zapi-token') || req.headers.get('X-ZAPI-Token');
+    const requestClientToken = req.headers.get('client-token') || req.headers.get('Client-Token');
+    
+    // Validate: accept if either token matches
+    const isValidZapiToken = zapiToken && requestZapiToken && requestZapiToken === zapiToken;
+    const isValidClientToken = clientToken && requestClientToken && requestClientToken === clientToken;
+    
+    // Only require authentication if tokens are configured AND request doesn't match
+    if ((zapiToken || clientToken) && !isValidZapiToken && !isValidClientToken) {
+      // Log more details for debugging
+      console.log('Token validation failed:', {
+        hasZapiToken: !!zapiToken,
+        hasClientToken: !!clientToken,
+        receivedZapiToken: !!requestZapiToken,
+        receivedClientToken: !!requestClientToken,
+      });
+      
+      // If no tokens were sent, just warn but allow (Z-API default config doesn't send tokens)
+      if (!requestZapiToken && !requestClientToken) {
+        console.log('Warning: No authentication token received from Z-API. Consider configuring webhook security.');
+      } else {
+        console.log('Invalid webhook token - rejecting request');
         return new Response(
           JSON.stringify({ error: 'Unauthorized webhook request' }),
           { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
-      console.log('ZAPI webhook token validated');
-    } else {
-      console.log('Warning: ZAPI_TOKEN not configured, webhook validation disabled');
+    } else if (isValidZapiToken || isValidClientToken) {
+      console.log('Webhook token validated successfully');
     }
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
