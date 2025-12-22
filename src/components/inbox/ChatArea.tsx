@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Paperclip, MoreVertical, Users } from 'lucide-react';
+import { Send, Paperclip, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { ConversationAvatar } from './ConversationAvatar';
 import { ChatMessage } from './ChatMessage';
 import { EmojiPicker } from './EmojiPicker';
@@ -153,9 +152,9 @@ export function ChatArea({
   const isResolved = conversationStatus === 'resolved';
 
   return (
-    <div className="flex-1 flex flex-col bg-background">
+    <div className="flex-1 flex flex-col bg-background h-full overflow-hidden">
       {/* Chat Header */}
-      <div className="h-14 border-b border-border flex items-center justify-between px-4">
+      <div className="h-14 shrink-0 border-b border-border flex items-center justify-between px-4">
         <div className="flex items-center gap-3">
           {contact.is_group ? (
             <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
@@ -198,7 +197,7 @@ export function ChatArea({
       </div>
 
       {/* Messages */}
-      <ScrollArea className="flex-1 p-4">
+      <div className="flex-1 overflow-y-auto p-4">
         {loading ? (
           <div className="flex items-center justify-center h-full">
             <p className="text-muted-foreground">Carregando mensagens...</p>
@@ -208,7 +207,7 @@ export function ChatArea({
             <p className="text-muted-foreground">Nenhuma mensagem ainda</p>
           </div>
         ) : (
-          <div className="min-h-full">
+          <div className="flex flex-col">
             {messages.map((msg) => (
               <ChatMessage
                 key={msg.id}
@@ -225,7 +224,7 @@ export function ChatArea({
             <div ref={bottomRef} />
           </div>
         )}
-      </ScrollArea>
+      </div>
 
       {/* Input */}
       <div className="p-4 border-t border-border">
