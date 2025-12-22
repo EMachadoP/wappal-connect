@@ -242,16 +242,16 @@ serve(async (req) => {
       }
     }
 
-    // Check schedule
+    // Check schedule - Default is 24/7 when no team settings configured
     const schedule = (teamSettings?.schedule_json || {
       days: {
-        monday: { enabled: true, start: '08:00', end: '18:00' },
-        tuesday: { enabled: true, start: '08:00', end: '18:00' },
-        wednesday: { enabled: true, start: '08:00', end: '18:00' },
-        thursday: { enabled: true, start: '08:00', end: '18:00' },
-        friday: { enabled: true, start: '08:00', end: '18:00' },
-        saturday: { enabled: true, start: '08:00', end: '12:00' },
-        sunday: { enabled: false, start: '08:00', end: '12:00' },
+        monday: { enabled: true, start: '00:00', end: '23:59' },
+        tuesday: { enabled: true, start: '00:00', end: '23:59' },
+        wednesday: { enabled: true, start: '00:00', end: '23:59' },
+        thursday: { enabled: true, start: '00:00', end: '23:59' },
+        friday: { enabled: true, start: '00:00', end: '23:59' },
+        saturday: { enabled: true, start: '00:00', end: '23:59' },
+        sunday: { enabled: true, start: '00:00', end: '23:59' },
       },
       exceptions: [],
     }) as ScheduleJson;
