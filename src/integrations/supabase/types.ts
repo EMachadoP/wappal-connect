@@ -553,6 +553,7 @@ export type Database = {
         Args: { _conversation_id: string; _user_id: string }
         Returns: boolean
       }
+      cleanup_old_ai_logs: { Args: never; Returns: undefined }
       cleanup_old_messages: { Args: never; Returns: undefined }
       get_user_team_id: { Args: { _user_id: string }; Returns: string }
       has_role: {
