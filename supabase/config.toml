@@ -14,3 +14,15 @@ verify_jwt = true
 
 [functions.zapi-sync-history]
 verify_jwt = true
+
+[functions.create-agent]
+verify_jwt = true
+
+[functions.ai-generate-reply]
+verify_jwt = true
+
+[functions.ai-maybe-reply]
+verify_jwt = false
+
+[functions.ai-test]
+verify_jwt = true

@@ -9,6 +9,7 @@ import Auth from "./pages/Auth";
 import Inbox from "./pages/Inbox";
 import Dashboard from "./pages/Dashboard";
 import Admin from "./pages/Admin";
+import AdminAI from "./pages/AdminAI";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -26,6 +27,7 @@ const App = () => (
             <Route path="/inbox" element={<Inbox />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/admin" element={<Admin />} />
+            <Route path="/admin/ai" element={<AdminAI />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

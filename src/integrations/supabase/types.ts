@@ -14,6 +14,244 @@ export type Database = {
   }
   public: {
     Tables: {
+      ai_conversation_state: {
+        Row: {
+          ai_disabled_reason: string | null
+          ai_paused_until: string | null
+          auto_msg_count_window: number
+          conversation_id: string
+          conversation_summary: string | null
+          id: string
+          updated_at: string
+          window_started_at: string
+        }
+        Insert: {
+          ai_disabled_reason?: string | null
+          ai_paused_until?: string | null
+          auto_msg_count_window?: number
+          conversation_id: string
+          conversation_summary?: string | null
+          id?: string
+          updated_at?: string
+          window_started_at?: string
+        }
+        Update: {
+          ai_disabled_reason?: string | null
+          ai_paused_until?: string | null
+          auto_msg_count_window?: number
+          conversation_id?: string
+          conversation_summary?: string | null
+          id?: string
+          updated_at?: string
+          window_started_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_conversation_state_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: true
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_logs: {
+        Row: {
+          conversation_id: string | null
+          created_at: string
+          error_message: string | null
+          id: string
+          input_excerpt: string | null
+          latency_ms: number | null
+          model: string
+          output_text: string | null
+          prompt_version: string | null
+          provider: string
+          request_id: string | null
+          status: string
+          team_id: string | null
+          tokens_in: number | null
+          tokens_out: number | null
+        }
+        Insert: {
+          conversation_id?: string | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          input_excerpt?: string | null
+          latency_ms?: number | null
+          model: string
+          output_text?: string | null
+          prompt_version?: string | null
+          provider: string
+          request_id?: string | null
+          status?: string
+          team_id?: string | null
+          tokens_in?: number | null
+          tokens_out?: number | null
+        }
+        Update: {
+          conversation_id?: string | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          input_excerpt?: string | null
+          latency_ms?: number | null
+          model?: string
+          output_text?: string | null
+          prompt_version?: string | null
+          provider?: string
+          request_id?: string | null
+          status?: string
+          team_id?: string | null
+          tokens_in?: number | null
+          tokens_out?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_logs_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_logs_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_provider_configs: {
+        Row: {
+          active: boolean
+          created_at: string
+          id: string
+          key_ref: string | null
+          max_tokens: number | null
+          model: string
+          provider: string
+          temperature: number | null
+          top_p: number | null
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          id?: string
+          key_ref?: string | null
+          max_tokens?: number | null
+          model: string
+          provider: string
+          temperature?: number | null
+          top_p?: number | null
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          id?: string
+          key_ref?: string | null
+          max_tokens?: number | null
+          model?: string
+          provider?: string
+          temperature?: number | null
+          top_p?: number | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      ai_settings: {
+        Row: {
+          anti_spam_seconds: number
+          base_system_prompt: string
+          created_at: string
+          enable_auto_summary: boolean
+          enabled_global: boolean
+          fallback_offhours_message: string
+          human_request_pause_hours: number
+          id: string
+          max_messages_per_hour: number
+          memory_message_count: number
+          policies_json: Json | null
+          timezone: string
+          updated_at: string
+        }
+        Insert: {
+          anti_spam_seconds?: number
+          base_system_prompt?: string
+          created_at?: string
+          enable_auto_summary?: boolean
+          enabled_global?: boolean
+          fallback_offhours_message?: string
+          human_request_pause_hours?: number
+          id?: string
+          max_messages_per_hour?: number
+          memory_message_count?: number
+          policies_json?: Json | null
+          timezone?: string
+          updated_at?: string
+        }
+        Update: {
+          anti_spam_seconds?: number
+          base_system_prompt?: string
+          created_at?: string
+          enable_auto_summary?: boolean
+          enabled_global?: boolean
+          fallback_offhours_message?: string
+          human_request_pause_hours?: number
+          id?: string
+          max_messages_per_hour?: number
+          memory_message_count?: number
+          policies_json?: Json | null
+          timezone?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      ai_team_settings: {
+        Row: {
+          created_at: string
+          enabled: boolean
+          id: string
+          prompt_override: string | null
+          schedule_json: Json
+          team_id: string
+          throttling_json: Json | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          enabled?: boolean
+          id?: string
+          prompt_override?: string | null
+          schedule_json?: Json
+          team_id: string
+          throttling_json?: Json | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          enabled?: boolean
+          id?: string
+          prompt_override?: string | null
+          schedule_json?: Json
+          team_id?: string
+          throttling_json?: Json | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_team_settings_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: true
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       contacts: {
         Row: {
           chat_lid: string | null
