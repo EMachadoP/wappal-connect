@@ -1,4 +1,4 @@
-import { MessageSquare, BarChart3, Settings, LogOut } from 'lucide-react';
+import { MessageSquare, BarChart3, Settings, LogOut, Bot } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
@@ -10,6 +10,7 @@ const navItems = [
   { path: '/inbox', label: 'Conversas', icon: MessageSquare },
   { path: '/dashboard', label: 'Dashboard', icon: BarChart3 },
   { path: '/admin', label: 'Admin', icon: Settings, adminOnly: true },
+  { path: '/admin/ai', label: 'IA', icon: Bot, adminOnly: true },
 ];
 
 export function Header() {
