@@ -30,7 +30,21 @@ serve(async (req) => {
       });
     }
 
-    console.log('Sending message:', { conversation_id, message_type, hasContent: !!content, hasMedia: !!media_url });
+    console.log('Sending message:', { conversation_id, message_type, hasContent: !!content, hasMedia: !!media_url, sender_id });
+
+    // Get sender name if sender_id provided
+    let senderName: string | null = null;
+    if (sender_id) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('name')
+        .eq('id', sender_id)
+        .single();
+      
+      if (profile?.name) {
+        senderName = profile.name;
+      }
+    }
 
     // Get conversation and contact
     const { data: conversation, error: convError } = await supabase
@@ -59,7 +73,7 @@ serve(async (req) => {
       });
     }
 
-    console.log('Sending to recipient:', recipient);
+    console.log('Sending to recipient:', recipient, 'Sender:', senderName);
 
     // Z-API base URL
     const zapiBaseUrl = `https://api.z-api.io/instances/${zapiInstanceId}/token/${zapiToken}`;
@@ -68,6 +82,11 @@ serve(async (req) => {
     let zapiEndpoint: string;
     let zapiBody: Record<string, unknown>;
 
+    // Prefix message with agent name if available
+    const prefixedContent = senderName && content 
+      ? `*${senderName}:* ${content}` 
+      : content;
+
     // Build request based on message type
     switch (message_type) {
       case 'image':
@@ -75,7 +94,7 @@ serve(async (req) => {
         zapiBody = {
           phone: recipient,
           image: media_url,
-          caption: content || '',
+          caption: prefixedContent || '',
         };
         break;
       case 'video':
@@ -83,7 +102,7 @@ serve(async (req) => {
         zapiBody = {
           phone: recipient,
           video: media_url,
-          caption: content || '',
+          caption: prefixedContent || '',
         };
         break;
       case 'audio':
@@ -105,7 +124,7 @@ serve(async (req) => {
         zapiEndpoint = '/send-text';
         zapiBody = {
           phone: recipient,
-          message: content,
+          message: prefixedContent,
         };
     }
 
