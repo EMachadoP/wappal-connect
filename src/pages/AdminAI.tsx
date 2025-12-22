@@ -834,12 +834,12 @@ export default function AdminAIPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label>Equipe (opcional)</Label>
-                      <Select value={testTeamId} onValueChange={setTestTeamId}>
+                      <Select value={testTeamId || "__global__"} onValueChange={(v) => setTestTeamId(v === "__global__" ? "" : v)}>
                         <SelectTrigger>
                           <SelectValue placeholder="Usar configuração global" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">Global</SelectItem>
+                          <SelectItem value="__global__">Global</SelectItem>
                           {teams.map(team => (
                             <SelectItem key={team.id} value={team.id}>{team.name}</SelectItem>
                           ))}
@@ -849,12 +849,12 @@ export default function AdminAIPage() {
 
                     <div className="space-y-2">
                       <Label>Provedor (opcional)</Label>
-                      <Select value={testProviderId} onValueChange={setTestProviderId}>
+                      <Select value={testProviderId || "__active__"} onValueChange={(v) => setTestProviderId(v === "__active__" ? "" : v)}>
                         <SelectTrigger>
                           <SelectValue placeholder="Usar provedor ativo" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">Ativo</SelectItem>
+                          <SelectItem value="__active__">Ativo</SelectItem>
                           {providers.map(p => (
                             <SelectItem key={p.id} value={p.id}>
                               {p.provider} - {p.model}
