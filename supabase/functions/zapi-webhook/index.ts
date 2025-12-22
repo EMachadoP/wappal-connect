@@ -139,6 +139,7 @@ serve(async (req) => {
           lid_collected_at: new Date().toISOString(),
           is_group: isGroupChat,
           group_name: groupName,
+          whatsapp_display_name: senderName || null,
         })
         .select()
         .single();
@@ -174,6 +175,10 @@ serve(async (req) => {
       if (isGroupChat && !contactRecord.is_group) {
         updates.is_group = true;
         updates.group_name = groupName;
+      }
+      // Update whatsapp_display_name if different
+      if (senderName && senderName !== contactRecord.whatsapp_display_name) {
+        updates.whatsapp_display_name = senderName;
       }
 
       if (Object.keys(updates).length > 0) {
