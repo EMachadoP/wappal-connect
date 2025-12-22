@@ -45,6 +45,7 @@ export default function AdminPage() {
   const [labels, setLabels] = useState<LabelType[]>([]);
   const [userRoles, setUserRoles] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
 
   // Form states
   const [newTeamName, setNewTeamName] = useState('');
@@ -165,6 +166,34 @@ export default function AdminPage() {
     }
   };
 
+  const handleSyncContacts = async () => {
+    setSyncing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('zapi-sync-contacts');
+      
+      if (error) {
+        toast({
+          variant: 'destructive',
+          title: 'Erro na sincronização',
+          description: error.message,
+        });
+      } else if (data) {
+        toast({
+          title: 'Sincronização concluída!',
+          description: `${data.created} criados, ${data.updated} atualizados, ${data.skipped} ignorados`,
+        });
+      }
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: 'Erro',
+        description: 'Falha ao conectar com o serviço de sincronização',
+      });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   if (authLoading || roleLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -186,9 +215,14 @@ export default function AdminPage() {
       <div className="p-6 space-y-6 overflow-auto h-full">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">Administração</h1>
-          <Button variant="outline" className="gap-2">
-            <RefreshCw className="w-4 h-4" />
-            Sincronizar Contatos
+          <Button 
+            variant="outline" 
+            className="gap-2"
+            onClick={handleSyncContacts}
+            disabled={syncing}
+          >
+            <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
+            {syncing ? 'Sincronizando...' : 'Sincronizar Contatos'}
           </Button>
         </div>
 
