@@ -260,6 +260,26 @@ serve(async (req) => {
 
     console.log('Message saved:', message.id);
 
+    // Trigger AI auto-reply (non-blocking)
+    try {
+      const aiUrl = `${supabaseUrl}/functions/v1/ai-maybe-reply`;
+      fetch(aiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${supabaseServiceKey}`,
+        },
+        body: JSON.stringify({ conversation_id: conversation.id }),
+      }).then(res => res.json()).then(aiResult => {
+        console.log('AI maybe-reply result:', aiResult);
+      }).catch(aiErr => {
+        console.error('AI maybe-reply error:', aiErr);
+      });
+    } catch (aiError) {
+      console.error('Failed to trigger AI:', aiError);
+      // Don't fail the webhook if AI fails
+    }
+
     return new Response(JSON.stringify({ 
       success: true, 
       contact_id: contactRecord.id,
