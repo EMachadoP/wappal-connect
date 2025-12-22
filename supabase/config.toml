@@ -1,1 +1,10 @@
 project_id = "mifoqjuhwljudovtuoka"
+
+[functions.zapi-webhook]
+verify_jwt = false
+
+[functions.zapi-send-message]
+verify_jwt = true
+
+[functions.zapi-sync-contacts]
+verify_jwt = true
