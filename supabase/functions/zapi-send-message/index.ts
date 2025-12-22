@@ -82,9 +82,9 @@ serve(async (req) => {
     let zapiEndpoint: string;
     let zapiBody: Record<string, unknown>;
 
-    // Prefix message with agent name if available
+    // Prefix message with agent name on separate line if available
     const prefixedContent = senderName && content 
-      ? `*${senderName}:* ${content}` 
+      ? `*${senderName}:*\n${content}` 
       : content;
 
     // Build request based on message type
