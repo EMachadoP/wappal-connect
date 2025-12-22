@@ -8,6 +8,7 @@ import { ChatArea } from '@/components/inbox/ChatArea';
 import { useToast } from '@/hooks/use-toast';
 
 interface Contact {
+  id: string;
   name: string;
   profile_picture_url: string | null;
   phone: string | null;
@@ -67,7 +68,7 @@ export default function InboxPage() {
     fetchProfiles();
   }, []);
 
-  // Fetch conversations
+  // Fetch conversations - grouped by contact (one conversation per contact like WhatsApp)
   useEffect(() => {
     if (!user) return;
 
@@ -80,7 +81,9 @@ export default function InboxPage() {
           last_message_at,
           assigned_to,
           status,
+          contact_id,
           contacts (
+            id,
             name,
             profile_picture_url,
             phone,
@@ -96,7 +99,29 @@ export default function InboxPage() {
           description: error.message,
         });
       } else if (data) {
-        const formatted: Conversation[] = data.map((conv: any) => ({
+        // Group by contact - keep only the most recent conversation per contact
+        const contactMap = new Map<string, any>();
+        
+        for (const conv of data) {
+          const contactId = conv.contact_id;
+          const existing = contactMap.get(contactId);
+          
+          if (!existing) {
+            contactMap.set(contactId, conv);
+          } else {
+            // Merge: sum unread counts, keep most recent last_message_at
+            existing.unread_count += conv.unread_count;
+            if (conv.last_message_at && (!existing.last_message_at || conv.last_message_at > existing.last_message_at)) {
+              existing.last_message_at = conv.last_message_at;
+            }
+            // If any conversation is open, keep it open
+            if (conv.status === 'open') {
+              existing.status = 'open';
+            }
+          }
+        }
+
+        const formatted: Conversation[] = Array.from(contactMap.values()).map((conv: any) => ({
           id: conv.id,
           contact: conv.contacts,
           last_message: null,
@@ -106,6 +131,14 @@ export default function InboxPage() {
           assigned_to: conv.assigned_to,
           status: conv.status,
         }));
+        
+        // Sort by last_message_at
+        formatted.sort((a, b) => {
+          if (!a.last_message_at) return 1;
+          if (!b.last_message_at) return -1;
+          return new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime();
+        });
+        
         setConversations(formatted);
       }
       setLoadingConversations(false);
@@ -130,7 +163,7 @@ export default function InboxPage() {
     };
   }, [user, toast]);
 
-  // Fetch messages when conversation changes
+  // Fetch messages when conversation changes - fetch ALL messages for the contact
   useEffect(() => {
     if (!activeConversationId) {
       setMessages([]);
@@ -141,10 +174,29 @@ export default function InboxPage() {
     const fetchMessages = async () => {
       setLoadingMessages(true);
 
+      // Get the contact from the active conversation
+      const conv = conversations.find((c) => c.id === activeConversationId);
+      if (!conv) {
+        setLoadingMessages(false);
+        return;
+      }
+
+      setActiveContact(conv.contact);
+      setActiveConversationStatus(conv.status);
+
+      // Get ALL conversation IDs for this contact
+      const { data: allConvs } = await supabase
+        .from('conversations')
+        .select('id')
+        .eq('contact_id', (conv.contact as any).id || conv.contact);
+
+      const conversationIds = allConvs?.map(c => c.id) || [activeConversationId];
+
+      // Fetch messages from ALL conversations for this contact
       const { data, error } = await supabase
         .from('messages')
         .select('*')
-        .eq('conversation_id', activeConversationId)
+        .in('conversation_id', conversationIds)
         .order('sent_at', { ascending: true });
 
       if (error) {
@@ -157,19 +209,12 @@ export default function InboxPage() {
         setMessages(data);
       }
 
-      // Get contact info and status
-      const conv = conversations.find((c) => c.id === activeConversationId);
-      if (conv) {
-        setActiveContact(conv.contact);
-        setActiveConversationStatus(conv.status);
-      }
-
-      // Mark as read if unread
-      if (conv && conv.unread_count > 0) {
+      // Mark all conversations as read
+      if (conversationIds.length > 0) {
         await supabase
           .from('conversations')
           .update({ unread_count: 0 })
-          .eq('id', activeConversationId);
+          .in('id', conversationIds);
       }
 
       setLoadingMessages(false);
@@ -177,19 +222,27 @@ export default function InboxPage() {
 
     fetchMessages();
 
-    // Subscribe to new messages
+    // Subscribe to new messages for ALL conversations of this contact
+    const conv = conversations.find((c) => c.id === activeConversationId);
+    const contactId = conv?.contact ? (conv.contact as any).id : null;
+    
     const channel = supabase
-      .channel(`messages-${activeConversationId}`)
+      .channel(`messages-contact-${contactId || activeConversationId}`)
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: 'messages',
-          filter: `conversation_id=eq.${activeConversationId}`,
         },
         (payload) => {
-          setMessages((prev) => [...prev, payload.new as Message]);
+          // Check if this message belongs to a conversation of the current contact
+          const newMessage = payload.new as Message;
+          setMessages((prev) => {
+            // Avoid duplicates
+            if (prev.some(m => m.id === newMessage.id)) return prev;
+            return [...prev, newMessage];
+          });
         }
       )
       .subscribe();

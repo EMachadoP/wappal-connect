@@ -145,12 +145,14 @@ serve(async (req) => {
       }
     }
 
-    // Find or create conversation
+    // Find or create conversation - ONE conversation per contact (like WhatsApp)
+    // First try to find ANY existing conversation for this contact
     let { data: conversation } = await supabase
       .from('conversations')
       .select('*')
       .eq('contact_id', contactRecord.id)
-      .eq('status', 'open')
+      .order('created_at', { ascending: true })
+      .limit(1)
       .single();
 
     if (!conversation) {
@@ -173,14 +175,16 @@ serve(async (req) => {
       conversation = newConversation;
       console.log('Created new conversation:', conversation.id);
     } else {
-      // Update unread count
+      // Update existing conversation - reopen if resolved, increment unread
       await supabase
         .from('conversations')
         .update({
+          status: 'open', // Reopen if was resolved
           unread_count: conversation.unread_count + 1,
           last_message_at: new Date().toISOString(),
         })
         .eq('id', conversation.id);
+      console.log('Using existing conversation:', conversation.id);
     }
 
     // Determine message type and content
