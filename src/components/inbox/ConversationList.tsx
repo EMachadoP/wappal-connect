@@ -62,8 +62,8 @@ export function ConversationList({
   };
 
   return (
-    <div className="w-80 border-r border-border flex flex-col bg-card">
-      <div className="p-3 border-b border-border">
+    <div className="w-80 border-r border-border flex flex-col bg-card h-full overflow-hidden">
+      <div className="shrink-0 p-3 border-b border-border">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
@@ -75,7 +75,7 @@ export function ConversationList({
         </div>
       </div>
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabValue)} className="border-b border-border">
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabValue)} className="shrink-0 border-b border-border">
         <TabsList className="w-full h-auto p-0 bg-transparent grid grid-cols-4">
           <TabsTrigger
             value="mine"
@@ -104,7 +104,7 @@ export function ConversationList({
         </TabsList>
       </Tabs>
 
-      <ScrollArea className="flex-1">
+      <div className="flex-1 overflow-y-auto">
         {filteredConversations.length === 0 ? (
           <div className="p-4 text-center text-muted-foreground">
             Nenhuma conversa encontrada
@@ -125,7 +125,7 @@ export function ConversationList({
             />
           ))
         )}
-      </ScrollArea>
+      </div>
     </div>
   );
 }
