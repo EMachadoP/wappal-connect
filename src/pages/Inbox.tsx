@@ -202,19 +202,35 @@ export default function InboxPage() {
   const handleSendMessage = async (content: string) => {
     if (!activeConversationId || !user) return;
 
-    const { error } = await supabase.from('messages').insert({
-      conversation_id: activeConversationId,
-      sender_type: 'agent',
-      sender_id: user.id,
-      content,
-      message_type: 'text',
-    });
+    try {
+      // Call Z-API edge function to send message via WhatsApp
+      const { data, error } = await supabase.functions.invoke('zapi-send-message', {
+        body: {
+          conversation_id: activeConversationId,
+          content,
+          message_type: 'text',
+          sender_id: user.id,
+        },
+      });
 
-    if (error) {
+      if (error) {
+        toast({
+          variant: 'destructive',
+          title: 'Erro ao enviar mensagem',
+          description: error.message,
+        });
+      } else if (data?.error) {
+        toast({
+          variant: 'destructive',
+          title: 'Erro ao enviar mensagem',
+          description: data.error,
+        });
+      }
+    } catch (err) {
       toast({
         variant: 'destructive',
         title: 'Erro ao enviar mensagem',
-        description: error.message,
+        description: 'Falha ao conectar com o serviço de envio',
       });
     }
   };
