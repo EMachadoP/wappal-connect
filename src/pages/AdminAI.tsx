@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
+import type { Json } from '@/integrations/supabase/types';
 import { Save, RotateCcw, Play, Loader2, Plus, Trash2, Pencil, Copy, Info } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -287,7 +288,7 @@ export default function AdminAIPage() {
           timezone: settings.timezone,
           base_system_prompt: settings.base_system_prompt,
           fallback_offhours_message: settings.fallback_offhours_message,
-          policies_json: settings.policies_json as unknown as Record<string, unknown>,
+          policies_json: settings.policies_json as Json,
           memory_message_count: settings.memory_message_count,
           enable_auto_summary: settings.enable_auto_summary,
           anti_spam_seconds: settings.anti_spam_seconds,
@@ -1166,15 +1167,21 @@ export default function AdminAIPage() {
               existing={editingTeamSetting}
               onSave={async (data) => {
                 try {
+                  const updateData = {
+                    team_id: data.team_id,
+                    enabled: data.enabled,
+                    prompt_override: data.prompt_override,
+                    schedule_json: JSON.parse(JSON.stringify(data.schedule_json)) as Json,
+                  };
                   if (editingTeamSetting) {
                     await supabase
                       .from('ai_team_settings')
-                      .update(data)
+                      .update(updateData)
                       .eq('id', editingTeamSetting.id);
                   } else {
                     await supabase
                       .from('ai_team_settings')
-                      .insert(data);
+                      .insert({ ...updateData, team_id: data.team_id! });
                   }
                   toast({ title: 'Configuração salva!' });
                   setTeamDialogOpen(false);
