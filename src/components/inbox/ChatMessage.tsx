@@ -1,8 +1,11 @@
 import { format } from 'date-fns';
 import { Check, CheckCheck, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { MessageFeedback } from './MessageFeedback';
 
 interface ChatMessageProps {
+  messageId: string;
+  conversationId: string;
   content?: string | null;
   messageType: string;
   mediaUrl?: string | null;
@@ -11,9 +14,12 @@ interface ChatMessageProps {
   deliveredAt?: string | null;
   readAt?: string | null;
   senderName?: string | null;
+  isAIGenerated?: boolean;
 }
 
 export function ChatMessage({
+  messageId,
+  conversationId,
   content,
   messageType,
   mediaUrl,
@@ -22,6 +28,7 @@ export function ChatMessage({
   deliveredAt,
   readAt,
   senderName,
+  isAIGenerated,
 }: ChatMessageProps) {
   const time = format(new Date(sentAt), 'HH:mm');
 
@@ -117,6 +124,15 @@ export function ChatMessage({
           </span>
           {renderStatus()}
         </div>
+
+        {/* Feedback buttons for AI-generated messages */}
+        {isOutgoing && isAIGenerated && content && (
+          <MessageFeedback
+            messageId={messageId}
+            conversationId={conversationId}
+            messageContent={content}
+          />
+        )}
       </div>
     </div>
   );

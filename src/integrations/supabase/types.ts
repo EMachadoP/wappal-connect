@@ -384,6 +384,57 @@ export type Database = {
           },
         ]
       }
+      conversation_resolution: {
+        Row: {
+          approved_by: string | null
+          category: string | null
+          conversation_id: string | null
+          created_at: string
+          id: string
+          resolution_steps: Json | null
+          resolution_summary: string | null
+          snippet_generated: boolean | null
+          team_id: string | null
+        }
+        Insert: {
+          approved_by?: string | null
+          category?: string | null
+          conversation_id?: string | null
+          created_at?: string
+          id?: string
+          resolution_steps?: Json | null
+          resolution_summary?: string | null
+          snippet_generated?: boolean | null
+          team_id?: string | null
+        }
+        Update: {
+          approved_by?: string | null
+          category?: string | null
+          conversation_id?: string | null
+          created_at?: string
+          id?: string
+          resolution_steps?: Json | null
+          resolution_summary?: string | null
+          snippet_generated?: boolean | null
+          team_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "conversation_resolution_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: true
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversation_resolution_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       conversations: {
         Row: {
           assigned_to: string | null
@@ -465,6 +516,104 @@ export type Database = {
         }
         Relationships: []
       }
+      kb_embeddings: {
+        Row: {
+          created_at: string
+          embedding: string | null
+          id: string
+          model_name: string
+          snippet_id: string | null
+          team_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          embedding?: string | null
+          id?: string
+          model_name?: string
+          snippet_id?: string | null
+          team_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          embedding?: string | null
+          id?: string
+          model_name?: string
+          snippet_id?: string | null
+          team_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "kb_embeddings_snippet_id_fkey"
+            columns: ["snippet_id"]
+            isOneToOne: false
+            referencedRelation: "kb_snippets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "kb_embeddings_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      kb_snippets: {
+        Row: {
+          approved: boolean
+          category: string
+          confidence_score: number | null
+          created_at: string
+          id: string
+          problem_text: string
+          solution_text: string
+          source: string | null
+          tags: Json | null
+          team_id: string | null
+          title: string
+          updated_at: string
+          used_count: number | null
+        }
+        Insert: {
+          approved?: boolean
+          category?: string
+          confidence_score?: number | null
+          created_at?: string
+          id?: string
+          problem_text: string
+          solution_text: string
+          source?: string | null
+          tags?: Json | null
+          team_id?: string | null
+          title: string
+          updated_at?: string
+          used_count?: number | null
+        }
+        Update: {
+          approved?: boolean
+          category?: string
+          confidence_score?: number | null
+          created_at?: string
+          id?: string
+          problem_text?: string
+          solution_text?: string
+          source?: string | null
+          tags?: Json | null
+          team_id?: string | null
+          title?: string
+          updated_at?: string
+          used_count?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "kb_snippets_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       labels: {
         Row: {
           color: string
@@ -485,6 +634,64 @@ export type Database = {
           name?: string
         }
         Relationships: []
+      }
+      message_feedback: {
+        Row: {
+          conversation_id: string | null
+          created_at: string
+          created_by: string | null
+          id: string
+          message_id: string | null
+          rating: string
+          reason: string | null
+          save_as_procedure: boolean | null
+          team_id: string | null
+        }
+        Insert: {
+          conversation_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          message_id?: string | null
+          rating: string
+          reason?: string | null
+          save_as_procedure?: boolean | null
+          team_id?: string | null
+        }
+        Update: {
+          conversation_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          message_id?: string | null
+          rating?: string
+          reason?: string | null
+          save_as_procedure?: boolean | null
+          team_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "message_feedback_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "message_feedback_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
+            referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "message_feedback_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       messages: {
         Row: {
@@ -692,6 +899,24 @@ export type Database = {
           _user_id: string
         }
         Returns: boolean
+      }
+      match_kb_snippets: {
+        Args: {
+          filter_team_id?: string
+          match_count?: number
+          match_threshold?: number
+          query_embedding: string
+        }
+        Returns: {
+          category: string
+          id: string
+          problem_text: string
+          similarity: number
+          snippet_id: string
+          solution_text: string
+          tags: Json
+          title: string
+        }[]
       }
     }
     Enums: {
