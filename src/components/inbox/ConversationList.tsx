@@ -24,6 +24,7 @@ interface ConversationListProps {
   activeConversationId: string | null;
   userId: string;
   onSelectConversation: (id: string) => void;
+  isMobile?: boolean;
 }
 
 type TabValue = 'mine' | 'unassigned' | 'all' | 'resolved';
@@ -33,6 +34,7 @@ export function ConversationList({
   activeConversationId,
   userId,
   onSelectConversation,
+  isMobile = false,
 }: ConversationListProps) {
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState<TabValue>('mine');
@@ -62,7 +64,7 @@ export function ConversationList({
   };
 
   return (
-    <div className="w-80 border-r border-border flex flex-col bg-card h-full overflow-hidden">
+    <div className={`${isMobile ? 'w-full' : 'w-80'} border-r border-border flex flex-col bg-card h-full overflow-hidden`}>
       <div className="shrink-0 p-3 border-b border-border">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />

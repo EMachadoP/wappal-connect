@@ -1,10 +1,14 @@
-import { useEffect, useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { useEffect, useState, useCallback } from 'react';
+import { Navigate, useParams, useNavigate } from 'react-router-dom';
+import { ArrowLeft, Users } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { ConversationList } from '@/components/inbox/ConversationList';
 import { ChatArea } from '@/components/inbox/ChatArea';
+import { Button } from '@/components/ui/button';
+import { ConversationAvatar } from '@/components/inbox/ConversationAvatar';
 import { useToast } from '@/hooks/use-toast';
 
 interface Contact {
@@ -58,10 +62,14 @@ interface Label {
 }
 
 export default function InboxPage() {
+  const { id: conversationIdParam } = useParams<{ id?: string }>();
+  const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const { user, loading: authLoading } = useAuth();
   const { toast } = useToast();
+  
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(conversationIdParam || null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeContact, setActiveContact] = useState<Contact | null>(null);
   const [activeConversationStatus, setActiveConversationStatus] = useState<string>('open');
@@ -72,6 +80,28 @@ export default function InboxPage() {
   const [labels, setLabels] = useState<Label[]>([]);
   const [loadingConversations, setLoadingConversations] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
+
+  // Sync URL param with state
+  useEffect(() => {
+    if (conversationIdParam) {
+      setActiveConversationId(conversationIdParam);
+    } else if (isMobile) {
+      setActiveConversationId(null);
+    }
+  }, [conversationIdParam, isMobile]);
+
+  const handleSelectConversation = useCallback((id: string | null) => {
+    if (isMobile && id) {
+      navigate(`/inbox/${id}`);
+    } else {
+      setActiveConversationId(id);
+    }
+  }, [isMobile, navigate]);
+
+  const handleBackToList = useCallback(() => {
+    navigate('/inbox');
+    setActiveConversationId(null);
+  }, [navigate]);
 
   // Fetch profiles, teams, labels
   useEffect(() => {
@@ -88,7 +118,7 @@ export default function InboxPage() {
     fetchData();
   }, []);
 
-  // Fetch conversations - grouped by contact (one conversation per contact like WhatsApp)
+  // Fetch conversations
   useEffect(() => {
     if (!user) return;
 
@@ -122,7 +152,6 @@ export default function InboxPage() {
           description: error.message,
         });
       } else if (data) {
-        // Group by thread key - one chat per phone/LID (WhatsApp-like)
         const threadMap = new Map<string, any>();
 
         for (const conv of data) {
@@ -133,7 +162,6 @@ export default function InboxPage() {
           if (!existing) {
             threadMap.set(threadKey, conv);
           } else {
-            // Merge: sum unread counts, keep most recent last_message_at
             existing.unread_count += conv.unread_count;
             if (conv.last_message_at && (!existing.last_message_at || conv.last_message_at > existing.last_message_at)) {
               existing.last_message_at = conv.last_message_at;
@@ -191,7 +219,7 @@ export default function InboxPage() {
     };
   }, [user, toast]);
 
-  // Fetch messages when conversation changes (thread-based: same phone/LID)
+  // Fetch messages when conversation changes
   useEffect(() => {
     if (!activeConversationId) {
       setMessages([]);
@@ -206,8 +234,7 @@ export default function InboxPage() {
 
       const { data: selectedConv, error: selectedConvError } = await supabase
         .from('conversations')
-        .select(
-          `
+        .select(`
           id,
           status,
           priority,
@@ -221,8 +248,7 @@ export default function InboxPage() {
             lid,
             is_group
           )
-        `
-        )
+        `)
         .eq('id', activeConversationId)
         .maybeSingle();
 
@@ -248,7 +274,6 @@ export default function InboxPage() {
         setActiveAssignedTo(selectedConv.assigned_to);
       }
 
-      // Resolve "thread" contacts (merge duplicates by phone or LID)
       let threadContactIds: string[] = [contactId];
       const threadPhone = contact?.phone || null;
       const threadLid = contact?.lid || null;
@@ -263,7 +288,6 @@ export default function InboxPage() {
         }
       }
 
-      // Get all conversation ids for this thread
       const { data: convsForThread } = await supabase
         .from('conversations')
         .select('id')
@@ -271,7 +295,6 @@ export default function InboxPage() {
 
       const conversationIds: string[] = convsForThread?.map((c: any) => c.id) || [activeConversationId];
 
-      // Fetch messages from all conversations for this thread
       const { data, error } = await supabase
         .from('messages')
         .select('*')
@@ -290,14 +313,12 @@ export default function InboxPage() {
         }
       }
 
-      // Mark all conversations in this thread as read
       if (conversationIds.length > 0) {
         await supabase.from('conversations').update({ unread_count: 0, marked_unread: false }).in('id', conversationIds);
       }
 
       if (!isCancelled) setLoadingMessages(false);
 
-      // Subscribe after first load, scoped by conversationIds (local closure)
       const channel = supabase
         .channel(`messages-thread-${conversationIds.join('-')}`)
         .on(
@@ -376,29 +397,25 @@ export default function InboxPage() {
     if (!activeConversationId || !user) return;
 
     try {
-      // Upload file to Supabase Storage
       const fileExt = file.name.split('.').pop();
       const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
       const filePath = `chat-files/${fileName}`;
 
-      const { data: uploadData, error: uploadError } = await supabase.storage
+      const { error: uploadError } = await supabase.storage
         .from('chat-files')
         .upload(filePath, file);
 
       if (uploadError) {
-        // If bucket doesn't exist, show info
         toast({
           variant: 'destructive',
           title: 'Erro ao enviar arquivo',
-          description: 'Bucket de armazenamento não configurado. Configure o storage no backend.',
+          description: 'Bucket de armazenamento não configurado.',
         });
         return;
       }
 
-      // Get public URL
       const { data: urlData } = supabase.storage.from('chat-files').getPublicUrl(filePath);
 
-      // Send via Z-API
       const { data, error } = await supabase.functions.invoke('zapi-send-file', {
         body: {
           conversation_id: activeConversationId,
@@ -442,11 +459,13 @@ export default function InboxPage() {
         description: error.message,
       });
     } else {
-      toast({
-        title: 'Conversa resolvida',
-      });
+      toast({ title: 'Conversa resolvida' });
       setActiveConversationStatus('resolved');
-      setActiveConversationId(null);
+      if (isMobile) {
+        handleBackToList();
+      } else {
+        setActiveConversationId(null);
+      }
     }
   };
 
@@ -529,8 +548,6 @@ export default function InboxPage() {
   };
 
   const handleAssignTeam = async (teamId: string) => {
-    // For now, we don't have team_id on conversations, but we can add it
-    // This is a placeholder that shows the toast
     const team = teams.find(t => t.id === teamId);
     toast({ title: `Atribuído à equipe ${team?.name || ''}` });
   };
@@ -550,7 +567,7 @@ export default function InboxPage() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="min-h-screen-safe flex items-center justify-center bg-background">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
       </div>
     );
@@ -560,6 +577,75 @@ export default function InboxPage() {
     return <Navigate to="/auth" replace />;
   }
 
+  // Mobile: Show chat view when conversation is selected
+  if (isMobile && activeConversationId && activeContact) {
+    return (
+      <AppLayout hideBottomNav>
+        <div className="flex flex-col h-full">
+          {/* Mobile Chat Header */}
+          <div className="h-14 shrink-0 border-b border-border flex items-center gap-3 px-2 bg-card">
+            <Button variant="ghost" size="icon" onClick={handleBackToList}>
+              <ArrowLeft className="w-5 h-5" />
+            </Button>
+            {activeContact.is_group ? (
+              <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
+                <Users className="w-5 h-5 text-primary" />
+              </div>
+            ) : (
+              <ConversationAvatar name={activeContact.name} imageUrl={activeContact.profile_picture_url} />
+            )}
+            <div className="flex-1 min-w-0">
+              <p className="font-medium truncate">{activeContact.name}</p>
+              <p className="text-xs text-muted-foreground truncate">
+                {activeContact.phone || activeContact.lid || 'Sem identificação'}
+              </p>
+            </div>
+          </div>
+          
+          <ChatArea
+            contact={activeContact}
+            messages={messages}
+            profiles={profiles}
+            teams={teams}
+            labels={labels}
+            conversationId={activeConversationId}
+            conversationStatus={activeConversationStatus}
+            conversationPriority={activeConversationPriority}
+            assignedTo={activeAssignedTo}
+            onSendMessage={handleSendMessage}
+            onSendFile={handleSendFile}
+            onResolveConversation={handleResolveConversation}
+            onReopenConversation={handleReopenConversation}
+            onMarkUnread={handleMarkUnread}
+            onSetPriority={handleSetPriority}
+            onSnooze={handleSnooze}
+            onAssignAgent={handleAssignAgent}
+            onAssignTeam={handleAssignTeam}
+            onAddLabel={handleAddLabel}
+            loading={loadingMessages}
+            isMobile
+          />
+        </div>
+      </AppLayout>
+    );
+  }
+
+  // Mobile: Show only conversation list
+  if (isMobile) {
+    return (
+      <AppLayout>
+        <ConversationList
+          conversations={conversations}
+          activeConversationId={null}
+          userId={user.id}
+          onSelectConversation={handleSelectConversation}
+          isMobile
+        />
+      </AppLayout>
+    );
+  }
+
+  // Desktop: Show split view
   return (
     <AppLayout>
       <div className="flex h-full">
@@ -567,7 +653,7 @@ export default function InboxPage() {
           conversations={conversations}
           activeConversationId={activeConversationId}
           userId={user.id}
-          onSelectConversation={setActiveConversationId}
+          onSelectConversation={handleSelectConversation}
         />
         <ChatArea
           contact={activeContact}
