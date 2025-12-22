@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Paperclip, CheckCircle, RotateCcw } from 'lucide-react';
+import { Send, Paperclip, MoreVertical, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ConversationAvatar } from './ConversationAvatar';
 import { ChatMessage } from './ChatMessage';
+import { EmojiPicker } from './EmojiPicker';
+import { ConversationActionsMenu } from './ConversationActionsMenu';
 
 interface Message {
   id: string;
@@ -19,10 +21,12 @@ interface Message {
 }
 
 interface Contact {
+  id?: string;
   name: string;
   profile_picture_url?: string | null;
   phone?: string | null;
   lid?: string | null;
+  is_group?: boolean;
 }
 
 interface Profile {
@@ -30,14 +34,38 @@ interface Profile {
   name: string;
 }
 
+interface Team {
+  id: string;
+  name: string;
+}
+
+interface Label {
+  id: string;
+  name: string;
+  color: string;
+}
+
 interface ChatAreaProps {
   contact: Contact | null;
   messages: Message[];
   profiles: Profile[];
+  teams?: Team[];
+  labels?: Label[];
+  conversationId?: string | null;
   conversationStatus?: string;
+  conversationPriority?: string;
+  assignedTo?: string | null;
+  markedUnread?: boolean;
   onSendMessage: (content: string) => void;
+  onSendFile?: (file: File) => void;
   onResolveConversation?: () => void;
   onReopenConversation?: () => void;
+  onMarkUnread?: () => void;
+  onSetPriority?: (priority: string) => void;
+  onSnooze?: (until: Date) => void;
+  onAssignAgent?: (agentId: string) => void;
+  onAssignTeam?: (teamId: string) => void;
+  onAddLabel?: (labelId: string) => void;
   loading?: boolean;
 }
 
@@ -45,14 +73,28 @@ export function ChatArea({
   contact, 
   messages, 
   profiles,
+  teams = [],
+  labels = [],
+  conversationId,
   conversationStatus = 'open',
-  onSendMessage, 
+  conversationPriority = 'normal',
+  assignedTo,
+  markedUnread,
+  onSendMessage,
+  onSendFile,
   onResolveConversation,
   onReopenConversation,
+  onMarkUnread,
+  onSetPriority,
+  onSnooze,
+  onAssignAgent,
+  onAssignTeam,
+  onAddLabel,
   loading 
 }: ChatAreaProps) {
   const [message, setMessage] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'end' });
@@ -69,6 +111,25 @@ export function ChatArea({
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
+    }
+  };
+
+  const handleEmojiSelect = (emoji: string) => {
+    setMessage((prev) => prev + emoji);
+  };
+
+  const handleFileClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && onSendFile) {
+      onSendFile(file);
+    }
+    // Reset input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
   };
 
@@ -96,9 +157,20 @@ export function ChatArea({
       {/* Chat Header */}
       <div className="h-14 border-b border-border flex items-center justify-between px-4">
         <div className="flex items-center gap-3">
-          <ConversationAvatar name={contact.name} imageUrl={contact.profile_picture_url} />
+          {contact.is_group ? (
+            <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
+              <Users className="w-5 h-5 text-primary" />
+            </div>
+          ) : (
+            <ConversationAvatar name={contact.name} imageUrl={contact.profile_picture_url} />
+          )}
           <div>
-            <p className="font-medium">{contact.name}</p>
+            <div className="flex items-center gap-2">
+              <p className="font-medium">{contact.name}</p>
+              {contact.is_group && (
+                <span className="text-xs bg-primary/20 text-primary px-2 py-0.5 rounded">Grupo</span>
+              )}
+            </div>
             <p className="text-xs text-muted-foreground">
               {contact.phone || contact.lid || 'Sem identificação'}
             </p>
@@ -106,27 +178,22 @@ export function ChatArea({
         </div>
         
         <div className="flex items-center gap-2">
-          {isResolved ? (
-            <Button 
-              variant="outline" 
-              size="sm"
-              onClick={onReopenConversation}
-              className="gap-2"
-            >
-              <RotateCcw className="w-4 h-4" />
-              Reabrir
-            </Button>
-          ) : (
-            <Button 
-              variant="default" 
-              size="sm"
-              onClick={onResolveConversation}
-              className="gap-2"
-            >
-              <CheckCircle className="w-4 h-4" />
-              Marcar como Resolvida
-            </Button>
-          )}
+          <ConversationActionsMenu
+            isResolved={isResolved}
+            priority={conversationPriority}
+            profiles={profiles}
+            teams={teams}
+            labels={labels}
+            assignedTo={assignedTo}
+            onResolve={onResolveConversation}
+            onReopen={onReopenConversation}
+            onMarkUnread={onMarkUnread}
+            onSetPriority={onSetPriority}
+            onSnooze={onSnooze}
+            onAssignAgent={onAssignAgent}
+            onAssignTeam={onAssignTeam}
+            onAddLabel={onAddLabel}
+          />
         </div>
       </div>
 
@@ -164,13 +231,21 @@ export function ChatArea({
       <div className="p-4 border-t border-border">
         {isResolved ? (
           <div className="text-center text-muted-foreground text-sm py-2">
-            Conversa resolvida. Clique em "Reabrir" para continuar.
+            Conversa resolvida. Use o menu para reabrir.
           </div>
         ) : (
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" className="shrink-0">
+            <EmojiPicker onEmojiSelect={handleEmojiSelect} />
+            <Button variant="ghost" size="icon" className="shrink-0" onClick={handleFileClick}>
               <Paperclip className="w-5 h-5" />
             </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              onChange={handleFileChange}
+              accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+            />
             <Input
               placeholder="Digite uma mensagem..."
               value={message}

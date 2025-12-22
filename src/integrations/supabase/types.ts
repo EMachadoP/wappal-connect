@@ -18,7 +18,9 @@ export type Database = {
         Row: {
           chat_lid: string | null
           created_at: string
+          group_name: string | null
           id: string
+          is_group: boolean
           lid: string | null
           lid_collected_at: string | null
           lid_source: string | null
@@ -30,7 +32,9 @@ export type Database = {
         Insert: {
           chat_lid?: string | null
           created_at?: string
+          group_name?: string | null
           id?: string
+          is_group?: boolean
           lid?: string | null
           lid_collected_at?: string | null
           lid_source?: string | null
@@ -42,7 +46,9 @@ export type Database = {
         Update: {
           chat_lid?: string | null
           created_at?: string
+          group_name?: string | null
           id?: string
+          is_group?: boolean
           lid?: string | null
           lid_collected_at?: string | null
           lid_source?: string | null
@@ -96,6 +102,9 @@ export type Database = {
           created_at: string
           id: string
           last_message_at: string | null
+          marked_unread: boolean | null
+          priority: string | null
+          snoozed_until: string | null
           status: Database["public"]["Enums"]["conversation_status"]
           unread_count: number
           updated_at: string
@@ -106,6 +115,9 @@ export type Database = {
           created_at?: string
           id?: string
           last_message_at?: string | null
+          marked_unread?: boolean | null
+          priority?: string | null
+          snoozed_until?: string | null
           status?: Database["public"]["Enums"]["conversation_status"]
           unread_count?: number
           updated_at?: string
@@ -116,6 +128,9 @@ export type Database = {
           created_at?: string
           id?: string
           last_message_at?: string | null
+          marked_unread?: boolean | null
+          priority?: string | null
+          snoozed_until?: string | null
           status?: Database["public"]["Enums"]["conversation_status"]
           unread_count?: number
           updated_at?: string

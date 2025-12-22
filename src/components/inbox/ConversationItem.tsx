@@ -1,6 +1,6 @@
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { Image, Video, Mic, FileText } from 'lucide-react';
+import { Image, Video, Mic, FileText, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ConversationAvatar } from './ConversationAvatar';
 import { Badge } from '@/components/ui/badge';

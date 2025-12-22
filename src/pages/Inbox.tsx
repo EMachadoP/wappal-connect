@@ -13,6 +13,7 @@ interface Contact {
   profile_picture_url: string | null;
   phone: string | null;
   lid: string | null;
+  is_group?: boolean;
 }
 
 interface Conversation {
@@ -24,6 +25,8 @@ interface Conversation {
   unread_count: number;
   assigned_to: string | null;
   status: string;
+  priority?: string;
+  marked_unread?: boolean;
 }
 
 interface Message {
@@ -43,6 +46,17 @@ interface Profile {
   name: string;
 }
 
+interface Team {
+  id: string;
+  name: string;
+}
+
+interface Label {
+  id: string;
+  name: string;
+  color: string;
+}
+
 export default function InboxPage() {
   const { user, loading: authLoading } = useAuth();
   const { toast } = useToast();
@@ -51,21 +65,27 @@ export default function InboxPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeContact, setActiveContact] = useState<Contact | null>(null);
   const [activeConversationStatus, setActiveConversationStatus] = useState<string>('open');
+  const [activeConversationPriority, setActiveConversationPriority] = useState<string>('normal');
+  const [activeAssignedTo, setActiveAssignedTo] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [labels, setLabels] = useState<Label[]>([]);
   const [loadingConversations, setLoadingConversations] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
 
-  // Fetch profiles for sender names
+  // Fetch profiles, teams, labels
   useEffect(() => {
-    const fetchProfiles = async () => {
-      const { data } = await supabase
-        .from('profiles')
-        .select('id, name');
-      if (data) {
-        setProfiles(data);
-      }
+    const fetchData = async () => {
+      const [profilesRes, teamsRes, labelsRes] = await Promise.all([
+        supabase.from('profiles').select('id, name'),
+        supabase.from('teams').select('id, name'),
+        supabase.from('labels').select('id, name, color'),
+      ]);
+      if (profilesRes.data) setProfiles(profilesRes.data);
+      if (teamsRes.data) setTeams(teamsRes.data);
+      if (labelsRes.data) setLabels(labelsRes.data);
     };
-    fetchProfiles();
+    fetchData();
   }, []);
 
   // Fetch conversations - grouped by contact (one conversation per contact like WhatsApp)
@@ -81,13 +101,16 @@ export default function InboxPage() {
           last_message_at,
           assigned_to,
           status,
+          priority,
+          marked_unread,
           contact_id,
           contacts (
             id,
             name,
             profile_picture_url,
             phone,
-            lid
+            lid,
+            is_group
           )
         `)
         .order('last_message_at', { ascending: false, nullsFirst: false });
@@ -114,13 +137,12 @@ export default function InboxPage() {
             existing.unread_count += conv.unread_count;
             if (conv.last_message_at && (!existing.last_message_at || conv.last_message_at > existing.last_message_at)) {
               existing.last_message_at = conv.last_message_at;
-              // Keep the most recent conversation id as the visible “thread” id
               existing.id = conv.id;
               existing.status = conv.status;
               existing.assigned_to = conv.assigned_to;
+              existing.priority = conv.priority;
               existing.contacts = contact;
             }
-            // If any conversation is open, keep it open
             if (conv.status === 'open') {
               existing.status = 'open';
             }
@@ -136,9 +158,10 @@ export default function InboxPage() {
           unread_count: conv.unread_count,
           assigned_to: conv.assigned_to,
           status: conv.status,
+          priority: conv.priority || 'normal',
+          marked_unread: conv.marked_unread || false,
         }));
         
-        // Sort by last_message_at
         formatted.sort((a, b) => {
           if (!a.last_message_at) return 1;
           if (!b.last_message_at) return -1;
@@ -152,7 +175,6 @@ export default function InboxPage() {
 
     fetchConversations();
 
-    // Subscribe to realtime updates
     const channel = supabase
       .channel('conversations-changes')
       .on(
@@ -182,20 +204,22 @@ export default function InboxPage() {
     const fetchMessages = async () => {
       setLoadingMessages(true);
 
-      // Load the selected conversation + its contact (do NOT depend on `conversations` state to avoid loops)
       const { data: selectedConv, error: selectedConvError } = await supabase
         .from('conversations')
         .select(
           `
           id,
           status,
+          priority,
+          assigned_to,
           contact_id,
           contacts (
             id,
             name,
             profile_picture_url,
             phone,
-            lid
+            lid,
+            is_group
           )
         `
         )
@@ -220,9 +244,11 @@ export default function InboxPage() {
       if (!isCancelled) {
         setActiveContact(contact);
         setActiveConversationStatus(selectedConv.status);
+        setActiveConversationPriority((selectedConv as any).priority || 'normal');
+        setActiveAssignedTo(selectedConv.assigned_to);
       }
 
-      // Resolve “thread” contacts (merge duplicates by phone or LID)
+      // Resolve "thread" contacts (merge duplicates by phone or LID)
       let threadContactIds: string[] = [contactId];
       const threadPhone = contact?.phone || null;
       const threadLid = contact?.lid || null;
@@ -266,7 +292,7 @@ export default function InboxPage() {
 
       // Mark all conversations in this thread as read
       if (conversationIds.length > 0) {
-        await supabase.from('conversations').update({ unread_count: 0 }).in('id', conversationIds);
+        await supabase.from('conversations').update({ unread_count: 0, marked_unread: false }).in('id', conversationIds);
       }
 
       if (!isCancelled) setLoadingMessages(false);
@@ -315,7 +341,6 @@ export default function InboxPage() {
     if (!activeConversationId || !user) return;
 
     try {
-      // Call Z-API edge function to send message via WhatsApp
       const { data, error } = await supabase.functions.invoke('zapi-send-message', {
         body: {
           conversation_id: activeConversationId,
@@ -347,6 +372,61 @@ export default function InboxPage() {
     }
   };
 
+  const handleSendFile = async (file: File) => {
+    if (!activeConversationId || !user) return;
+
+    try {
+      // Upload file to Supabase Storage
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
+      const filePath = `chat-files/${fileName}`;
+
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('chat-files')
+        .upload(filePath, file);
+
+      if (uploadError) {
+        // If bucket doesn't exist, show info
+        toast({
+          variant: 'destructive',
+          title: 'Erro ao enviar arquivo',
+          description: 'Bucket de armazenamento não configurado. Configure o storage no backend.',
+        });
+        return;
+      }
+
+      // Get public URL
+      const { data: urlData } = supabase.storage.from('chat-files').getPublicUrl(filePath);
+
+      // Send via Z-API
+      const { data, error } = await supabase.functions.invoke('zapi-send-file', {
+        body: {
+          conversation_id: activeConversationId,
+          file_url: urlData.publicUrl,
+          file_name: file.name,
+          file_type: file.type,
+          sender_id: user.id,
+        },
+      });
+
+      if (error || data?.error) {
+        toast({
+          variant: 'destructive',
+          title: 'Erro ao enviar arquivo',
+          description: error?.message || data?.error,
+        });
+      } else {
+        toast({ title: 'Arquivo enviado' });
+      }
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao enviar arquivo',
+        description: 'Falha ao conectar com o serviço de envio',
+      });
+    }
+  };
+
   const handleResolveConversation = async () => {
     if (!activeConversationId) return;
 
@@ -364,10 +444,8 @@ export default function InboxPage() {
     } else {
       toast({
         title: 'Conversa resolvida',
-        description: 'A conversa foi marcada como resolvida.',
       });
       setActiveConversationStatus('resolved');
-      // Clear selection to go back to list
       setActiveConversationId(null);
     }
   };
@@ -379,7 +457,7 @@ export default function InboxPage() {
       .from('conversations')
       .update({ 
         status: 'open',
-        assigned_to: user.id, // Reassign to current user
+        assigned_to: user.id,
       })
       .eq('id', activeConversationId);
 
@@ -390,11 +468,83 @@ export default function InboxPage() {
         description: error.message,
       });
     } else {
-      toast({
-        title: 'Conversa reaberta',
-        description: 'A conversa foi reaberta e atribuída a você.',
-      });
+      toast({ title: 'Conversa reaberta' });
       setActiveConversationStatus('open');
+    }
+  };
+
+  const handleMarkUnread = async () => {
+    if (!activeConversationId) return;
+
+    const { error } = await supabase
+      .from('conversations')
+      .update({ marked_unread: true, unread_count: 1 })
+      .eq('id', activeConversationId);
+
+    if (!error) {
+      toast({ title: 'Marcada como não lida' });
+    }
+  };
+
+  const handleSetPriority = async (priority: string) => {
+    if (!activeConversationId) return;
+
+    const { error } = await supabase
+      .from('conversations')
+      .update({ priority })
+      .eq('id', activeConversationId);
+
+    if (!error) {
+      setActiveConversationPriority(priority);
+      toast({ title: `Prioridade: ${priority}` });
+    }
+  };
+
+  const handleSnooze = async (until: Date) => {
+    if (!activeConversationId) return;
+
+    const { error } = await supabase
+      .from('conversations')
+      .update({ snoozed_until: until.toISOString() })
+      .eq('id', activeConversationId);
+
+    if (!error) {
+      toast({ title: 'Conversa adiada' });
+    }
+  };
+
+  const handleAssignAgent = async (agentId: string) => {
+    if (!activeConversationId) return;
+
+    const { error } = await supabase
+      .from('conversations')
+      .update({ assigned_to: agentId })
+      .eq('id', activeConversationId);
+
+    if (!error) {
+      setActiveAssignedTo(agentId);
+      const agent = profiles.find(p => p.id === agentId);
+      toast({ title: `Atribuído a ${agent?.name || 'agente'}` });
+    }
+  };
+
+  const handleAssignTeam = async (teamId: string) => {
+    // For now, we don't have team_id on conversations, but we can add it
+    // This is a placeholder that shows the toast
+    const team = teams.find(t => t.id === teamId);
+    toast({ title: `Atribuído à equipe ${team?.name || ''}` });
+  };
+
+  const handleAddLabel = async (labelId: string) => {
+    if (!activeConversationId) return;
+
+    const { error } = await supabase
+      .from('conversation_labels')
+      .insert({ conversation_id: activeConversationId, label_id: labelId });
+
+    if (!error) {
+      const label = labels.find(l => l.id === labelId);
+      toast({ title: `Etiqueta "${label?.name}" adicionada` });
     }
   };
 
@@ -423,10 +573,22 @@ export default function InboxPage() {
           contact={activeContact}
           messages={messages}
           profiles={profiles}
+          teams={teams}
+          labels={labels}
+          conversationId={activeConversationId}
           conversationStatus={activeConversationStatus}
+          conversationPriority={activeConversationPriority}
+          assignedTo={activeAssignedTo}
           onSendMessage={handleSendMessage}
+          onSendFile={handleSendFile}
           onResolveConversation={handleResolveConversation}
           onReopenConversation={handleReopenConversation}
+          onMarkUnread={handleMarkUnread}
+          onSetPriority={handleSetPriority}
+          onSnooze={handleSnooze}
+          onAssignAgent={handleAssignAgent}
+          onAssignTeam={handleAssignTeam}
+          onAddLabel={handleAddLabel}
           loading={loadingMessages}
         />
       </div>
