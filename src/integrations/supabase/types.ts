@@ -444,6 +444,7 @@ export type Database = {
           last_message_at: string | null
           marked_unread: boolean | null
           priority: string | null
+          protocol: string | null
           snoozed_until: string | null
           status: Database["public"]["Enums"]["conversation_status"]
           unread_count: number
@@ -457,6 +458,7 @@ export type Database = {
           last_message_at?: string | null
           marked_unread?: boolean | null
           priority?: string | null
+          protocol?: string | null
           snoozed_until?: string | null
           status?: Database["public"]["Enums"]["conversation_status"]
           unread_count?: number
@@ -470,6 +472,7 @@ export type Database = {
           last_message_at?: string | null
           marked_unread?: boolean | null
           priority?: string | null
+          protocol?: string | null
           snoozed_until?: string | null
           status?: Database["public"]["Enums"]["conversation_status"]
           unread_count?: number
@@ -743,6 +746,50 @@ export type Database = {
           },
         ]
       }
+      notifications: {
+        Row: {
+          conversation_id: string | null
+          created_at: string
+          dedupe_key: string
+          error_message: string | null
+          id: string
+          notification_type: string
+          sent_at: string | null
+          status: string
+          zapi_response_id: string | null
+        }
+        Insert: {
+          conversation_id?: string | null
+          created_at?: string
+          dedupe_key: string
+          error_message?: string | null
+          id?: string
+          notification_type?: string
+          sent_at?: string | null
+          status?: string
+          zapi_response_id?: string | null
+        }
+        Update: {
+          conversation_id?: string | null
+          created_at?: string
+          dedupe_key?: string
+          error_message?: string | null
+          id?: string
+          notification_type?: string
+          sent_at?: string | null
+          status?: string
+          zapi_response_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notifications_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       participants: {
         Row: {
           confidence: number
@@ -876,6 +923,50 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      zapi_settings: {
+        Row: {
+          created_at: string
+          enable_group_notifications: boolean
+          id: string
+          open_tickets_group_id: string | null
+          team_id: string | null
+          updated_at: string
+          zapi_instance_id: string | null
+          zapi_security_token: string | null
+          zapi_token: string | null
+        }
+        Insert: {
+          created_at?: string
+          enable_group_notifications?: boolean
+          id?: string
+          open_tickets_group_id?: string | null
+          team_id?: string | null
+          updated_at?: string
+          zapi_instance_id?: string | null
+          zapi_security_token?: string | null
+          zapi_token?: string | null
+        }
+        Update: {
+          created_at?: string
+          enable_group_notifications?: boolean
+          id?: string
+          open_tickets_group_id?: string | null
+          team_id?: string | null
+          updated_at?: string
+          zapi_instance_id?: string | null
+          zapi_security_token?: string | null
+          zapi_token?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "zapi_settings_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: true
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {

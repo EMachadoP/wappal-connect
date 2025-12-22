@@ -1,6 +1,7 @@
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { UserCheck, Building2, AlertCircle } from 'lucide-react';
+import { NotificationStatus } from './NotificationStatus';
 
 interface Entity {
   id: string;
@@ -22,6 +23,8 @@ interface ParticipantHeaderProps {
   whatsappDisplayName?: string | null;
   participant?: Participant | null;
   displayNameType?: string;
+  conversationId?: string;
+  protocol?: string | null;
   onIdentify: () => void;
 }
 
@@ -30,6 +33,8 @@ export function ParticipantHeader({
   whatsappDisplayName,
   participant,
   displayNameType,
+  conversationId,
+  protocol,
   onIdentify,
 }: ParticipantHeaderProps) {
   const isLowConfidence = !participant || participant.confidence < 0.7;
@@ -39,7 +44,7 @@ export function ParticipantHeader({
     <div className="bg-muted/50 border-b border-border px-4 py-2">
       <div className="flex items-center justify-between gap-4">
         <div className="flex flex-col gap-1 min-w-0 flex-1">
-          {/* Row 1: Phone + WhatsApp name */}
+          {/* Row 1: Phone + WhatsApp name + Protocol */}
           <div className="flex items-center gap-2 flex-wrap">
             {phone && (
               <span className="text-sm font-medium text-foreground">
@@ -56,38 +61,50 @@ export function ParticipantHeader({
                 {whatsappDisplayName}
               </span>
             )}
+            {protocol && (
+              <Badge variant="outline" className="text-xs font-mono">
+                🎫 {protocol}
+              </Badge>
+            )}
           </div>
 
-          {/* Row 2: Participant info */}
-          {participant ? (
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm font-semibold text-foreground">
-                {participant.name}
-              </span>
-              {participant.role_type && (
-                <Badge variant="secondary" className="text-xs">
-                  {participant.role_type}
+          {/* Row 2: Participant info + Notification status */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {participant ? (
+              <>
+                <span className="text-sm font-semibold text-foreground">
+                  {participant.name}
+                </span>
+                {participant.role_type && (
+                  <Badge variant="secondary" className="text-xs">
+                    {participant.role_type}
+                  </Badge>
+                )}
+                {participant.entity && (
+                  <Badge variant="outline" className="text-xs gap-1">
+                    <Building2 className="w-3 h-3" />
+                    {participant.entity.name}
+                  </Badge>
+                )}
+                <Badge 
+                  variant={participant.confidence >= 0.8 ? 'default' : participant.confidence >= 0.5 ? 'secondary' : 'destructive'}
+                  className="text-xs"
+                >
+                  {Math.round(participant.confidence * 100)}%
                 </Badge>
-              )}
-              {participant.entity && (
-                <Badge variant="outline" className="text-xs gap-1">
-                  <Building2 className="w-3 h-3" />
-                  {participant.entity.name}
-                </Badge>
-              )}
-              <Badge 
-                variant={participant.confidence >= 0.8 ? 'default' : participant.confidence >= 0.5 ? 'secondary' : 'destructive'}
-                className="text-xs"
-              >
-                {Math.round(participant.confidence * 100)}%
-              </Badge>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 text-muted-foreground text-sm">
-              <AlertCircle className="w-4 h-4 text-amber-500" />
-              <span>Remetente não identificado</span>
-            </div>
-          )}
+              </>
+            ) : (
+              <div className="flex items-center gap-2 text-muted-foreground text-sm">
+                <AlertCircle className="w-4 h-4 text-amber-500" />
+                <span>Remetente não identificado</span>
+              </div>
+            )}
+            
+            {/* Notification status */}
+            {conversationId && (
+              <NotificationStatus conversationId={conversationId} />
+            )}
+          </div>
         </div>
 
         <Button 
