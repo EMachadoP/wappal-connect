@@ -52,12 +52,10 @@ export function ChatArea({
   loading 
 }: ChatAreaProps) {
   const [message, setMessage] = useState('');
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    bottomRef.current?.scrollIntoView({ block: 'end' });
   }, [messages]);
 
   const handleSend = () => {
@@ -133,7 +131,7 @@ export function ChatArea({
       </div>
 
       {/* Messages */}
-      <ScrollArea ref={scrollRef} className="flex-1 p-4">
+      <ScrollArea className="flex-1 p-4">
         {loading ? (
           <div className="flex items-center justify-center h-full">
             <p className="text-muted-foreground">Carregando mensagens...</p>
@@ -143,19 +141,22 @@ export function ChatArea({
             <p className="text-muted-foreground">Nenhuma mensagem ainda</p>
           </div>
         ) : (
-          messages.map((msg) => (
-            <ChatMessage
-              key={msg.id}
-              content={msg.content}
-              messageType={msg.message_type}
-              mediaUrl={msg.media_url}
-              sentAt={msg.sent_at}
-              isOutgoing={msg.sender_type === 'agent'}
-              deliveredAt={msg.delivered_at}
-              readAt={msg.read_at}
-              senderName={msg.sender_type === 'agent' ? getSenderName(msg.sender_id) : null}
-            />
-          ))
+          <div className="min-h-full">
+            {messages.map((msg) => (
+              <ChatMessage
+                key={msg.id}
+                content={msg.content}
+                messageType={msg.message_type}
+                mediaUrl={msg.media_url}
+                sentAt={msg.sent_at}
+                isOutgoing={msg.sender_type === 'agent'}
+                deliveredAt={msg.delivered_at}
+                readAt={msg.read_at}
+                senderName={msg.sender_type === 'agent' ? getSenderName(msg.sender_id) : null}
+              />
+            ))}
+            <div ref={bottomRef} />
+          </div>
         )}
       </ScrollArea>
 
