@@ -16,6 +16,7 @@ interface Conversation {
   last_message_at?: string | null;
   unread_count: number;
   assigned_to?: string | null;
+  status: string;
 }
 
 interface ConversationListProps {
@@ -25,7 +26,7 @@ interface ConversationListProps {
   onSelectConversation: (id: string) => void;
 }
 
-type TabValue = 'mine' | 'unassigned' | 'all';
+type TabValue = 'mine' | 'unassigned' | 'all' | 'resolved';
 
 export function ConversationList({
   conversations,
@@ -41,15 +42,24 @@ export function ConversationList({
     
     switch (activeTab) {
       case 'mine':
-        return matchesSearch && conv.assigned_to === userId;
+        return matchesSearch && conv.assigned_to === userId && conv.status === 'open';
       case 'unassigned':
-        return matchesSearch && !conv.assigned_to;
+        return matchesSearch && !conv.assigned_to && conv.status === 'open';
       case 'all':
-        return matchesSearch;
+        return matchesSearch && conv.status === 'open';
+      case 'resolved':
+        return matchesSearch && conv.status === 'resolved';
       default:
         return matchesSearch;
     }
   });
+
+  const countByTab = {
+    mine: conversations.filter(c => c.assigned_to === userId && c.status === 'open').length,
+    unassigned: conversations.filter(c => !c.assigned_to && c.status === 'open').length,
+    all: conversations.filter(c => c.status === 'open').length,
+    resolved: conversations.filter(c => c.status === 'resolved').length,
+  };
 
   return (
     <div className="w-80 border-r border-border flex flex-col bg-card">
@@ -66,24 +76,30 @@ export function ConversationList({
       </div>
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabValue)} className="border-b border-border">
-        <TabsList className="w-full h-auto p-0 bg-transparent">
+        <TabsList className="w-full h-auto p-0 bg-transparent grid grid-cols-4">
           <TabsTrigger
             value="mine"
-            className="flex-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent"
+            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent text-xs px-1"
           >
-            Minha Caixa
+            Minha ({countByTab.mine})
           </TabsTrigger>
           <TabsTrigger
             value="unassigned"
-            className="flex-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent"
+            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent text-xs px-1"
           >
-            Não Atribuídas
+            Novas ({countByTab.unassigned})
           </TabsTrigger>
           <TabsTrigger
             value="all"
-            className="flex-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent"
+            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent text-xs px-1"
           >
-            Todas
+            Todas ({countByTab.all})
+          </TabsTrigger>
+          <TabsTrigger
+            value="resolved"
+            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent text-xs px-1"
+          >
+            Resolvidas
           </TabsTrigger>
         </TabsList>
       </Tabs>

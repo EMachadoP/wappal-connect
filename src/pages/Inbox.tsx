@@ -22,6 +22,7 @@ interface Conversation {
   last_message_at: string | null;
   unread_count: number;
   assigned_to: string | null;
+  status: string;
 }
 
 interface Message {
@@ -31,8 +32,14 @@ interface Message {
   media_url: string | null;
   sent_at: string;
   sender_type: string;
+  sender_id: string | null;
   delivered_at: string | null;
   read_at: string | null;
+}
+
+interface Profile {
+  id: string;
+  name: string;
 }
 
 export default function InboxPage() {
@@ -42,8 +49,23 @@ export default function InboxPage() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeContact, setActiveContact] = useState<Contact | null>(null);
+  const [activeConversationStatus, setActiveConversationStatus] = useState<string>('open');
+  const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loadingConversations, setLoadingConversations] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
+
+  // Fetch profiles for sender names
+  useEffect(() => {
+    const fetchProfiles = async () => {
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, name');
+      if (data) {
+        setProfiles(data);
+      }
+    };
+    fetchProfiles();
+  }, []);
 
   // Fetch conversations
   useEffect(() => {
@@ -57,6 +79,7 @@ export default function InboxPage() {
           unread_count,
           last_message_at,
           assigned_to,
+          status,
           contacts (
             name,
             profile_picture_url,
@@ -81,6 +104,7 @@ export default function InboxPage() {
           last_message_at: conv.last_message_at,
           unread_count: conv.unread_count,
           assigned_to: conv.assigned_to,
+          status: conv.status,
         }));
         setConversations(formatted);
       }
@@ -133,10 +157,19 @@ export default function InboxPage() {
         setMessages(data);
       }
 
-      // Get contact info
+      // Get contact info and status
       const conv = conversations.find((c) => c.id === activeConversationId);
       if (conv) {
         setActiveContact(conv.contact);
+        setActiveConversationStatus(conv.status);
+      }
+
+      // Mark as read if unread
+      if (conv && conv.unread_count > 0) {
+        await supabase
+          .from('conversations')
+          .update({ unread_count: 0 })
+          .eq('id', activeConversationId);
       }
 
       setLoadingMessages(false);
@@ -186,6 +219,57 @@ export default function InboxPage() {
     }
   };
 
+  const handleResolveConversation = async () => {
+    if (!activeConversationId) return;
+
+    const { error } = await supabase
+      .from('conversations')
+      .update({ status: 'resolved' })
+      .eq('id', activeConversationId);
+
+    if (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao resolver conversa',
+        description: error.message,
+      });
+    } else {
+      toast({
+        title: 'Conversa resolvida',
+        description: 'A conversa foi marcada como resolvida.',
+      });
+      setActiveConversationStatus('resolved');
+      // Clear selection to go back to list
+      setActiveConversationId(null);
+    }
+  };
+
+  const handleReopenConversation = async () => {
+    if (!activeConversationId || !user) return;
+
+    const { error } = await supabase
+      .from('conversations')
+      .update({ 
+        status: 'open',
+        assigned_to: user.id, // Reassign to current user
+      })
+      .eq('id', activeConversationId);
+
+    if (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao reabrir conversa',
+        description: error.message,
+      });
+    } else {
+      toast({
+        title: 'Conversa reaberta',
+        description: 'A conversa foi reaberta e atribuída a você.',
+      });
+      setActiveConversationStatus('open');
+    }
+  };
+
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -210,7 +294,11 @@ export default function InboxPage() {
         <ChatArea
           contact={activeContact}
           messages={messages}
+          profiles={profiles}
+          conversationStatus={activeConversationStatus}
           onSendMessage={handleSendMessage}
+          onResolveConversation={handleResolveConversation}
+          onReopenConversation={handleReopenConversation}
           loading={loadingMessages}
         />
       </div>

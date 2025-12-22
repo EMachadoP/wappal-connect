@@ -1,5 +1,5 @@
 import { format } from 'date-fns';
-import { Check, CheckCheck, Image, Video, Mic, FileText } from 'lucide-react';
+import { Check, CheckCheck, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface ChatMessageProps {
@@ -10,6 +10,7 @@ interface ChatMessageProps {
   isOutgoing: boolean;
   deliveredAt?: string | null;
   readAt?: string | null;
+  senderName?: string | null;
 }
 
 export function ChatMessage({
@@ -20,6 +21,7 @@ export function ChatMessage({
   isOutgoing,
   deliveredAt,
   readAt,
+  senderName,
 }: ChatMessageProps) {
   const time = format(new Date(sentAt), 'HH:mm');
 
@@ -90,6 +92,13 @@ export function ChatMessage({
             : 'bg-chat-incoming text-chat-incoming-foreground rounded-bl-none'
         )}
       >
+        {/* Nome do operador para mensagens enviadas */}
+        {isOutgoing && senderName && (
+          <p className="text-xs font-medium text-primary-foreground/80 mb-1">
+            {senderName}
+          </p>
+        )}
+        
         {messageType !== 'text' && renderMedia()}
         
         {content && (
