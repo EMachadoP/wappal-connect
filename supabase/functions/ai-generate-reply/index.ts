@@ -118,6 +118,7 @@ serve(async (req) => {
 
     if (provider.provider === 'lovable') {
       // Use Lovable AI Gateway
+      console.log('Calling Lovable AI Gateway with enhancedPrompt');
       response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -127,7 +128,7 @@ serve(async (req) => {
         body: JSON.stringify({
           model: provider.model,
           messages: [
-            { role: 'system', content: systemPrompt },
+            { role: 'system', content: enhancedPrompt },
             ...messages,
           ],
           temperature: Number(provider.temperature) || 0.7,
@@ -136,24 +137,38 @@ serve(async (req) => {
       });
     } else if (provider.provider === 'openai') {
       // Direct OpenAI API
+      console.log('Calling OpenAI API with enhancedPrompt');
+      
+      // Check if model is GPT-5 or newer (needs max_completion_tokens instead of max_tokens)
+      const isNewerModel = provider.model.includes('gpt-5') || provider.model.includes('gpt-4.1') || provider.model.includes('o3') || provider.model.includes('o4');
+      
+      const openaiBody: Record<string, any> = {
+        model: provider.model,
+        messages: [
+          { role: 'system', content: enhancedPrompt },
+          ...messages,
+        ],
+      };
+      
+      // Newer models use max_completion_tokens and don't support temperature
+      if (isNewerModel) {
+        openaiBody.max_completion_tokens = provider.max_tokens || 1024;
+      } else {
+        openaiBody.temperature = Number(provider.temperature) || 0.7;
+        openaiBody.max_tokens = provider.max_tokens || 1024;
+      }
+      
       response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          model: provider.model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            ...messages,
-          ],
-          temperature: Number(provider.temperature) || 0.7,
-          max_tokens: provider.max_tokens || 1024,
-        }),
+        body: JSON.stringify(openaiBody),
       });
     } else if (provider.provider === 'gemini') {
       // Direct Gemini API
+      console.log('Calling Gemini API with enhancedPrompt');
       const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${provider.model}:generateContent?key=${apiKey}`;
       
       // Convert messages to Gemini format
@@ -168,7 +183,7 @@ serve(async (req) => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemPrompt }] },
+          systemInstruction: { parts: [{ text: enhancedPrompt }] },
           contents: geminiMessages,
           generationConfig: {
             temperature: Number(provider.temperature) || 0.7,

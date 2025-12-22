@@ -141,19 +141,48 @@ const AVAILABLE_MODELS = {
   lovable: [
     { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash (Recomendado)' },
     { value: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-    { value: 'google/gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite (Rápido)' },
+    { value: 'google/gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite (Econômico)' },
     { value: 'openai/gpt-5-mini', label: 'GPT-5 Mini' },
     { value: 'openai/gpt-5', label: 'GPT-5 (Premium)' },
+    { value: 'openai/gpt-5-nano', label: 'GPT-5 Nano (Rápido)' },
   ],
   openai: [
-    { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+    { value: 'gpt-4o-mini', label: 'GPT-4o Mini (Recomendado)' },
     { value: 'gpt-4o', label: 'GPT-4o' },
-    { value: 'gpt-4.1-mini-2025-04-14', label: 'GPT-4.1 Mini' },
+    { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
+    { value: 'gpt-5-2025-08-07', label: 'GPT-5 (Mais Recente)' },
+    { value: 'gpt-5-mini-2025-08-07', label: 'GPT-5 Mini' },
   ],
   gemini: [
+    { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (Recomendado)' },
+    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
     { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
     { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
   ],
+};
+
+const PROVIDER_INFO = {
+  lovable: {
+    name: 'Lovable AI',
+    description: 'Gateway integrado sem configuração extra',
+    pros: ['Sem custo adicional', 'Já configurado', 'Suporte Gemini + GPT'],
+    cons: ['Usa créditos do workspace'],
+    keyRef: 'LOVABLE_API_KEY',
+  },
+  openai: {
+    name: 'OpenAI',
+    description: 'Acesso direto à API OpenAI',
+    pros: ['Modelos mais precisos', 'Controle total'],
+    cons: ['Requer API key paga', 'Custo por uso'],
+    keyRef: 'OPENAI_API_KEY',
+  },
+  gemini: {
+    name: 'Google Gemini',
+    description: 'Acesso direto à API Google Gemini',
+    pros: ['Free tier generoso', 'Alta velocidade'],
+    cons: ['Requer configuração de API key'],
+    keyRef: 'GEMINI_API_KEY',
+  },
 };
 
 export default function AdminAIPage() {
@@ -707,6 +736,40 @@ export default function AdminAIPage() {
 
             {/* PROVIDERS TAB */}
             <TabsContent value="providers" className="space-y-6">
+              {/* Comparison Card */}
+              <Card className="border-primary/20 bg-primary/5">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Info className="w-5 h-5" />
+                    Comparativo de Provedores
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {Object.entries(PROVIDER_INFO).map(([key, info]) => (
+                      <div key={key} className="p-4 rounded-lg border bg-background">
+                        <h4 className="font-semibold mb-1">{info.name}</h4>
+                        <p className="text-xs text-muted-foreground mb-3">{info.description}</p>
+                        <div className="space-y-2 text-xs">
+                          <div>
+                            <span className="text-green-600 font-medium">✓ Vantagens:</span>
+                            <ul className="ml-4 list-disc">
+                              {info.pros.map((p, i) => <li key={i}>{p}</li>)}
+                            </ul>
+                          </div>
+                          <div>
+                            <span className="text-orange-600 font-medium">○ Considerações:</span>
+                            <ul className="ml-4 list-disc">
+                              {info.cons.map((c, i) => <li key={i}>{c}</li>)}
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+
               <Card>
                 <CardHeader>
                   <div className="flex items-center justify-between">
@@ -722,34 +785,55 @@ export default function AdminAIPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
-                    {providers.map(provider => (
-                      <div key={provider.id} className="flex items-center justify-between p-4 border rounded-lg">
-                        <div className="flex items-center gap-4">
-                          <Switch
-                            checked={provider.active}
-                            onCheckedChange={() => handleToggleProviderActive(provider)}
-                          />
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <p className="font-medium capitalize">{provider.provider}</p>
-                              {provider.active && <Badge variant="default">Ativo</Badge>}
+                    {providers.map(provider => {
+                      const providerInfo = PROVIDER_INFO[provider.provider as keyof typeof PROVIDER_INFO];
+                      const expectedKeyRef = providerInfo?.keyRef;
+                      const hasCorrectKeyRef = provider.provider === 'lovable' || (provider.key_ref === expectedKeyRef);
+                      
+                      return (
+                        <div key={provider.id} className="flex items-center justify-between p-4 border rounded-lg">
+                          <div className="flex items-center gap-4">
+                            <Switch
+                              checked={provider.active}
+                              onCheckedChange={() => handleToggleProviderActive(provider)}
+                            />
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <p className="font-medium capitalize">{provider.provider}</p>
+                                {provider.active && <Badge variant="default">Ativo</Badge>}
+                                {provider.provider !== 'lovable' && (
+                                  <TooltipProvider>
+                                    <Tooltip>
+                                      <TooltipTrigger>
+                                        <Badge variant={hasCorrectKeyRef ? "secondary" : "destructive"}>
+                                          {hasCorrectKeyRef ? "Secret OK" : "Secret Incorreto"}
+                                        </Badge>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        <p>Esperado: {expectedKeyRef}</p>
+                                        <p>Atual: {provider.key_ref || 'não definido'}</p>
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  </TooltipProvider>
+                                )}
+                              </div>
+                              <p className="text-sm text-muted-foreground font-mono">{provider.model}</p>
                             </div>
-                            <p className="text-sm text-muted-foreground font-mono">{provider.model}</p>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <div className="text-sm text-muted-foreground">
+                              Temp: {provider.temperature} | Tokens: {provider.max_tokens}
+                            </div>
+                            <Button variant="ghost" size="icon" onClick={() => handleOpenProviderDialog(provider)}>
+                              <Pencil className="w-4 h-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" onClick={() => handleDeleteProvider(provider.id)}>
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
                           </div>
                         </div>
-                        <div className="flex items-center gap-4">
-                          <div className="text-sm text-muted-foreground">
-                            Temp: {provider.temperature} | Tokens: {provider.max_tokens}
-                          </div>
-                          <Button variant="ghost" size="icon" onClick={() => handleOpenProviderDialog(provider)}>
-                            <Pencil className="w-4 h-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" onClick={() => handleDeleteProvider(provider.id)}>
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                     {providers.length === 0 && (
                       <p className="text-muted-foreground text-center py-8">
                         Nenhum provedor configurado. Adicione um para usar a IA.
@@ -1086,13 +1170,24 @@ export default function AdminAIPage() {
               {providerForm.provider !== 'lovable' && (
                 <div className="space-y-2">
                   <Label>Nome do Secret (env var)</Label>
-                  <Input
+                  <Select
                     value={providerForm.key_ref}
-                    onChange={(e) => setProviderForm({ ...providerForm, key_ref: e.target.value })}
-                    placeholder="OPENAI_API_KEY"
-                  />
+                    onValueChange={(v) => setProviderForm({ ...providerForm, key_ref: v })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione o secret" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {providerForm.provider === 'openai' && (
+                        <SelectItem value="OPENAI_API_KEY">OPENAI_API_KEY</SelectItem>
+                      )}
+                      {providerForm.provider === 'gemini' && (
+                        <SelectItem value="GEMINI_API_KEY">GEMINI_API_KEY</SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
                   <p className="text-xs text-muted-foreground">
-                    Nome da variável de ambiente com a chave da API
+                    Variável de ambiente configurada no Supabase Secrets
                   </p>
                 </div>
               )}
