@@ -278,6 +278,8 @@ export function ChatArea({
             {messages.map((msg) => (
               <MemoizedChatMessage
                 key={msg.id}
+                messageId={msg.id}
+                conversationId={conversationId}
                 content={msg.content}
                 messageType={msg.message_type}
                 mediaUrl={msg.media_url}
@@ -286,6 +288,7 @@ export function ChatArea({
                 deliveredAt={msg.delivered_at}
                 readAt={msg.read_at}
                 senderName={msg.sender_type === 'agent' ? getSenderName(msg.sender_id) : null}
+                isAIGenerated={msg.sender_type === 'agent' && !msg.sender_id}
               />
             ))}
             <div ref={bottomRef} className="h-1" />

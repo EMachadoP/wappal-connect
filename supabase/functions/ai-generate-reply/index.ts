@@ -35,7 +35,42 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { messages, systemPrompt, providerId } = await req.json() as GenerateRequest;
+    const { messages, systemPrompt, providerId, ragEnabled = true } = await req.json() as GenerateRequest & { ragEnabled?: boolean };
+
+    // RAG: Search for relevant knowledge snippets
+    let ragContext = '';
+    let usedSnippets: string[] = [];
+    
+    if (ragEnabled && messages.length > 0) {
+      const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
+      if (lastUserMessage) {
+        try {
+          // For now, do a simple text search until embeddings are fully set up
+          const { data: snippets } = await supabase
+            .from('kb_snippets')
+            .select('id, title, problem_text, solution_text, category')
+            .eq('approved', true)
+            .textSearch('problem_text', lastUserMessage.content.split(' ').slice(0, 5).join(' | '), { type: 'websearch' })
+            .limit(3);
+
+          if (snippets && snippets.length > 0) {
+            ragContext = '\n\n### Base de Conhecimento Relevante:\n' +
+              snippets.map(s => `**${s.title}** (${s.category})\nProblema: ${s.problem_text}\nSolução: ${s.solution_text}`).join('\n\n');
+            usedSnippets = snippets.map(s => s.id);
+            console.log('RAG: Found', snippets.length, 'relevant snippets');
+            
+            // Update usage count
+            for (const s of snippets) {
+              await supabase.from('kb_snippets').update({ used_count: supabase.rpc('increment', { x: 1 }) }).eq('id', s.id);
+            }
+          }
+        } catch (ragError) {
+          console.warn('RAG search error:', ragError);
+        }
+      }
+    }
+
+    const enhancedPrompt = systemPrompt + ragContext + '\n\nREGRA: Nunca invente preços. Preços só podem vir do JSON de políticas.';
 
     // Get active provider config
     let providerQuery = supabase

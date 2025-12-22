@@ -26,3 +26,9 @@ verify_jwt = false
 
 [functions.ai-test]
 verify_jwt = true
+
+[functions.kb-generate-embedding]
+verify_jwt = true
+
+[functions.kb-daily-ingest]
+verify_jwt = true
