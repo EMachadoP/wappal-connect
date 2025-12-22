@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -99,20 +99,26 @@ export default function InboxPage() {
           description: error.message,
         });
       } else if (data) {
-        // Group by contact - keep only the most recent conversation per contact
-        const contactMap = new Map<string, any>();
-        
+        // Group by thread key - one chat per phone/LID (WhatsApp-like)
+        const threadMap = new Map<string, any>();
+
         for (const conv of data) {
-          const contactId = conv.contact_id;
-          const existing = contactMap.get(contactId);
-          
+          const contact = (conv as any).contacts;
+          const threadKey = contact?.phone || contact?.lid || conv.contact_id;
+          const existing = threadMap.get(threadKey);
+
           if (!existing) {
-            contactMap.set(contactId, conv);
+            threadMap.set(threadKey, conv);
           } else {
             // Merge: sum unread counts, keep most recent last_message_at
             existing.unread_count += conv.unread_count;
             if (conv.last_message_at && (!existing.last_message_at || conv.last_message_at > existing.last_message_at)) {
               existing.last_message_at = conv.last_message_at;
+              // Keep the most recent conversation id as the visible “thread” id
+              existing.id = conv.id;
+              existing.status = conv.status;
+              existing.assigned_to = conv.assigned_to;
+              existing.contacts = contact;
             }
             // If any conversation is open, keep it open
             if (conv.status === 'open') {
@@ -121,7 +127,7 @@ export default function InboxPage() {
           }
         }
 
-        const formatted: Conversation[] = Array.from(contactMap.values()).map((conv: any) => ({
+        const formatted: Conversation[] = Array.from(threadMap.values()).map((conv: any) => ({
           id: conv.id,
           contact: conv.contacts,
           last_message: null,
@@ -163,7 +169,7 @@ export default function InboxPage() {
     };
   }, [user, toast]);
 
-  // Fetch messages when conversation changes - fetch ALL messages for the contact
+  // Fetch messages when conversation changes (thread-based: same phone/LID)
   useEffect(() => {
     if (!activeConversationId) {
       setMessages([]);
@@ -171,86 +177,139 @@ export default function InboxPage() {
       return;
     }
 
+    let isCancelled = false;
+
     const fetchMessages = async () => {
       setLoadingMessages(true);
 
-      // Get the contact from the active conversation
-      const conv = conversations.find((c) => c.id === activeConversationId);
-      if (!conv) {
-        setLoadingMessages(false);
+      // Load the selected conversation + its contact (do NOT depend on `conversations` state to avoid loops)
+      const { data: selectedConv, error: selectedConvError } = await supabase
+        .from('conversations')
+        .select(
+          `
+          id,
+          status,
+          contact_id,
+          contacts (
+            id,
+            name,
+            profile_picture_url,
+            phone,
+            lid
+          )
+        `
+        )
+        .eq('id', activeConversationId)
+        .maybeSingle();
+
+      if (selectedConvError || !selectedConv) {
+        if (!isCancelled) {
+          toast({
+            variant: 'destructive',
+            title: 'Erro ao carregar conversa',
+            description: selectedConvError?.message || 'Conversa não encontrada',
+          });
+          setLoadingMessages(false);
+        }
         return;
       }
 
-      setActiveContact(conv.contact);
-      setActiveConversationStatus(conv.status);
+      const contact = (selectedConv as any).contacts as Contact;
+      const contactId = selectedConv.contact_id as string;
 
-      // Get ALL conversation IDs for this contact
-      const { data: allConvs } = await supabase
+      if (!isCancelled) {
+        setActiveContact(contact);
+        setActiveConversationStatus(selectedConv.status);
+      }
+
+      // Resolve “thread” contacts (merge duplicates by phone or LID)
+      let threadContactIds: string[] = [contactId];
+      const threadPhone = contact?.phone || null;
+      const threadLid = contact?.lid || null;
+
+      if (threadPhone || threadLid) {
+        let q = supabase.from('contacts').select('id');
+        q = threadPhone ? q.eq('phone', threadPhone) : q.eq('lid', threadLid);
+
+        const { data: threadContacts } = await q;
+        if (threadContacts?.length) {
+          threadContactIds = threadContacts.map((c: any) => c.id);
+        }
+      }
+
+      // Get all conversation ids for this thread
+      const { data: convsForThread } = await supabase
         .from('conversations')
         .select('id')
-        .eq('contact_id', (conv.contact as any).id || conv.contact);
+        .in('contact_id', threadContactIds);
 
-      const conversationIds = allConvs?.map(c => c.id) || [activeConversationId];
+      const conversationIds: string[] = convsForThread?.map((c: any) => c.id) || [activeConversationId];
 
-      // Fetch messages from ALL conversations for this contact
+      // Fetch messages from all conversations for this thread
       const { data, error } = await supabase
         .from('messages')
         .select('*')
         .in('conversation_id', conversationIds)
         .order('sent_at', { ascending: true });
 
-      if (error) {
-        toast({
-          variant: 'destructive',
-          title: 'Erro ao carregar mensagens',
-          description: error.message,
-        });
-      } else if (data) {
-        setMessages(data);
+      if (!isCancelled) {
+        if (error) {
+          toast({
+            variant: 'destructive',
+            title: 'Erro ao carregar mensagens',
+            description: error.message,
+          });
+        } else {
+          setMessages(data || []);
+        }
       }
 
-      // Mark all conversations as read
+      // Mark all conversations in this thread as read
       if (conversationIds.length > 0) {
-        await supabase
-          .from('conversations')
-          .update({ unread_count: 0 })
-          .in('id', conversationIds);
+        await supabase.from('conversations').update({ unread_count: 0 }).in('id', conversationIds);
       }
 
-      setLoadingMessages(false);
+      if (!isCancelled) setLoadingMessages(false);
+
+      // Subscribe after first load, scoped by conversationIds (local closure)
+      const channel = supabase
+        .channel(`messages-thread-${conversationIds.join('-')}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'messages',
+          },
+          (payload) => {
+            const newMessage = payload.new as any as Message;
+            if (!conversationIds.includes((newMessage as any).conversation_id)) return;
+
+            setMessages((prev) => {
+              if (prev.some((m) => m.id === newMessage.id)) return prev;
+              return [...prev, newMessage].sort(
+                (a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime()
+              );
+            });
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
     };
 
-    fetchMessages();
-
-    // Subscribe to new messages for ALL conversations of this contact
-    const conv = conversations.find((c) => c.id === activeConversationId);
-    const contactId = conv?.contact ? (conv.contact as any).id : null;
-    
-    const channel = supabase
-      .channel(`messages-contact-${contactId || activeConversationId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages',
-        },
-        (payload) => {
-          // Check if this message belongs to a conversation of the current contact
-          const newMessage = payload.new as Message;
-          setMessages((prev) => {
-            // Avoid duplicates
-            if (prev.some(m => m.id === newMessage.id)) return prev;
-            return [...prev, newMessage];
-          });
-        }
-      )
-      .subscribe();
+    let unsubscribe: void | (() => void);
+    fetchMessages().then((cleanup) => {
+      unsubscribe = cleanup;
+    });
 
     return () => {
-      supabase.removeChannel(channel);
+      isCancelled = true;
+      if (typeof unsubscribe === 'function') unsubscribe();
     };
-  }, [activeConversationId, conversations, toast]);
+  }, [activeConversationId, toast]);
 
   const handleSendMessage = async (content: string) => {
     if (!activeConversationId || !user) return;
