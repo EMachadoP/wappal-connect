@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-internal-secret',
 };
 
 interface DaySchedule {
@@ -88,6 +88,23 @@ serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    
+    // Validate internal call - this function should only be called by other edge functions
+    const internalSecret = req.headers.get('X-Internal-Secret') || req.headers.get('x-internal-secret');
+    const authHeader = req.headers.get('Authorization');
+    
+    // Accept calls with service role key (internal) or valid internal secret
+    const isValidInternalCall = internalSecret === supabaseServiceKey || 
+      (authHeader && authHeader.replace('Bearer ', '') === supabaseServiceKey);
+    
+    if (!isValidInternalCall) {
+      console.log('Unauthorized: ai-maybe-reply must be called internally');
+      return new Response(
+        JSON.stringify({ success: false, reason: 'unauthorized' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     const { conversation_id } = await req.json();
@@ -501,7 +518,7 @@ serve(async (req) => {
     console.error('AI maybe reply error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return new Response(
-      JSON.stringify({ success: false, error: errorMessage }),
+      JSON.stringify({ error: errorMessage }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }

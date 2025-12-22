@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-zapi-token',
 };
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -16,6 +16,24 @@ serve(async (req) => {
   }
 
   try {
+    // Validate webhook authentication via ZAPI token header
+    const zapiToken = Deno.env.get('ZAPI_TOKEN');
+    const requestToken = req.headers.get('x-zapi-token') || req.headers.get('X-ZAPI-Token');
+    
+    // If ZAPI_TOKEN is configured, validate the incoming request
+    if (zapiToken && zapiToken.length > 0) {
+      if (!requestToken || requestToken !== zapiToken) {
+        console.log('Invalid or missing ZAPI webhook token');
+        return new Response(
+          JSON.stringify({ error: 'Unauthorized webhook request' }),
+          { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      console.log('ZAPI webhook token validated');
+    } else {
+      console.log('Warning: ZAPI_TOKEN not configured, webhook validation disabled');
+    }
+
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const payload = await req.json();
     
@@ -260,7 +278,7 @@ serve(async (req) => {
 
     console.log('Message saved:', message.id);
 
-    // Trigger AI auto-reply (non-blocking)
+    // Trigger AI auto-reply (non-blocking, internal call with service key)
     try {
       const aiUrl = `${supabaseUrl}/functions/v1/ai-maybe-reply`;
       fetch(aiUrl, {
@@ -268,6 +286,7 @@ serve(async (req) => {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${supabaseServiceKey}`,
+          'X-Internal-Secret': supabaseServiceKey,
         },
         body: JSON.stringify({ conversation_id: conversation.id }),
       }).then(res => res.json()).then(aiResult => {
