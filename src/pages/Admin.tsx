@@ -63,11 +63,18 @@ export default function AdminPage() {
   const [labelName, setLabelName] = useState('');
   const [labelColor, setLabelColor] = useState('#3B82F6');
 
-  // Form states - Agent
+  // Form states - Agent (edit)
   const [agentName, setAgentName] = useState('');
   const [agentEmail, setAgentEmail] = useState('');
   const [agentTeamId, setAgentTeamId] = useState<string>('none');
   const [agentIsActive, setAgentIsActive] = useState(true);
+
+  // Form states - New Agent
+  const [newAgentEmail, setNewAgentEmail] = useState('');
+  const [newAgentName, setNewAgentName] = useState('');
+  const [newAgentPassword, setNewAgentPassword] = useState('');
+  const [newAgentTeamId, setNewAgentTeamId] = useState<string>('none');
+  const [creatingAgent, setCreatingAgent] = useState(false);
 
   const fetchData = async () => {
     // Fetch agents
@@ -277,6 +284,68 @@ export default function AdminPage() {
     }
   };
 
+  const handleOpenNewAgentDialog = () => {
+    setNewAgentEmail('');
+    setNewAgentName('');
+    setNewAgentPassword('');
+    setNewAgentTeamId('none');
+    setDialogOpen('new-agent');
+  };
+
+  const handleCreateAgent = async () => {
+    if (!newAgentEmail.trim() || !newAgentName.trim() || !newAgentPassword.trim()) {
+      toast({ variant: 'destructive', title: 'Erro', description: 'Preencha todos os campos obrigatórios' });
+      return;
+    }
+
+    if (newAgentPassword.length < 6) {
+      toast({ variant: 'destructive', title: 'Erro', description: 'A senha deve ter pelo menos 6 caracteres' });
+      return;
+    }
+
+    setCreatingAgent(true);
+    try {
+      // Create user with Supabase Auth
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: newAgentEmail.trim(),
+        password: newAgentPassword,
+        options: {
+          data: {
+            name: newAgentName.trim(),
+          },
+        },
+      });
+
+      if (authError) {
+        toast({ variant: 'destructive', title: 'Erro ao criar usuário', description: authError.message });
+        return;
+      }
+
+      if (authData.user) {
+        // Update profile with team if selected
+        if (newAgentTeamId !== 'none') {
+          await supabase
+            .from('profiles')
+            .update({ team_id: newAgentTeamId })
+            .eq('id', authData.user.id);
+        }
+
+        // Add agent role
+        await supabase
+          .from('user_roles')
+          .insert({ user_id: authData.user.id, role: 'agent' });
+
+        toast({ title: 'Agente criado com sucesso!', description: 'O novo agente pode fazer login com o email e senha informados.' });
+        setDialogOpen(null);
+        fetchData();
+      }
+    } catch (err) {
+      toast({ variant: 'destructive', title: 'Erro', description: 'Falha ao criar agente' });
+    } finally {
+      setCreatingAgent(false);
+    }
+  };
+
   const handleToggleAgentRole = async (agentId: string, role: 'admin' | 'agent', hasRole: boolean) => {
     if (hasRole) {
       // Remove role
@@ -437,6 +506,12 @@ export default function AdminPage() {
 
             {/* AGENTS TAB */}
             <TabsContent value="agents" className="mt-6">
+              <div className="flex justify-end mb-4">
+                <Button className="gap-2" onClick={handleOpenNewAgentDialog}>
+                  <Plus className="w-4 h-4" />
+                  Adicionar Agente
+                </Button>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {agents.map((agent) => (
                   <Card key={agent.id}>
@@ -781,6 +856,73 @@ export default function AdminPage() {
                 </Button>
                 <Button onClick={handleSaveAgent}>
                   Salvar
+                </Button>
+              </DialogFooter>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* NEW AGENT DIALOG */}
+        <Dialog open={dialogOpen === 'new-agent'} onOpenChange={(open) => !open && setDialogOpen(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Novo Agente</DialogTitle>
+              <DialogDescription>
+                Crie uma nova conta de agente. O agente poderá fazer login com as credenciais informadas.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 pt-4">
+              <div className="space-y-2">
+                <Label htmlFor="new-agent-name">Nome *</Label>
+                <Input
+                  id="new-agent-name"
+                  value={newAgentName}
+                  onChange={(e) => setNewAgentName(e.target.value)}
+                  placeholder="Nome completo do agente"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="new-agent-email">Email *</Label>
+                <Input
+                  id="new-agent-email"
+                  type="email"
+                  value={newAgentEmail}
+                  onChange={(e) => setNewAgentEmail(e.target.value)}
+                  placeholder="email@exemplo.com"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="new-agent-password">Senha *</Label>
+                <Input
+                  id="new-agent-password"
+                  type="password"
+                  value={newAgentPassword}
+                  onChange={(e) => setNewAgentPassword(e.target.value)}
+                  placeholder="Mínimo 6 caracteres"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="new-agent-team">Equipe</Label>
+                <Select value={newAgentTeamId} onValueChange={setNewAgentTeamId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecione uma equipe" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Sem equipe</SelectItem>
+                    {teams.map((team) => (
+                      <SelectItem key={team.id} value={team.id}>
+                        {team.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setDialogOpen(null)} disabled={creatingAgent}>
+                  Cancelar
+                </Button>
+                <Button onClick={handleCreateAgent} disabled={creatingAgent}>
+                  {creatingAgent ? 'Criando...' : 'Criar Agente'}
                 </Button>
               </DialogFooter>
             </div>
