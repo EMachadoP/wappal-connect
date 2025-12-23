@@ -80,13 +80,10 @@ serve(async (req) => {
       chatName,
     } = payload;
 
-    // Skip messages sent by us
-    if (fromMe) {
-      console.log('Skipping own message');
-      return new Response(JSON.stringify({ success: true, skipped: 'from_me' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+    // For fromMe messages, we'll still save them so they appear in the inbox
+    // This handles messages sent from other AI/systems or from the phone directly
+    const isFromMe = Boolean(fromMe);
+    console.log('Processing message:', { fromMe: isFromMe, type, messageId });
 
     // Determine if group and extract identifiers
     const isGroupChat = Boolean(isGroup);
@@ -237,39 +234,60 @@ serve(async (req) => {
       conversation = newConversation;
       console.log('Created new conversation:', conversation.id);
     } else {
-      // Update existing conversation - reopen if resolved, increment unread
+      // Update existing conversation
+      // For messages from contact: reopen if resolved, increment unread
+      // For messages from us (fromMe): just update last_message_at
+      const updateData: Record<string, unknown> = {
+        last_message_at: new Date().toISOString(),
+      };
+      
+      if (!isFromMe) {
+        updateData.status = 'open'; // Reopen if was resolved
+        updateData.unread_count = conversation.unread_count + 1;
+        updateData.marked_unread = false;
+      }
+      
       await supabase
         .from('conversations')
-        .update({
-          status: 'open', // Reopen if was resolved
-          unread_count: conversation.unread_count + 1,
-          last_message_at: new Date().toISOString(),
-          marked_unread: false,
-        })
+        .update(updateData)
         .eq('id', conversation.id);
-      console.log('Using existing conversation:', conversation.id);
+      console.log('Using existing conversation:', conversation.id, { isFromMe });
     }
 
     // Determine message type and content
+    // Z-API can send text in different formats: text.message, text (string), or message
     let messageType: 'text' | 'image' | 'video' | 'audio' | 'document' = 'text';
-    let content = text?.message || null;
+    let content: string | null = null;
     let mediaUrl = null;
+
+    // Extract text content - handle multiple Z-API formats
+    if (typeof text === 'string') {
+      content = text;
+    } else if (text?.message) {
+      content = text.message;
+    } else if (payload.message) {
+      content = typeof payload.message === 'string' ? payload.message : payload.message?.text || null;
+    } else if (payload.body) {
+      content = payload.body;
+    }
+    
+    console.log('Text extraction:', { text, payloadMessage: payload.message, payloadBody: payload.body, extractedContent: content });
 
     if (image) {
       messageType = 'image';
       mediaUrl = image.imageUrl || image.url;
-      content = image.caption || null;
+      content = image.caption || content || null;
     } else if (video) {
       messageType = 'video';
       mediaUrl = video.videoUrl || video.url;
-      content = video.caption || null;
+      content = video.caption || content || null;
     } else if (audio) {
       messageType = 'audio';
       mediaUrl = audio.audioUrl || audio.url;
     } else if (document) {
       messageType = 'document';
       mediaUrl = document.documentUrl || document.url;
-      content = document.fileName || null;
+      content = document.fileName || content || null;
     }
 
     // For group messages, prepend participant name to content
@@ -279,12 +297,12 @@ serve(async (req) => {
       displayContent = content ? `[${participant}]: ${content}` : `[${participant}]`;
     }
 
-    // Save message
+    // Save message - use 'agent' sender_type for fromMe messages
     const { data: message, error: msgError } = await supabase
       .from('messages')
       .insert({
         conversation_id: conversation.id,
-        sender_type: 'contact',
+        sender_type: isFromMe ? 'agent' : 'contact',
         message_type: messageType,
         content: displayContent,
         media_url: mediaUrl,
@@ -299,27 +317,29 @@ serve(async (req) => {
       throw msgError;
     }
 
-    console.log('Message saved:', message.id);
+    console.log('Message saved:', message.id, { isFromMe, sender_type: isFromMe ? 'agent' : 'contact' });
 
-    // Trigger AI auto-reply (non-blocking, internal call with service key)
-    try {
-      const aiUrl = `${supabaseUrl}/functions/v1/ai-maybe-reply`;
-      fetch(aiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${supabaseServiceKey}`,
-          'X-Internal-Secret': supabaseServiceKey,
-        },
-        body: JSON.stringify({ conversation_id: conversation.id }),
-      }).then(res => res.json()).then(aiResult => {
-        console.log('AI maybe-reply result:', aiResult);
-      }).catch(aiErr => {
-        console.error('AI maybe-reply error:', aiErr);
-      });
-    } catch (aiError) {
-      console.error('Failed to trigger AI:', aiError);
-      // Don't fail the webhook if AI fails
+    // Only trigger AI auto-reply for messages from contacts (not fromMe)
+    if (!isFromMe) {
+      try {
+        const aiUrl = `${supabaseUrl}/functions/v1/ai-maybe-reply`;
+        fetch(aiUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${supabaseServiceKey}`,
+            'X-Internal-Secret': supabaseServiceKey,
+          },
+          body: JSON.stringify({ conversation_id: conversation.id }),
+        }).then(res => res.json()).then(aiResult => {
+          console.log('AI maybe-reply result:', aiResult);
+        }).catch(aiErr => {
+          console.error('AI maybe-reply error:', aiErr);
+        });
+      } catch (aiError) {
+        console.error('Failed to trigger AI:', aiError);
+        // Don't fail the webhook if AI fails
+      }
     }
 
     return new Response(JSON.stringify({ 

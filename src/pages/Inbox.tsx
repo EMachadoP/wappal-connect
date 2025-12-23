@@ -179,18 +179,46 @@ export default function InboxPage() {
           }
         }
 
-        const formatted: Conversation[] = Array.from(threadMap.values()).map((conv: any) => ({
-          id: conv.id,
-          contact: conv.contacts,
-          last_message: null,
-          last_message_type: undefined,
-          last_message_at: conv.last_message_at,
-          unread_count: conv.unread_count,
-          assigned_to: conv.assigned_to,
-          status: conv.status,
-          priority: conv.priority || 'normal',
-          marked_unread: conv.marked_unread || false,
-        }));
+        // Fetch last message for each conversation
+        const conversationIds = Array.from(threadMap.values()).map((c: any) => c.id);
+        const lastMessagesMap = new Map<string, { content: string | null; message_type: string }>();
+        
+        if (conversationIds.length > 0) {
+          // Get last message for each conversation
+          const { data: messagesData } = await supabase
+            .from('messages')
+            .select('conversation_id, content, message_type, sent_at')
+            .in('conversation_id', conversationIds)
+            .order('sent_at', { ascending: false });
+          
+          if (messagesData) {
+            // Group by conversation_id and take the first (most recent)
+            for (const msg of messagesData) {
+              if (!lastMessagesMap.has(msg.conversation_id)) {
+                lastMessagesMap.set(msg.conversation_id, {
+                  content: msg.content,
+                  message_type: msg.message_type,
+                });
+              }
+            }
+          }
+        }
+
+        const formatted: Conversation[] = Array.from(threadMap.values()).map((conv: any) => {
+          const lastMsg = lastMessagesMap.get(conv.id);
+          return {
+            id: conv.id,
+            contact: conv.contacts,
+            last_message: lastMsg?.content || null,
+            last_message_type: lastMsg?.message_type,
+            last_message_at: conv.last_message_at,
+            unread_count: conv.unread_count,
+            assigned_to: conv.assigned_to,
+            status: conv.status,
+            priority: conv.priority || 'normal',
+            marked_unread: conv.marked_unread || false,
+          };
+        });
         
         formatted.sort((a, b) => {
           if (!a.last_message_at) return 1;
