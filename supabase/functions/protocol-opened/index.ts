@@ -264,13 +264,17 @@ ${priorityEmoji}
     // ========== 2. Send WhatsApp message to client ==========
     if (conversation_id) {
       try {
-        const clientMessage = `📋 *Protocolo Aberto*
+        // Calcular prazo humanizado
+        const dueDateHumanized = isCritical ? 'Um dia útil' : 'Dois dias úteis';
+        
+        const clientMessage = `📋 *Protocolo aberto*
 
-🔖 *Número:* ${protocol_code}
+🔖 *Número:* G7-${protocol_code}
+📍 *Condomínio:* ${formattedCondominiumName}
 📂 *Categoria:* ${formattedCategory}
-⏰ *Prazo de resposta:* ${dueDate}
+⏰ *Prazo para solução:* ${dueDateHumanized}
 
-Acompanharemos seu chamado e retornaremos em breve.`;
+O protocolo foi aberto em nosso sistema e o técnico recebe automaticamente sua demanda.`;
 
         const sendResult = await supabase.functions.invoke('zapi-send-message', {
           body: {
