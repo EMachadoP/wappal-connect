@@ -307,26 +307,29 @@ serve(async (req) => {
     const antiSpamSeconds = throttling.anti_spam_seconds || settings.anti_spam_seconds;
     const maxMessagesPerHour = throttling.max_messages_per_hour || settings.max_messages_per_hour;
 
-    // Get last customer message time
-    const { data: lastCustomerMsg } = await supabase
-      .from('messages')
-      .select('sent_at')
-      .eq('conversation_id', conversation_id)
-      .eq('sender_type', 'contact')
-      .order('sent_at', { ascending: false })
-      .limit(1)
-      .single();
+    // Anti-spam: avoid multiple AI auto-replies in a short window
+    // NOTE: We check the last AI log (not the last customer message), otherwise an immediate trigger
+    // right after saving the customer message would always be blocked.
+    if (antiSpamSeconds && antiSpamSeconds > 0) {
+      const { data: lastAiLog } = await supabase
+        .from('ai_logs')
+        .select('created_at')
+        .eq('conversation_id', conversation_id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
 
-    if (lastCustomerMsg) {
-      const msgTime = new Date(lastCustomerMsg.sent_at).getTime();
-      const now = Date.now();
-      
-      if (now - msgTime < antiSpamSeconds * 1000) {
-        console.log('Anti-spam: message too recent');
-        return new Response(
-          JSON.stringify({ success: false, reason: 'anti_spam' }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+      if (lastAiLog?.created_at) {
+        const lastAiTime = new Date(lastAiLog.created_at).getTime();
+        const now = Date.now();
+
+        if (now - lastAiTime < antiSpamSeconds * 1000) {
+          console.log('Anti-spam: AI recently replied');
+          return new Response(
+            JSON.stringify({ success: false, reason: 'anti_spam' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
       }
     }
 
@@ -528,9 +531,9 @@ Após perguntar, isso será registrado e não precisará perguntar novamente.
     // Send the AI response via WhatsApp
     const { error: sendError } = await supabase.functions.invoke('zapi-send-message', {
       body: {
-        conversationId: conversation_id,
-        message: aiResponse.text,
-        agentName: 'IA',
+        conversation_id: conversation_id,
+        content: aiResponse.text,
+        message_type: 'text',
       },
     });
 
