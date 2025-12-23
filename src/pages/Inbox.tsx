@@ -413,24 +413,28 @@ export default function InboxPage() {
   const handleSendMessage = async (content: string) => {
     if (!activeConversationId || !user) return;
 
-    // Pause AI when human sends message (human takes control until manually returned)
+    // Pause AI when human sends message (auto-return after 30 minutes)
     if (activeAiMode === 'AUTO') {
+      const autoReturnTime = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+      
       await supabase
         .from('conversations')
         .update({
           ai_mode: 'OFF',
           human_control: true,
+          ai_paused_until: autoReturnTime,
         })
         .eq('id', activeConversationId);
 
       await supabase.from('ai_events').insert({
         conversation_id: activeConversationId,
         event_type: 'human_takeover',
-        message: '👤 Atendimento assumido por operador humano.',
+        message: '👤 Atendimento assumido por operador humano (IA retorna automaticamente em 30min).',
       });
 
       setActiveAiMode('OFF');
       setActiveHumanControl(true);
+      setActiveAiPausedUntil(autoReturnTime);
     }
 
     const requestPayload = {

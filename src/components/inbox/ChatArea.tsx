@@ -10,9 +10,11 @@ import { ParticipantHeader } from './ParticipantHeader';
 import { IdentifyParticipantModal } from './IdentifyParticipantModal';
 import { AIControlBar } from './AIControlBar';
 import { HumanActionBar } from './HumanActionBar';
+import { GenerateProtocolModal } from './GenerateProtocolModal';
 import { CondominiumChips } from './CondominiumSelector';
 import { useParticipantInfo } from '@/hooks/useParticipantInfo';
 import { useContactCondominiums } from '@/hooks/useContactCondominiums';
+import { toast } from 'sonner';
 interface Message {
   id: string;
   content?: string | null;
@@ -127,6 +129,7 @@ export function ChatArea({
 }: ChatAreaProps) {
   const [message, setMessage] = useState('');
   const [identifyModalOpen, setIdentifyModalOpen] = useState(false);
+  const [protocolModalOpen, setProtocolModalOpen] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -367,6 +370,7 @@ export function ChatArea({
           humanControl={humanControl}
           aiMode={aiMode}
           onResolveConversation={onResolveConversation}
+          onGenerateProtocol={() => setProtocolModalOpen(true)}
           onAiModeChange={onAiModeChange}
         />
       )}
@@ -415,6 +419,19 @@ export function ChatArea({
           conversationId={conversationId}
           existingParticipant={participant}
           onSaved={refetchParticipant}
+        />
+      )}
+
+      {/* Generate Protocol Modal */}
+      {conversationId && (
+        <GenerateProtocolModal
+          open={protocolModalOpen}
+          onOpenChange={setProtocolModalOpen}
+          conversationId={conversationId}
+          contactId={contact?.id}
+          condominiums={condominiums}
+          activeCondominiumId={activeCondominiumId}
+          onProtocolCreated={(code) => toast.success(`Protocolo ${code} criado`)}
         />
       )}
     </div>
