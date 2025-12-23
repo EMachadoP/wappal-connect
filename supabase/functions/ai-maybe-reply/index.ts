@@ -802,11 +802,57 @@ Após perguntar, isso será registrado e não precisará perguntar novamente.
       );
     }
 
+    // SANITIZE AI RESPONSE - Remove any internal/debug content that shouldn't go to WhatsApp
+    let sanitizedResponse = aiResponse.text || '';
+    
+    // Patterns to detect and remove internal content
+    const internalPatterns = [
+      // Structured fields that shouldn't be in WhatsApp messages
+      /\*{0,2}(Condomínio|Apartamento|Contato|Problema|Status|Data|Função de quem fala|Chamado de Unidade|Chamado Geral):\*{0,2}\s*\[?[^\n\]]*\]?/gi,
+      // D+0/D+1 technical references
+      /\b(D\+[01]|Crítico|Agendado D\+1|CRÍTICO \(mesmo dia\))\b/gi,
+      // Correction notes
+      /\*?Correction[^*\n]*\*?/gi,
+      // Any remaining ** field markers
+      /\*\*(Status|Data|Problema|Condomínio|Apartamento):\*\*[^\n]*/gi,
+      // Stray asterisks at end
+      /\n\s*\*\s*$/g,
+      // Empty lines with just asterisks or formatting
+      /\n\s*\*{1,2}\s*\n/g,
+      // English technical terms that shouldn't appear
+      /\b(not critical|is D\+1|Correction on status)\b/gi,
+      // Block headers like "Resumo do Chamado"
+      /\n?-*\s*(Resumo do Chamado|Chamado de Unidade|Chamado Geral)\s*-*\n?/gi,
+      // Lines that look like structured data
+      /^\s*(Condomínio|Apartamento|Contato|Status|Data|Problema|Função):\s*.*$/gim,
+    ];
+
+    for (const pattern of internalPatterns) {
+      sanitizedResponse = sanitizedResponse.replace(pattern, '');
+    }
+
+    // Clean up multiple newlines and trim
+    sanitizedResponse = sanitizedResponse
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/^\s+|\s+$/g, '')
+      .trim();
+
+    // If sanitization removed everything, don't send empty message
+    if (!sanitizedResponse || sanitizedResponse.length < 5) {
+      console.log('Sanitized response too short, skipping send:', sanitizedResponse);
+      return new Response(
+        JSON.stringify({ success: false, reason: 'empty_after_sanitization' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    console.log('Sending sanitized AI response:', sanitizedResponse.substring(0, 200));
+
     // Send the AI response via WhatsApp
     const { error: sendError } = await supabase.functions.invoke('zapi-send-message', {
       body: {
         conversation_id: conversation_id,
-        content: aiResponse.text,
+        content: sanitizedResponse,
         message_type: 'text',
       },
     });
@@ -821,7 +867,7 @@ Após perguntar, isso será registrado e não precisará perguntar novamente.
         model: aiResponse.model,
         request_id: aiResponse.request_id,
         input_excerpt: lastUserMessage?.content?.substring(0, 200),
-        output_text: aiResponse.text,
+        output_text: sanitizedResponse,
         tokens_in: aiResponse.tokens_in,
         tokens_out: aiResponse.tokens_out,
         latency_ms: aiResponse.latency_ms,
@@ -851,7 +897,7 @@ Após perguntar, isso será registrado e não precisará perguntar novamente.
       model: aiResponse.model,
       request_id: aiResponse.request_id,
       input_excerpt: lastUserMessage?.content?.substring(0, 200),
-      output_text: aiResponse.text,
+      output_text: sanitizedResponse,
       tokens_in: aiResponse.tokens_in,
       tokens_out: aiResponse.tokens_out,
       latency_ms: aiResponse.latency_ms,
@@ -876,7 +922,7 @@ Após perguntar, isso será registrado e não precisará perguntar novamente.
     return new Response(
       JSON.stringify({ 
         success: true, 
-        response: aiResponse.text,
+        response: sanitizedResponse,
         provider: aiResponse.provider,
         model: aiResponse.model,
       }),
