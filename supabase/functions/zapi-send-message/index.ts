@@ -89,15 +89,25 @@ serve(async (req) => {
 
     const contact = conversation.contacts;
     const chatId = conversation.chat_id || contact.chat_lid;
+    const isGroup = contact.is_group || false;
     
-    let recipient = contact.lid || contact.phone;
+    // For groups, use chat_id/chat_lid as recipient; for individuals, use lid/phone
+    let recipient: string | null = null;
+    if (isGroup) {
+      recipient = chatId || contact.lid;
+    } else {
+      recipient = contact.lid || contact.phone;
+    }
     
     if (!recipient) {
-      return new Response(JSON.stringify({ error: 'No valid recipient (LID or phone)' }), {
+      console.error('No valid recipient found:', { isGroup, chatId, lid: contact.lid, phone: contact.phone });
+      return new Response(JSON.stringify({ error: 'No valid recipient (group chat_id or contact LID/phone)' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
+    
+    console.log('Recipient determined:', { isGroup, recipient });
 
     // SAVE MESSAGE FIRST with status='queued' (before sending to Z-API)
     const { data: savedMessage, error: saveError } = await supabase
