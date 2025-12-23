@@ -578,6 +578,8 @@ export type Database = {
           marked_unread: boolean | null
           priority: string | null
           protocol: string | null
+          resolved_at: string | null
+          resolved_by: string | null
           snoozed_until: string | null
           status: Database["public"]["Enums"]["conversation_status"]
           typing_by_user_id: string | null
@@ -598,6 +600,8 @@ export type Database = {
           marked_unread?: boolean | null
           priority?: string | null
           protocol?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
           snoozed_until?: string | null
           status?: Database["public"]["Enums"]["conversation_status"]
           typing_by_user_id?: string | null
@@ -618,6 +622,8 @@ export type Database = {
           marked_unread?: boolean | null
           priority?: string | null
           protocol?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
           snoozed_until?: string | null
           status?: Database["public"]["Enums"]["conversation_status"]
           typing_by_user_id?: string | null

@@ -406,9 +406,12 @@ serve(async (req) => {
       };
 
       if (!isFromMe) {
+        // Reopen conversation and reset resolved state on new inbound message
         updateData.status = 'open';
         updateData.unread_count = (conversation.unread_count || 0) + 1;
         updateData.marked_unread = false;
+        updateData.resolved_at = null;
+        updateData.resolved_by = null;
       }
 
       await supabase
@@ -449,10 +452,30 @@ serve(async (req) => {
       content = document.fileName || content || null;
     }
 
+    // Ensure content is never null/empty - use placeholder based on message type
+    if (!content || content.trim() === '') {
+      switch (messageType) {
+        case 'image':
+          content = '📷 Imagem';
+          break;
+        case 'video':
+          content = '🎬 Vídeo';
+          break;
+        case 'audio':
+          content = '🎤 Áudio';
+          break;
+        case 'document':
+          content = '📄 Documento';
+          break;
+        default:
+          content = '📎 Mídia';
+      }
+    }
+
     // For group messages, prepend participant name in content
     let displayContent = content;
     if (isGroupChat && msgSenderName) {
-      displayContent = content ? `[${msgSenderName}]: ${content}` : `[${msgSenderName}]`;
+      displayContent = `[${msgSenderName}]: ${content}`;
     }
 
     // INSERT MESSAGE - use conversationKey for groups to ensure consistency
