@@ -206,7 +206,7 @@ export default function AdminDuplicates() {
         .eq('id', primary.id);
 
       toast.success(`${duplicateConvs.length} conversa(s) mesclada(s) com sucesso`);
-      fetchDuplicates();
+      refresh();
     } catch (error) {
       console.error('Error merging:', error);
       toast.error('Erro ao mesclar conversas');
