@@ -1286,41 +1286,67 @@ Após perguntar, isso será registrado e não precisará perguntar novamente.
           participantId 
         });
         
-        // Call protocol-opened with all data
-        const protocolUrl = `${supabaseUrl}/functions/v1/protocol-opened`;
-        fetch(protocolUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${supabaseServiceKey}`,
-          },
-          body: JSON.stringify({
-            protocol_code: protocolCode,
-            priority,
-            category,
-            summary,
-            condominium_name: condominiumName,
-            condominium_id: condominiumId,
-            requester_name: requesterName,
-            requester_role: requesterRole,
-            conversation_id: conversation_id,
-            contact_id: contact?.id,
-            // Campos de auditoria
-            created_by_type: 'ai',
-            customer_text: customerText,
-            participant_id: participantId,
-          }),
-        }).then(res => res.json()).then(result => {
-          console.log('Protocol-opened result:', result);
-        }).catch(err => {
-          console.error('Protocol-opened error:', err);
-        });
-        
-        // Update conversation with protocol
-        await supabase
-          .from('conversations')
-          .update({ protocol: protocolCode })
-          .eq('id', conversation_id);
+        // Create protocol directly in database first (most reliable)
+        const protocolInsertData: Record<string, unknown> = {
+          protocol_code: protocolCode,
+          conversation_id: conversation_id,
+          contact_id: contact?.id,
+          condominium_id: condominiumId,
+          status: 'open',
+          priority: priority || 'normal',
+          category: category || 'operational',
+          summary,
+          requester_name: requesterName,
+          requester_role: requesterRole,
+          created_by_type: 'ai',
+          customer_text: customerText,
+          participant_id: participantId,
+        };
+
+        const { data: newProtocol, error: protocolInsertError } = await supabase
+          .from('protocols')
+          .insert(protocolInsertData as Record<string, unknown>)
+          .select()
+          .single();
+
+        if (protocolInsertError) {
+          console.error('Error inserting protocol:', protocolInsertError);
+        } else {
+          console.log('Protocol created:', newProtocol.id, protocolCode);
+          
+          // Update conversation with protocol code
+          await supabase
+            .from('conversations')
+            .update({ protocol: protocolCode })
+            .eq('id', conversation_id);
+          
+          // Trigger integrations (Asana, WhatsApp) in background
+          const protocolUrl = `${supabaseUrl}/functions/v1/protocol-opened`;
+          fetch(protocolUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${supabaseServiceKey}`,
+            },
+            body: JSON.stringify({
+              protocol_id: newProtocol.id,
+              protocol_code: protocolCode,
+              priority,
+              category,
+              summary,
+              condominium_name: condominiumName,
+              condominium_id: condominiumId,
+              requester_name: requesterName,
+              requester_role: requesterRole,
+              conversation_id: conversation_id,
+              contact_id: contact?.id,
+            }),
+          }).then(res => res.json()).then(result => {
+            console.log('Protocol-opened integrations result:', result);
+          }).catch(err => {
+            console.error('Protocol-opened integrations error:', err);
+          });
+        }
           
       } catch (protocolError) {
         console.error('Error creating protocol:', protocolError);
