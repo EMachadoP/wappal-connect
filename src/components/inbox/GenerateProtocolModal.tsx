@@ -226,7 +226,10 @@ export function GenerateProtocolModal({
 
       if (error) throw error;
 
-      // Update conversation with protocol and condominium
+      // Get current user for assignment
+      const { data: { user } } = await supabase.auth.getUser();
+
+      // Update conversation with protocol, condominium, and assign to current user
       await supabase
         .from('conversations')
         .update({ 
@@ -234,6 +237,8 @@ export function GenerateProtocolModal({
           active_condominium_id: condominiumId,
           active_condominium_set_by: 'human',
           active_condominium_set_at: new Date().toISOString(),
+          assigned_to: user?.id || null,
+          assigned_at: new Date().toISOString(),
         })
         .eq('id', conversationId);
 
