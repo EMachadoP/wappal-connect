@@ -2,6 +2,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { UserCheck, Building2, AlertCircle } from 'lucide-react';
 import { NotificationStatus } from './NotificationStatus';
+import { CondominiumSelector } from './CondominiumSelector';
 
 interface Entity {
   id: string;
@@ -18,6 +19,12 @@ interface Participant {
   entity?: Entity | null;
 }
 
+interface Condominium {
+  id: string;
+  name: string;
+  is_default?: boolean;
+}
+
 interface ParticipantHeaderProps {
   phone?: string | null;
   whatsappDisplayName?: string | null;
@@ -25,7 +32,12 @@ interface ParticipantHeaderProps {
   displayNameType?: string;
   conversationId?: string;
   protocol?: string | null;
+  condominiums?: Condominium[];
+  activeCondominiumId?: string | null;
+  activeCondominiumSetBy?: string | null;
+  loadingCondominiums?: boolean;
   onIdentify: () => void;
+  onSelectCondominium?: (condominiumId: string) => void;
 }
 
 export function ParticipantHeader({
@@ -35,10 +47,16 @@ export function ParticipantHeader({
   displayNameType,
   conversationId,
   protocol,
+  condominiums = [],
+  activeCondominiumId,
+  activeCondominiumSetBy,
+  loadingCondominiums,
   onIdentify,
+  onSelectCondominium,
 }: ParticipantHeaderProps) {
   const isLowConfidence = !participant || participant.confidence < 0.7;
   const isEntityName = displayNameType === 'ENTITY_NAME';
+  const needsCondominiumSelection = condominiums.length > 1 && !activeCondominiumId;
 
   return (
     <div className="bg-muted/50 border-b border-border px-4 py-2">
@@ -68,7 +86,7 @@ export function ParticipantHeader({
             )}
           </div>
 
-          {/* Row 2: Participant info + Notification status */}
+          {/* Row 2: Participant info + Condominium selector + Notification status */}
           <div className="flex items-center gap-2 flex-wrap">
             {participant ? (
               <>
@@ -97,6 +115,24 @@ export function ParticipantHeader({
               <div className="flex items-center gap-2 text-muted-foreground text-sm">
                 <AlertCircle className="w-4 h-4 text-amber-500" />
                 <span>Remetente não identificado</span>
+              </div>
+            )}
+            
+            {/* Condominium selector */}
+            {condominiums.length > 0 && onSelectCondominium && (
+              <div className="flex items-center gap-1 ml-2 pl-2 border-l border-border">
+                <CondominiumSelector
+                  condominiums={condominiums}
+                  activeCondominiumId={activeCondominiumId ?? null}
+                  activeCondominiumSetBy={activeCondominiumSetBy}
+                  loading={loadingCondominiums}
+                  onSelect={onSelectCondominium}
+                />
+                {needsCondominiumSelection && (
+                  <Badge variant="destructive" className="text-xs animate-pulse">
+                    Selecione!
+                  </Badge>
+                )}
               </div>
             )}
             

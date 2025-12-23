@@ -82,6 +82,8 @@ export default function InboxPage() {
   const [activeAiMode, setActiveAiMode] = useState<'AUTO' | 'COPILOT' | 'OFF'>('AUTO');
   const [activeAiPausedUntil, setActiveAiPausedUntil] = useState<string | null>(null);
   const [activeHumanControl, setActiveHumanControl] = useState(false);
+  const [activeCondominiumId, setActiveCondominiumId] = useState<string | null>(null);
+  const [activeCondominiumSetBy, setActiveCondominiumSetBy] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [labels, setLabels] = useState<Label[]>([]);
@@ -280,6 +282,8 @@ export default function InboxPage() {
           ai_mode,
           ai_paused_until,
           human_control,
+          active_condominium_id,
+          active_condominium_set_by,
           contacts (
             id,
             name,
@@ -316,6 +320,8 @@ export default function InboxPage() {
         setActiveAiMode((selectedConv as any).ai_mode || 'AUTO');
         setActiveAiPausedUntil((selectedConv as any).ai_paused_until || null);
         setActiveHumanControl((selectedConv as any).human_control || false);
+        setActiveCondominiumId((selectedConv as any).active_condominium_id || null);
+        setActiveCondominiumSetBy((selectedConv as any).active_condominium_set_by || null);
       }
 
       let threadContactIds: string[] = [contactId];
@@ -665,6 +671,32 @@ export default function InboxPage() {
     }
   };
 
+  const handleSelectCondominium = async (condominiumId: string) => {
+    if (!activeConversationId || !user) return;
+
+    const { error } = await supabase
+      .from('conversations')
+      .update({
+        active_condominium_id: condominiumId,
+        active_condominium_confidence: 100,
+        active_condominium_set_by: 'human',
+        active_condominium_set_at: new Date().toISOString(),
+      })
+      .eq('id', activeConversationId);
+
+    if (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao selecionar condomínio',
+        description: error.message,
+      });
+    } else {
+      setActiveCondominiumId(condominiumId);
+      setActiveCondominiumSetBy('human');
+      toast({ title: 'Condomínio ativo atualizado' });
+    }
+  };
+
   if (authLoading) {
     return (
       <div className="min-h-screen-safe flex items-center justify-center bg-background">
@@ -715,6 +747,8 @@ export default function InboxPage() {
             aiMode={activeAiMode}
             aiPausedUntil={activeAiPausedUntil}
             humanControl={activeHumanControl}
+            activeCondominiumId={activeCondominiumId}
+            activeCondominiumSetBy={activeCondominiumSetBy}
             onSendMessage={handleSendMessage}
             onSendFile={handleSendFile}
             onResolveConversation={handleResolveConversation}
@@ -725,6 +759,7 @@ export default function InboxPage() {
             onAssignAgent={handleAssignAgent}
             onAssignTeam={handleAssignTeam}
             onAddLabel={handleAddLabel}
+            onSelectCondominium={handleSelectCondominium}
             onAiModeChange={setActiveAiMode}
             loading={loadingMessages}
             isMobile
@@ -772,6 +807,8 @@ export default function InboxPage() {
           aiMode={activeAiMode}
           aiPausedUntil={activeAiPausedUntil}
           humanControl={activeHumanControl}
+          activeCondominiumId={activeCondominiumId}
+          activeCondominiumSetBy={activeCondominiumSetBy}
           onSendMessage={handleSendMessage}
           onSendFile={handleSendFile}
           onResolveConversation={handleResolveConversation}
@@ -782,6 +819,7 @@ export default function InboxPage() {
           onAssignAgent={handleAssignAgent}
           onAssignTeam={handleAssignTeam}
           onAddLabel={handleAddLabel}
+          onSelectCondominium={handleSelectCondominium}
           onAiModeChange={setActiveAiMode}
           loading={loadingMessages}
         />
