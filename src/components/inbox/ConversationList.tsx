@@ -27,7 +27,7 @@ interface ConversationListProps {
   isMobile?: boolean;
 }
 
-type TabValue = 'new' | 'all' | 'resolved';
+type TabValue = 'mine' | 'unassigned' | 'all' | 'resolved';
 
 export function ConversationList({
   conversations,
@@ -37,29 +37,39 @@ export function ConversationList({
   isMobile = false,
 }: ConversationListProps) {
   const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState<TabValue>('new');
+  const [activeTab, setActiveTab] = useState<TabValue>('mine');
 
-  const filteredConversations = conversations.filter((conv) => {
-    const matchesSearch = conv.contact.name.toLowerCase().includes(search.toLowerCase());
-    
-    switch (activeTab) {
-      case 'new':
-        // Novas: status='open' AND unread_count>0
-        return matchesSearch && conv.status === 'open' && conv.unread_count > 0;
-      case 'all':
-        // Todas: status!='resolved'
-        return matchesSearch && conv.status !== 'resolved';
-      case 'resolved':
-        // Resolvidas: status='resolved'
-        return matchesSearch && conv.status === 'resolved';
-      default:
-        return matchesSearch;
-    }
-  });
+  const filteredConversations = conversations
+    .filter((conv) => {
+      const matchesSearch = conv.contact.name.toLowerCase().includes(search.toLowerCase());
+      
+      switch (activeTab) {
+        case 'mine':
+          // Minha: status='open' AND assigned_to = current_user_id
+          return matchesSearch && conv.status === 'open' && conv.assigned_to === userId;
+        case 'unassigned':
+          // Não atribuída: status='open' AND assigned_to IS NULL
+          return matchesSearch && conv.status === 'open' && !conv.assigned_to;
+        case 'all':
+          // Todos: status='open'
+          return matchesSearch && conv.status === 'open';
+        case 'resolved':
+          // Resolvidas: status='resolved'
+          return matchesSearch && conv.status === 'resolved';
+        default:
+          return matchesSearch;
+      }
+    })
+    .sort((a, b) => {
+      const dateA = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+      const dateB = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+      return dateB - dateA;
+    });
 
   const countByTab = {
-    new: conversations.filter(c => c.status === 'open' && c.unread_count > 0).length,
-    all: conversations.filter(c => c.status !== 'resolved').length,
+    mine: conversations.filter(c => c.status === 'open' && c.assigned_to === userId).length,
+    unassigned: conversations.filter(c => c.status === 'open' && !c.assigned_to).length,
+    all: conversations.filter(c => c.status === 'open').length,
     resolved: conversations.filter(c => c.status === 'resolved').length,
   };
 
@@ -78,18 +88,24 @@ export function ConversationList({
       </div>
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabValue)} className="shrink-0 border-b border-border">
-        <TabsList className="w-full h-auto p-0 bg-transparent grid grid-cols-3">
+        <TabsList className="w-full h-auto p-0 bg-transparent grid grid-cols-4">
           <TabsTrigger
-            value="new"
+            value="mine"
             className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent text-xs px-1"
           >
-            Novas ({countByTab.new})
+            Minha ({countByTab.mine})
+          </TabsTrigger>
+          <TabsTrigger
+            value="unassigned"
+            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent text-xs px-1"
+          >
+            Não atrib. ({countByTab.unassigned})
           </TabsTrigger>
           <TabsTrigger
             value="all"
             className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent text-xs px-1"
           >
-            Todas ({countByTab.all})
+            Todos ({countByTab.all})
           </TabsTrigger>
           <TabsTrigger
             value="resolved"
