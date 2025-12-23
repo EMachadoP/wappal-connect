@@ -9,6 +9,7 @@ import { ConversationActionsMenu } from './ConversationActionsMenu';
 import { ParticipantHeader } from './ParticipantHeader';
 import { IdentifyParticipantModal } from './IdentifyParticipantModal';
 import { AIControlBar } from './AIControlBar';
+import { HumanActionBar } from './HumanActionBar';
 import { CondominiumChips } from './CondominiumSelector';
 import { useParticipantInfo } from '@/hooks/useParticipantInfo';
 import { useContactCondominiums } from '@/hooks/useContactCondominiums';
@@ -358,6 +359,17 @@ export function ChatArea({
           </div>
         )}
       </div>
+
+      {/* Human Action Bar - shown when human has control */}
+      {conversationId && (
+        <HumanActionBar
+          conversationId={conversationId}
+          humanControl={humanControl}
+          aiMode={aiMode}
+          onResolveConversation={onResolveConversation}
+          onAiModeChange={onAiModeChange}
+        />
+      )}
 
       {/* Input - Sticky at bottom with safe area */}
       <div className={`p-3 border-t border-border bg-card ${isMobile ? 'pb-safe' : ''}`}>
