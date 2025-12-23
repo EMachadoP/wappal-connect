@@ -21,6 +21,85 @@ function isGroupChatId(chatId: string | null | undefined): boolean {
   return chatId.toLowerCase().endsWith('@g.us');
 }
 
+// Get file extension from content-type
+function getExtensionFromContentType(contentType: string): string {
+  const map: Record<string, string> = {
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/png': 'png',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'video/mp4': 'mp4',
+    'video/3gpp': '3gp',
+    'video/quicktime': 'mov',
+    'audio/ogg': 'ogg',
+    'audio/mpeg': 'mp3',
+    'audio/mp4': 'm4a',
+    'audio/aac': 'aac',
+    'application/pdf': 'pdf',
+    'application/msword': 'doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+    'application/vnd.ms-excel': 'xls',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  };
+  return map[contentType] || 'bin';
+}
+
+// Download media and upload to Supabase Storage
+// deno-lint-ignore no-explicit-any
+async function downloadAndStoreMedia(
+  supabase: any,
+  sourceUrl: string,
+  messageType: string,
+  messageId: string
+): Promise<{ storageUrl: string | null; sourceUrl: string }> {
+  try {
+    console.log('Downloading media from:', sourceUrl);
+    
+    const response = await fetch(sourceUrl);
+    if (!response.ok) {
+      console.error('Failed to download media:', response.status, response.statusText);
+      return { storageUrl: null, sourceUrl };
+    }
+
+    const contentType = response.headers.get('content-type') || 'application/octet-stream';
+    const extension = getExtensionFromContentType(contentType);
+    const blob = await response.blob();
+    const arrayBuffer = await blob.arrayBuffer();
+    const uint8Array = new Uint8Array(arrayBuffer);
+
+    // Generate unique file path: type/YYYY-MM/messageId.ext
+    const now = new Date();
+    const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const filePath = `${messageType}/${yearMonth}/${messageId}.${extension}`;
+
+    console.log('Uploading to storage:', filePath, 'size:', uint8Array.length);
+
+    const { data, error } = await supabase.storage
+      .from('whatsapp-media')
+      .upload(filePath, uint8Array, {
+        contentType,
+        upsert: true,
+      });
+
+    if (error) {
+      console.error('Storage upload error:', error);
+      return { storageUrl: null, sourceUrl };
+    }
+
+    // Get public URL
+    const { data: publicUrlData } = supabase.storage
+      .from('whatsapp-media')
+      .getPublicUrl(filePath);
+
+    console.log('Media stored successfully:', publicUrlData.publicUrl);
+    return { storageUrl: publicUrlData.publicUrl, sourceUrl };
+  } catch (err) {
+    console.error('Error downloading/storing media:', err);
+    return { storageUrl: null, sourceUrl };
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -435,21 +514,46 @@ serve(async (req) => {
       content = payload.body;
     }
 
+    // Track source URL for metadata
+    let sourceMediaUrl: string | null = null;
+
     if (image) {
       messageType = 'image';
-      mediaUrl = image.imageUrl || image.url;
+      sourceMediaUrl = image.imageUrl || image.url;
       content = image.caption || content || null;
     } else if (video) {
       messageType = 'video';
-      mediaUrl = video.videoUrl || video.url;
+      sourceMediaUrl = video.videoUrl || video.url;
       content = video.caption || content || null;
     } else if (audio) {
       messageType = 'audio';
-      mediaUrl = audio.audioUrl || audio.url;
+      sourceMediaUrl = audio.audioUrl || audio.url;
     } else if (document) {
       messageType = 'document';
-      mediaUrl = document.documentUrl || document.url;
+      sourceMediaUrl = document.documentUrl || document.url;
       content = document.fileName || content || null;
+    }
+
+    // Download and store media in Supabase Storage
+    if (sourceMediaUrl && messageId) {
+      const { storageUrl, sourceUrl } = await downloadAndStoreMedia(
+        supabase,
+        sourceMediaUrl,
+        messageType,
+        messageId
+      );
+      if (storageUrl) {
+        mediaUrl = storageUrl;
+        // Store original URL in raw_payload (already done)
+        console.log('Media stored, using storage URL:', storageUrl);
+      } else {
+        // Fallback to original URL if storage fails
+        mediaUrl = sourceUrl;
+        console.log('Storage failed, using source URL:', sourceUrl);
+      }
+    } else if (sourceMediaUrl) {
+      // No messageId, use source URL directly
+      mediaUrl = sourceMediaUrl;
     }
 
     // Ensure content is never null/empty - use placeholder based on message type
