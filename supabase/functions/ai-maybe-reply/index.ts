@@ -36,6 +36,72 @@ interface ThrottlingJson {
   max_messages_per_hour: number | null;
 }
 
+// Bot detection patterns
+const BOT_PATTERNS = [
+  /digite\s*\d/i,
+  /opção\s*\d/i,
+  /pressione\s*\d/i,
+  /menu\s*principal/i,
+  /voltar\s*ao\s*menu/i,
+  /atendimento\s*automático/i,
+  /aguarde\s*um\s*momento/i,
+  /sua\s*chamada\s*é\s*muito\s*importante/i,
+  /^[1-9]$/,
+  /^\*[1-9]\*$/,
+  /obrigad[oa]\s*por\s*entrar\s*em\s*contato/i,
+  /em\s*que\s*posso\s*ajudar/i,
+  /nosso\s*horário\s*de\s*atendimento/i,
+];
+
+const SAFE_BOT_RESPONSE = "Olá! Preciso falar com um responsável humano para seguir com o atendimento. Poderia chamar alguém, por favor?";
+
+function calculateBotLikelihood(messages: { content: string; sender_type: string; sent_at: string }[]): number {
+  const inboundMessages = messages.filter(m => m.sender_type === 'contact');
+  if (inboundMessages.length < 3) return 0;
+
+  let score = 0;
+  let patternMatches = 0;
+  let repetitions = 0;
+  const contentSet = new Set<string>();
+
+  // Check for bot patterns
+  for (const msg of inboundMessages) {
+    const content = msg.content || '';
+    
+    // Check patterns
+    for (const pattern of BOT_PATTERNS) {
+      if (pattern.test(content)) {
+        patternMatches++;
+        break;
+      }
+    }
+    
+    // Check repetitions
+    const normalized = content.toLowerCase().trim();
+    if (contentSet.has(normalized)) {
+      repetitions++;
+    }
+    contentSet.add(normalized);
+  }
+
+  // Calculate frequency (messages per minute in last 5 messages)
+  const recent = inboundMessages.slice(-5);
+  if (recent.length >= 3) {
+    const first = new Date(recent[0].sent_at).getTime();
+    const last = new Date(recent[recent.length - 1].sent_at).getTime();
+    const minutes = (last - first) / 60000;
+    if (minutes > 0 && recent.length / minutes > 2) {
+      score += 0.3; // High frequency
+    }
+  }
+
+  // Score calculation
+  score += Math.min(patternMatches * 0.2, 0.4);
+  score += Math.min(repetitions * 0.15, 0.3);
+
+  return Math.min(score, 1.0);
+}
+
 function isWithinSchedule(schedule: ScheduleJson, timezone: string): { allowed: boolean; exception?: ScheduleException } {
   const now = new Date();
   
@@ -130,6 +196,73 @@ serve(async (req) => {
       return new Response(
         JSON.stringify({ success: false, reason: 'conversation_not_found' }),
         { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // CHECK AI MODE - if OFF, don't reply
+    if (conversation.ai_mode === 'OFF') {
+      console.log('AI is OFF for this conversation');
+      return new Response(
+        JSON.stringify({ success: false, reason: 'ai_mode_off' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // CHECK HUMAN CONTROL - if human is in control and typing lock active
+    if (conversation.human_control && conversation.typing_lock_until) {
+      const typingLockUntil = new Date(conversation.typing_lock_until);
+      if (typingLockUntil > new Date()) {
+        console.log('Human is typing, AI blocked');
+        return new Response(
+          JSON.stringify({ success: false, reason: 'human_typing' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
+    // CHECK SUPPLIER - if contact has role='fornecedor' or tag 'fornecedor', disable AI
+    const contact = conversation.contacts;
+    let isSupplier = false;
+    
+    if (contact?.id) {
+      // Check participant role
+      const { data: participantData } = await supabase
+        .from('participants')
+        .select('role_type')
+        .eq('contact_id', contact.id)
+        .eq('is_primary', true)
+        .single();
+      
+      if (participantData?.role_type === 'fornecedor') {
+        isSupplier = true;
+      }
+      
+      // Check tags
+      const tags = contact.tags || [];
+      if (tags.includes('fornecedor') || tags.includes('supplier')) {
+        isSupplier = true;
+      }
+    }
+
+    if (isSupplier && conversation.ai_mode !== 'COPILOT') {
+      console.log('Supplier detected, disabling AI');
+      
+      // Set AI mode to OFF
+      await supabase
+        .from('conversations')
+        .update({ ai_mode: 'OFF' })
+        .eq('id', conversation_id);
+      
+      // Log event
+      await supabase.from('ai_events').insert({
+        conversation_id,
+        event_type: 'supplier_detected',
+        message: '🏷️ FORNECEDOR — IA desativada.',
+      });
+      
+      return new Response(
+        JSON.stringify({ success: false, reason: 'supplier_detected' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
@@ -361,6 +494,78 @@ serve(async (req) => {
       );
     }
 
+    // HARD LIMIT: max 5 auto messages in 2 minutes
+    const twoMinAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    const { data: recentAutoMsgs } = await supabase
+      .from('messages')
+      .select('id')
+      .eq('conversation_id', conversation_id)
+      .eq('sender_type', 'agent')
+      .is('sender_id', null) // AI messages have no sender_id
+      .gte('sent_at', twoMinAgo);
+
+    if (recentAutoMsgs && recentAutoMsgs.length >= 5) {
+      console.log('Hard limit: 5 auto messages in 2 minutes');
+      
+      // Pause AI
+      await supabase
+        .from('conversations')
+        .update({ 
+          ai_mode: 'OFF',
+          ai_paused_until: new Date(Date.now() + 30 * 60 * 1000).toISOString()
+        })
+        .eq('id', conversation_id);
+      
+      await supabase.from('ai_events').insert({
+        conversation_id,
+        event_type: 'hard_limit_reached',
+        message: '🛑 Limite de 5 msgs automáticas em 2 min — IA pausada.',
+      });
+      
+      return new Response(
+        JSON.stringify({ success: false, reason: 'hard_limit_2min' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // HARD LIMIT: max 3 consecutive auto messages without human inbound
+    const { data: lastMsgs } = await supabase
+      .from('messages')
+      .select('sender_type, sender_id')
+      .eq('conversation_id', conversation_id)
+      .order('sent_at', { ascending: false })
+      .limit(6);
+
+    let consecutiveAutoMsgs = 0;
+    for (const msg of (lastMsgs || [])) {
+      if (msg.sender_type === 'agent' && !msg.sender_id) {
+        consecutiveAutoMsgs++;
+      } else {
+        break;
+      }
+    }
+
+    if (consecutiveAutoMsgs >= 3) {
+      console.log('Hard limit: 3 consecutive auto messages');
+      
+      await supabase.from('ai_events').insert({
+        conversation_id,
+        event_type: 'consecutive_limit_reached',
+        message: '🛑 3 msgs automáticas seguidas sem resposta humana — IA pausada.',
+      });
+      
+      // Update state
+      await supabase
+        .from('ai_conversation_state')
+        .update({ consecutive_auto_msgs: consecutiveAutoMsgs })
+        .eq('conversation_id', conversation_id);
+      
+      return new Response(
+        JSON.stringify({ success: false, reason: 'consecutive_limit' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     // Get conversation history
     const { data: messages } = await supabase
       .from('messages')
@@ -368,6 +573,71 @@ serve(async (req) => {
       .eq('conversation_id', conversation_id)
       .order('sent_at', { ascending: false })
       .limit(settings.memory_message_count);
+
+    // BOT DETECTION (Anti-loop)
+    const botLikelihood = calculateBotLikelihood(messages || []);
+    console.log('Bot likelihood:', botLikelihood);
+
+    if (botLikelihood >= 0.6) {
+      console.log('Bot detected, pausing AI');
+      
+      // Update conversation
+      await supabase
+        .from('conversations')
+        .update({ ai_mode: 'OFF' })
+        .eq('id', conversation_id);
+      
+      // Update state
+      await supabase
+        .from('ai_conversation_state')
+        .update({ 
+          bot_likelihood: botLikelihood,
+          bot_detection_triggered: true
+        })
+        .eq('conversation_id', conversation_id);
+      
+      // Add tag to contact
+      if (contact?.id) {
+        const existingTags = contact.tags || [];
+        if (!existingTags.includes('suspeita_bot')) {
+          await supabase
+            .from('contacts')
+            .update({ tags: [...existingTags, 'suspeita_bot'] })
+            .eq('id', contact.id);
+        }
+      }
+      
+      // Log event
+      await supabase.from('ai_events').insert({
+        conversation_id,
+        event_type: 'bot_detected',
+        message: '🛑 Possível bot do outro lado — IA pausada.',
+        metadata: { bot_likelihood: botLikelihood },
+      });
+      
+      // Send safe response (only once)
+      const { data: existingSafeResponse } = await supabase
+        .from('messages')
+        .select('id')
+        .eq('conversation_id', conversation_id)
+        .eq('content', SAFE_BOT_RESPONSE)
+        .limit(1);
+      
+      if (!existingSafeResponse || existingSafeResponse.length === 0) {
+        await supabase.functions.invoke('zapi-send-message', {
+          body: {
+            conversation_id: conversation_id,
+            content: SAFE_BOT_RESPONSE,
+            message_type: 'text',
+          },
+        });
+      }
+      
+      return new Response(
+        JSON.stringify({ success: false, reason: 'bot_detected', bot_likelihood: botLikelihood }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
     const conversationHistory = (messages || [])
       .reverse()
@@ -414,7 +684,7 @@ serve(async (req) => {
     // Build system prompt with variables
     let systemPrompt = teamSettings?.prompt_override || settings.base_system_prompt;
     
-    const contact = conversation.contacts;
+    // contact already defined above from conversation.contacts
     
     // Fetch participant info for context
     let participantContext = '';

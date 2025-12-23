@@ -54,6 +54,7 @@ const ROLE_TYPES = [
   { value: 'funcionario', label: 'Funcionário' },
   { value: 'visitante', label: 'Visitante' },
   { value: 'prestador', label: 'Prestador de Serviço' },
+  { value: 'fornecedor', label: 'Fornecedor' },
   { value: 'outro', label: 'Outro' },
 ];
 

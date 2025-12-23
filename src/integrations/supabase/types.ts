@@ -19,9 +19,13 @@ export type Database = {
           ai_disabled_reason: string | null
           ai_paused_until: string | null
           auto_msg_count_window: number
+          bot_detection_triggered: boolean | null
+          bot_likelihood: number | null
+          consecutive_auto_msgs: number | null
           conversation_id: string
           conversation_summary: string | null
           id: string
+          last_human_inbound_at: string | null
           updated_at: string
           window_started_at: string
         }
@@ -29,9 +33,13 @@ export type Database = {
           ai_disabled_reason?: string | null
           ai_paused_until?: string | null
           auto_msg_count_window?: number
+          bot_detection_triggered?: boolean | null
+          bot_likelihood?: number | null
+          consecutive_auto_msgs?: number | null
           conversation_id: string
           conversation_summary?: string | null
           id?: string
+          last_human_inbound_at?: string | null
           updated_at?: string
           window_started_at?: string
         }
@@ -39,9 +47,13 @@ export type Database = {
           ai_disabled_reason?: string | null
           ai_paused_until?: string | null
           auto_msg_count_window?: number
+          bot_detection_triggered?: boolean | null
+          bot_likelihood?: number | null
+          consecutive_auto_msgs?: number | null
           conversation_id?: string
           conversation_summary?: string | null
           id?: string
+          last_human_inbound_at?: string | null
           updated_at?: string
           window_started_at?: string
         }
@@ -50,6 +62,44 @@ export type Database = {
             foreignKeyName: "ai_conversation_state_conversation_id_fkey"
             columns: ["conversation_id"]
             isOneToOne: true
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_events: {
+        Row: {
+          conversation_id: string
+          created_at: string | null
+          created_by: string | null
+          event_type: string
+          id: string
+          message: string | null
+          metadata: Json | null
+        }
+        Insert: {
+          conversation_id: string
+          created_at?: string | null
+          created_by?: string | null
+          event_type: string
+          id?: string
+          message?: string | null
+          metadata?: Json | null
+        }
+        Update: {
+          conversation_id?: string
+          created_at?: string | null
+          created_by?: string | null
+          event_type?: string
+          id?: string
+          message?: string | null
+          metadata?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_events_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
             referencedRelation: "conversations"
             referencedColumns: ["id"]
           },
@@ -440,10 +490,13 @@ export type Database = {
       }
       conversations: {
         Row: {
+          ai_mode: string | null
+          ai_paused_until: string | null
           assigned_to: string | null
           chat_id: string | null
           contact_id: string
           created_at: string
+          human_control: boolean | null
           id: string
           last_message_at: string | null
           marked_unread: boolean | null
@@ -451,14 +504,19 @@ export type Database = {
           protocol: string | null
           snoozed_until: string | null
           status: Database["public"]["Enums"]["conversation_status"]
+          typing_by_user_id: string | null
+          typing_lock_until: string | null
           unread_count: number
           updated_at: string
         }
         Insert: {
+          ai_mode?: string | null
+          ai_paused_until?: string | null
           assigned_to?: string | null
           chat_id?: string | null
           contact_id: string
           created_at?: string
+          human_control?: boolean | null
           id?: string
           last_message_at?: string | null
           marked_unread?: boolean | null
@@ -466,14 +524,19 @@ export type Database = {
           protocol?: string | null
           snoozed_until?: string | null
           status?: Database["public"]["Enums"]["conversation_status"]
+          typing_by_user_id?: string | null
+          typing_lock_until?: string | null
           unread_count?: number
           updated_at?: string
         }
         Update: {
+          ai_mode?: string | null
+          ai_paused_until?: string | null
           assigned_to?: string | null
           chat_id?: string | null
           contact_id?: string
           created_at?: string
+          human_control?: boolean | null
           id?: string
           last_message_at?: string | null
           marked_unread?: boolean | null
@@ -481,6 +544,8 @@ export type Database = {
           protocol?: string | null
           snoozed_until?: string | null
           status?: Database["public"]["Enums"]["conversation_status"]
+          typing_by_user_id?: string | null
+          typing_lock_until?: string | null
           unread_count?: number
           updated_at?: string
         }
