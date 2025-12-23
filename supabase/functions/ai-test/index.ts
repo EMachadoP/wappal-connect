@@ -69,26 +69,39 @@ serve(async (req) => {
       systemPrompt = systemPrompt.replace(new RegExp(key, 'g'), value);
     }
 
-    // Call AI generate function
-    const { data: aiResponse, error: aiError } = await supabase.functions.invoke('ai-generate-reply', {
-      body: {
+    // Call AI generate function directly with service role key authorization
+    const aiGenerateUrl = `${supabaseUrl}/functions/v1/ai-generate-reply`;
+    
+    console.log('Calling ai-generate-reply with service role key...');
+    
+    const aiResponse = await fetch(aiGenerateUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${supabaseServiceKey}`,
+      },
+      body: JSON.stringify({
         messages: [{ role: 'user', content: message }],
         systemPrompt,
         providerId,
-      },
+        ragEnabled: false, // Disable RAG for testing
+      }),
     });
 
-    if (aiError || !aiResponse) {
-      console.error('AI test error:', aiError);
+    if (!aiResponse.ok) {
+      const errorText = await aiResponse.text();
+      console.error('AI generate error:', aiResponse.status, errorText);
       return new Response(
-        JSON.stringify({ error: aiError?.message || 'Erro ao gerar resposta' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: `Erro ao gerar resposta: ${errorText}` }),
+        { status: aiResponse.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    if (aiResponse.error) {
+    const aiData = await aiResponse.json();
+
+    if (aiData.error) {
       return new Response(
-        JSON.stringify({ error: aiResponse.error }),
+        JSON.stringify({ error: aiData.error }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -97,14 +110,14 @@ serve(async (req) => {
 
     return new Response(
       JSON.stringify({
-        response: aiResponse.text,
+        response: aiData.text,
         prompt_rendered: systemPrompt,
-        provider: aiResponse.provider,
-        model: aiResponse.model,
-        tokens_in: aiResponse.tokens_in,
-        tokens_out: aiResponse.tokens_out,
+        provider: aiData.provider,
+        model: aiData.model,
+        tokens_in: aiData.tokens_in,
+        tokens_out: aiData.tokens_out,
         latency_ms: totalLatency,
-        ai_latency_ms: aiResponse.latency_ms,
+        ai_latency_ms: aiData.latency_ms,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
