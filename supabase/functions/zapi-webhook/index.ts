@@ -45,6 +45,48 @@ function getExtensionFromContentType(contentType: string): string {
   return map[contentType] || 'bin';
 }
 
+// Retry with exponential backoff for AI calls
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries = 3,
+  baseDelayMs = 1000
+): Promise<{ success: boolean; data?: unknown; error?: string }> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      const data = await response.json();
+      
+      // Check if function was found and executed successfully
+      if (data.code === 'NOT_FOUND' || data.code === 'BOOT_ERROR') {
+        console.log(`AI function not ready (attempt ${attempt + 1}/${maxRetries}):`, data.message);
+        
+        if (attempt < maxRetries - 1) {
+          const delay = baseDelayMs * Math.pow(2, attempt); // 1s, 2s, 4s
+          console.log(`Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+        return { success: false, error: data.message };
+      }
+      
+      // Success or other response
+      return { success: true, data };
+    } catch (err) {
+      console.error(`Fetch error (attempt ${attempt + 1}/${maxRetries}):`, err);
+      
+      if (attempt < maxRetries - 1) {
+        const delay = baseDelayMs * Math.pow(2, attempt);
+        console.log(`Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
+    }
+  }
+  return { success: false, error: 'Max retries exceeded' };
+}
+
 // Download media and upload to Supabase Storage
 // deno-lint-ignore no-explicit-any
 async function downloadAndStoreMedia(
@@ -662,24 +704,45 @@ serve(async (req) => {
     }
 
     // Trigger AI auto-reply for inbound messages (non-group only)
+    // Using EdgeRuntime.waitUntil for background processing with retry
     if (!isFromMe && !isGroupChat) {
-      try {
-        const aiUrl = `${supabaseUrl}/functions/v1/ai-maybe-reply`;
-        fetch(aiUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${supabaseServiceKey}`,
-            'X-Internal-Secret': supabaseServiceKey,
+      const aiUrl = `${supabaseUrl}/functions/v1/ai-maybe-reply`;
+      const conversationId = conversation.id;
+      
+      // Background task with retry logic
+      const aiTask = async () => {
+        console.log('Starting AI maybe-reply task for conversation:', conversationId);
+        
+        const result = await fetchWithRetry(
+          aiUrl,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${supabaseServiceKey}`,
+              'X-Internal-Secret': supabaseServiceKey,
+            },
+            body: JSON.stringify({ conversation_id: conversationId }),
           },
-          body: JSON.stringify({ conversation_id: conversation.id }),
-        }).then(res => res.json()).then(aiResult => {
-          console.log('AI maybe-reply result:', aiResult);
-        }).catch(aiErr => {
-          console.error('AI maybe-reply error:', aiErr);
-        });
-      } catch (aiError) {
-        console.error('Failed to trigger AI:', aiError);
+          3, // max retries
+          2000 // base delay 2s (will be 2s, 4s, 8s)
+        );
+        
+        if (result.success) {
+          console.log('AI maybe-reply result:', result.data);
+        } else {
+          console.error('AI maybe-reply failed after retries:', result.error);
+        }
+      };
+      
+      // Use EdgeRuntime.waitUntil if available, otherwise fire-and-forget
+      // @ts-ignore - EdgeRuntime is available in Supabase Edge Functions
+      if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
+        // @ts-ignore
+        EdgeRuntime.waitUntil(aiTask());
+      } else {
+        // Fallback for environments without EdgeRuntime
+        aiTask().catch(err => console.error('AI task error:', err));
       }
     }
 
