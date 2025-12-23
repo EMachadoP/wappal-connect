@@ -207,8 +207,9 @@ serve(async (req) => {
       try {
         const zapiInstanceId = Deno.env.get('ZAPI_INSTANCE_ID');
         const zapiToken = Deno.env.get('ZAPI_TOKEN');
+        const zapiClientToken = Deno.env.get('ZAPI_CLIENT_TOKEN');
 
-        if (zapiInstanceId && zapiToken) {
+        if (zapiInstanceId && zapiToken && zapiClientToken) {
           const priorityEmoji = isCritical ? '🔴 CRÍTICO' : '🟢 Normal';
           const priorityText = isCritical ? 'Resolver HOJE' : `Resolver até ${dueDate}`;
           
@@ -235,7 +236,10 @@ ${priorityEmoji}
           
           const response = await fetch(zapiUrl, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+              'Content-Type': 'application/json',
+              'Client-Token': zapiClientToken,
+            },
             body: JSON.stringify({
               phone: settings.whatsapp_group_id,
               message: whatsappMessage,
@@ -243,16 +247,43 @@ ${priorityEmoji}
           });
 
           const zapiResult = await response.json();
-          console.log('WhatsApp message sent:', zapiResult);
+          console.log('WhatsApp group message sent:', zapiResult);
           
           if (zapiResult.zapiMessageId || zapiResult.messageId) {
             whatsappMessageId = zapiResult.zapiMessageId || zapiResult.messageId;
           }
         } else {
-          console.log('Z-API credentials not configured');
+          console.log('Z-API credentials not configured (need ZAPI_INSTANCE_ID, ZAPI_TOKEN, ZAPI_CLIENT_TOKEN)');
         }
       } catch (whatsappError) {
-        console.error('Error sending WhatsApp message:', whatsappError);
+        console.error('Error sending WhatsApp group message:', whatsappError);
+        // Continue - don't fail the whole operation
+      }
+    }
+
+    // ========== 2. Send WhatsApp message to client ==========
+    if (conversation_id) {
+      try {
+        const clientMessage = `📋 *Protocolo Aberto*
+
+🔖 *Número:* ${protocol_code}
+📂 *Categoria:* ${formattedCategory}
+⏰ *Prazo de resposta:* ${dueDate}
+
+Acompanharemos seu chamado e retornaremos em breve.`;
+
+        const sendResult = await supabase.functions.invoke('zapi-send-message', {
+          body: {
+            conversation_id,
+            content: clientMessage,
+            message_type: 'text',
+            sender_name: 'G7',
+          },
+        });
+
+        console.log('Client message sent:', sendResult.data);
+      } catch (clientMsgError) {
+        console.error('Error sending client message:', clientMsgError);
         // Continue - don't fail the whole operation
       }
     }

@@ -247,10 +247,24 @@ export function GenerateProtocolModal({
 
       // Call protocol-opened function if notify is enabled
       if (notifyGroup) {
+        // Get condominium name
+        const selectedCondo = availableCondominiums.find(c => c.id === condominiumId);
+        
         await supabase.functions.invoke('protocol-opened', {
           body: {
-            conversation_id: conversationId,
+            protocol_id: protocol.id,
             protocol_code: protocolCode,
+            priority,
+            category,
+            summary: summary || 'Sem descrição',
+            condominium_name: selectedCondo?.name || 'Não identificado',
+            requester_name: participant?.name || 'Não identificado',
+            requester_role: participant?.role_type || null,
+            conversation_id: conversationId,
+            contact_id: contactId,
+            condominium_id: condominiumId,
+            created_by_type: 'human',
+            participant_id: participant?.id || null,
           },
         });
       }
