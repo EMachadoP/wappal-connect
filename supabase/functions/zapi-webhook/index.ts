@@ -368,48 +368,36 @@ serve(async (req) => {
         console.log('Created new group contact:', contactRecord.id, 'for group_key:', groupKey);
       }
 
-      // For groups: find conversation ONLY by chat_id
-      const { data: convByChatId } = await supabase
+      // For groups: use thread_key = groupKey for upsert
+      const threadKey = groupKey;
+      
+      // Upsert conversation by thread_key
+      const { data: upsertedConv, error: convError } = await supabase
         .from('conversations')
-        .select('*')
-        .eq('chat_id', groupKey)
-        .maybeSingle();
+        .upsert({
+          thread_key: threadKey,
+          contact_id: contactRecord.id,
+          chat_id: groupKey,
+          status: 'open',
+        }, {
+          onConflict: 'thread_key',
+          ignoreDuplicates: false,
+        })
+        .select()
+        .single();
 
-      if (convByChatId) {
-        conversation = convByChatId;
-        console.log('Found group conversation by chat_id:', conversation.id);
-      } else {
-        // Create new conversation for this group
-        const { data: newConversation, error: convError } = await supabase
+      if (convError) {
+        console.error('Error upserting group conversation:', convError);
+        // Fallback: try to find by thread_key
+        const { data: existingConv } = await supabase
           .from('conversations')
-          .insert({
-            contact_id: contactRecord.id,
-            chat_id: groupKey,
-            status: 'open',
-            unread_count: 1,
-            last_message_at: new Date().toISOString(),
-          })
-          .select()
+          .select('*')
+          .eq('thread_key', threadKey)
           .single();
-
-        if (convError) {
-          // Handle unique constraint violation (race condition)
-          if (convError.code === '23505') {
-            const { data: existingConv } = await supabase
-              .from('conversations')
-              .select('*')
-              .eq('chat_id', groupKey)
-              .single();
-            conversation = existingConv;
-            console.log('Found existing conversation after race condition:', conversation?.id);
-          } else {
-            console.error('Error creating group conversation:', convError);
-            throw convError;
-          }
-        } else {
-          conversation = newConversation;
-          console.log('Created new group conversation:', conversation.id, 'with chat_id:', groupKey);
-        }
+        conversation = existingConv;
+      } else {
+        conversation = upsertedConv;
+        console.log('Upserted group conversation:', conversation.id, 'with thread_key:', threadKey);
       }
 
     // ========== PRIVATE CHAT HANDLING ==========
@@ -496,69 +484,53 @@ serve(async (req) => {
         }
       }
 
-      // Find/create conversation for private chat
-      if (chatId) {
-        const { data: convByChatId } = await supabase
+      // Calculate thread_key for private chat
+      // Priority: phone > lid > chat_lid
+      const threadKeyPhone = contactRecord.phone;
+      const threadKeyLid = contactRecord.lid;
+      const threadKeyChatLid = contactRecord.chat_lid;
+      const threadKey = threadKeyPhone || threadKeyLid || threadKeyChatLid || contactRecord.id;
+      
+      // Upsert conversation by thread_key
+      const { data: upsertedConv, error: convError } = await supabase
+        .from('conversations')
+        .upsert({
+          thread_key: threadKey,
+          contact_id: contactRecord.id,
+          chat_id: chatId,
+          status: 'open',
+        }, {
+          onConflict: 'thread_key',
+          ignoreDuplicates: false,
+        })
+        .select()
+        .single();
+
+      if (convError) {
+        console.error('Error upserting private conversation:', convError);
+        // Fallback: try to find by thread_key
+        const { data: existingConv } = await supabase
           .from('conversations')
           .select('*')
-          .eq('chat_id', chatId)
+          .eq('thread_key', threadKey)
           .maybeSingle();
-
-        if (convByChatId) {
-          conversation = convByChatId;
-          console.log('Found conversation by chat_id:', conversation.id);
-        }
-      }
-
-      if (!conversation) {
-        const { data: convByContact } = await supabase
-          .from('conversations')
-          .select('*')
-          .eq('contact_id', contactRecord.id)
-          .order('created_at', { ascending: true })
-          .limit(1)
-          .maybeSingle();
-
-        conversation = convByContact;
-
-        if (conversation && chatId && !conversation.chat_id) {
-          await supabase
-            .from('conversations')
-            .update({ chat_id: chatId })
-            .eq('id', conversation.id);
-          console.log('Updated conversation with chat_id:', chatId);
-        }
-      }
-
-      if (!conversation) {
-        const { data: newConversation, error: convError } = await supabase
-          .from('conversations')
-          .insert({
-            contact_id: contactRecord.id,
-            chat_id: chatId,
-            status: 'open',
-            unread_count: 1,
-            last_message_at: new Date().toISOString(),
-          })
-          .select()
-          .single();
-
-        if (convError) {
-          if (convError.code === '23505' && chatId) {
-            const { data: existingConv } = await supabase
-              .from('conversations')
-              .select('*')
-              .eq('chat_id', chatId)
-              .single();
-            conversation = existingConv;
-          } else {
-            console.error('Error creating conversation:', convError);
-            throw convError;
-          }
+        
+        if (existingConv) {
+          conversation = existingConv;
         } else {
-          conversation = newConversation;
-          console.log('Created new conversation:', conversation.id);
+          // Last resort: find by contact_id
+          const { data: convByContact } = await supabase
+            .from('conversations')
+            .select('*')
+            .eq('contact_id', contactRecord.id)
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+          conversation = convByContact;
         }
+      } else {
+        conversation = upsertedConv;
+        console.log('Upserted private conversation:', conversation.id, 'with thread_key:', threadKey);
       }
     }
 

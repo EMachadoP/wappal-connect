@@ -414,8 +414,39 @@ export default function InboxPage() {
         )
         .subscribe();
 
+      // Fallback sync: fetch new messages every 25 seconds to handle network issues
+      let lastSeenSentAt = data?.length > 0 
+        ? Math.max(...data.map((m: any) => new Date(m.sent_at).getTime())) 
+        : Date.now();
+      
+      const syncInterval = setInterval(async () => {
+        if (isCancelled) return;
+        
+        const { data: newMessages } = await supabase
+          .from('messages')
+          .select('*')
+          .in('conversation_id', conversationIds)
+          .gt('sent_at', new Date(lastSeenSentAt).toISOString())
+          .order('sent_at', { ascending: true });
+
+        if (newMessages && newMessages.length > 0) {
+          console.log('[Sync] Found', newMessages.length, 'new messages');
+          lastSeenSentAt = Math.max(...newMessages.map((m: any) => new Date(m.sent_at).getTime()));
+          
+          setMessages((prev) => {
+            const existingIds = new Set(prev.map((m) => m.id));
+            const uniqueNew = newMessages.filter((m: any) => !existingIds.has(m.id));
+            if (uniqueNew.length === 0) return prev;
+            return [...prev, ...uniqueNew].sort(
+              (a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime()
+            );
+          });
+        }
+      }, 25000);
+
       return () => {
         supabase.removeChannel(channel);
+        clearInterval(syncInterval);
       };
     };
 

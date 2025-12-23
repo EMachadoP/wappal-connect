@@ -692,6 +692,7 @@ export type Database = {
           resolved_by: string | null
           snoozed_until: string | null
           status: Database["public"]["Enums"]["conversation_status"]
+          thread_key: string
           typing_by_user_id: string | null
           typing_lock_until: string | null
           unread_count: number
@@ -720,6 +721,7 @@ export type Database = {
           resolved_by?: string | null
           snoozed_until?: string | null
           status?: Database["public"]["Enums"]["conversation_status"]
+          thread_key: string
           typing_by_user_id?: string | null
           typing_lock_until?: string | null
           unread_count?: number
@@ -748,6 +750,7 @@ export type Database = {
           resolved_by?: string | null
           snoozed_until?: string | null
           status?: Database["public"]["Enums"]["conversation_status"]
+          thread_key?: string
           typing_by_user_id?: string | null
           typing_lock_until?: string | null
           unread_count?: number
