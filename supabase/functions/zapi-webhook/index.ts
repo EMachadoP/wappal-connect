@@ -135,9 +135,20 @@ serve(async (req) => {
         .from('contacts')
         .select('*')
         .eq('phone', contactPhone)
-        .single();
+        .maybeSingle();
       
       contactRecord = existingByPhone;
+    }
+
+    // If still not found and has chatLid, try by chat_lid (stable thread id)
+    if (!contactRecord && chatLid) {
+      const { data: existingByChatLid } = await supabase
+        .from('contacts')
+        .select('*')
+        .eq('chat_lid', chatLid)
+        .maybeSingle();
+
+      contactRecord = existingByChatLid;
     }
 
     // Create new contact if not found

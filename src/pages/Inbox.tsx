@@ -17,6 +17,7 @@ interface Contact {
   profile_picture_url: string | null;
   phone: string | null;
   lid: string | null;
+  chat_lid: string | null;
   is_group?: boolean;
   whatsapp_display_name?: string | null;
 }
@@ -140,6 +141,7 @@ export default function InboxPage() {
             name,
             profile_picture_url,
             phone,
+            chat_lid,
             lid,
             is_group,
             whatsapp_display_name
@@ -153,12 +155,12 @@ export default function InboxPage() {
           title: 'Erro ao carregar conversas',
           description: error.message,
         });
-      } else if (data) {
-        const threadMap = new Map<string, any>();
+        } else if (data) {
+          const threadMap = new Map<string, any>();
 
-        for (const conv of data) {
-          const contact = (conv as any).contacts;
-          const threadKey = contact?.phone || contact?.lid || conv.contact_id;
+          for (const conv of data) {
+            const contact = (conv as any).contacts;
+            const threadKey = contact?.chat_lid || contact?.phone || contact?.lid || conv.contact_id;
           const existing = threadMap.get(threadKey);
 
           if (!existing) {
@@ -275,6 +277,7 @@ export default function InboxPage() {
             name,
             profile_picture_url,
             phone,
+            chat_lid,
             lid,
             is_group
           )
@@ -306,11 +309,13 @@ export default function InboxPage() {
 
       let threadContactIds: string[] = [contactId];
       const threadPhone = contact?.phone || null;
+      const threadChatLid = (contact as any)?.chat_lid || null;
       const threadLid = contact?.lid || null;
 
-      if (threadPhone || threadLid) {
+      if (threadChatLid || threadPhone || threadLid) {
         let q = supabase.from('contacts').select('id');
-        q = threadPhone ? q.eq('phone', threadPhone) : q.eq('lid', threadLid);
+        if (threadChatLid) q = q.eq('chat_lid', threadChatLid);
+        else q = threadPhone ? q.eq('phone', threadPhone) : q.eq('lid', threadLid);
 
         const { data: threadContacts } = await q;
         if (threadContacts?.length) {
