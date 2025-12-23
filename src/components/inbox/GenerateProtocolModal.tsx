@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FileText, Send, Building2 } from 'lucide-react';
+import { FileText, Send, Building2, Plus } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Select,
@@ -42,24 +43,97 @@ export function GenerateProtocolModal({
   onOpenChange,
   conversationId,
   contactId,
-  condominiums,
+  condominiums: contactCondominiums,
   activeCondominiumId,
   onProtocolCreated,
 }: GenerateProtocolModalProps) {
   const [loading, setLoading] = useState(false);
+  const [allCondominiums, setAllCondominiums] = useState<Condominium[]>([]);
+  const [loadingCondominiums, setLoadingCondominiums] = useState(false);
   const [condominiumId, setCondominiumId] = useState<string>(activeCondominiumId || '');
   const [category, setCategory] = useState<string>('operational');
   const [priority, setPriority] = useState<string>('normal');
   const [summary, setSummary] = useState<string>('');
   const [notifyGroup, setNotifyGroup] = useState(true);
+  const [showNewCondoForm, setShowNewCondoForm] = useState(false);
+  const [newCondoName, setNewCondoName] = useState('');
+  const [creatingCondo, setCreatingCondo] = useState(false);
+
+  // Fetch all condominiums when modal opens
+  useEffect(() => {
+    if (open) {
+      fetchAllCondominiums();
+    }
+  }, [open]);
+
+  const fetchAllCondominiums = async () => {
+    setLoadingCondominiums(true);
+    try {
+      const { data, error } = await supabase
+        .from('condominiums')
+        .select('id, name')
+        .order('name');
+
+      if (error) throw error;
+      setAllCondominiums(data || []);
+    } catch (err) {
+      console.error('Error fetching condominiums:', err);
+      setAllCondominiums([]);
+    } finally {
+      setLoadingCondominiums(false);
+    }
+  };
+
+  // Use contact condominiums first, fallback to all condominiums
+  const availableCondominiums = contactCondominiums.length > 0 
+    ? contactCondominiums 
+    : allCondominiums;
 
   useEffect(() => {
     if (activeCondominiumId) {
       setCondominiumId(activeCondominiumId);
-    } else if (condominiums.length === 1) {
-      setCondominiumId(condominiums[0].id);
+    } else if (availableCondominiums.length === 1) {
+      setCondominiumId(availableCondominiums[0].id);
     }
-  }, [activeCondominiumId, condominiums]);
+  }, [activeCondominiumId, availableCondominiums]);
+
+  const handleCreateCondominium = async () => {
+    if (!newCondoName.trim()) {
+      toast.error('Digite o nome do condomínio');
+      return;
+    }
+
+    setCreatingCondo(true);
+    try {
+      const { data, error } = await supabase
+        .from('condominiums')
+        .insert({ name: newCondoName.trim() })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Link to contact if we have one
+      if (contactId && data) {
+        await supabase.from('contact_condominiums').insert({
+          contact_id: contactId,
+          condominium_id: data.id,
+          is_default: true,
+        });
+      }
+
+      toast.success('Condomínio criado!');
+      setCondominiumId(data.id);
+      setNewCondoName('');
+      setShowNewCondoForm(false);
+      await fetchAllCondominiums();
+    } catch (err) {
+      console.error('Error creating condominium:', err);
+      toast.error('Erro ao criar condomínio');
+    } finally {
+      setCreatingCondo(false);
+    }
+  };
 
   const handleGenerateProtocol = async () => {
     if (!condominiumId) {
@@ -157,21 +231,53 @@ export function GenerateProtocolModal({
           {/* Condomínio */}
           <div className="grid gap-2">
             <Label htmlFor="condominium">Condomínio *</Label>
-            <Select value={condominiumId} onValueChange={setCondominiumId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Selecione o condomínio" />
-              </SelectTrigger>
-              <SelectContent>
-                {condominiums.map((condo) => (
-                  <SelectItem key={condo.id} value={condo.id}>
-                    <div className="flex items-center gap-2">
-                      <Building2 className="w-4 h-4" />
-                      {condo.name}
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {showNewCondoForm ? (
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Nome do condomínio"
+                  value={newCondoName}
+                  onChange={(e) => setNewCondoName(e.target.value)}
+                  className="flex-1"
+                />
+                <Button onClick={handleCreateCondominium} disabled={creatingCondo} size="sm">
+                  {creatingCondo ? 'Salvando...' : 'Salvar'}
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setShowNewCondoForm(false)}>
+                  Cancelar
+                </Button>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <Select value={condominiumId} onValueChange={setCondominiumId} disabled={loadingCondominiums}>
+                  <SelectTrigger className="flex-1">
+                    <SelectValue placeholder={loadingCondominiums ? 'Carregando...' : 'Selecione o condomínio'} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableCondominiums.map((condo) => (
+                      <SelectItem key={condo.id} value={condo.id}>
+                        <div className="flex items-center gap-2">
+                          <Building2 className="w-4 h-4" />
+                          {condo.name}
+                        </div>
+                      </SelectItem>
+                    ))}
+                    {availableCondominiums.length === 0 && !loadingCondominiums && (
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                        Nenhum condomínio cadastrado
+                      </div>
+                    )}
+                  </SelectContent>
+                </Select>
+                <Button 
+                  variant="outline" 
+                  size="icon" 
+                  onClick={() => setShowNewCondoForm(true)}
+                  title="Cadastrar novo condomínio"
+                >
+                  <Plus className="w-4 h-4" />
+                </Button>
+              </div>
+            )}
           </div>
 
           {/* Categoria */}
