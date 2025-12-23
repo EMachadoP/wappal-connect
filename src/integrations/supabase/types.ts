@@ -441,6 +441,7 @@ export type Database = {
       conversations: {
         Row: {
           assigned_to: string | null
+          chat_id: string | null
           contact_id: string
           created_at: string
           id: string
@@ -455,6 +456,7 @@ export type Database = {
         }
         Insert: {
           assigned_to?: string | null
+          chat_id?: string | null
           contact_id: string
           created_at?: string
           id?: string
@@ -469,6 +471,7 @@ export type Database = {
         }
         Update: {
           assigned_to?: string | null
+          chat_id?: string | null
           contact_id?: string
           created_at?: string
           id?: string
@@ -701,42 +704,63 @@ export type Database = {
       }
       messages: {
         Row: {
+          chat_id: string | null
+          client_message_id: string | null
           content: string | null
           conversation_id: string
           delivered_at: string | null
+          direction: string | null
           id: string
           media_url: string | null
           message_type: Database["public"]["Enums"]["message_type"]
+          provider: string | null
+          provider_message_id: string | null
+          raw_payload: Json | null
           read_at: string | null
           sender_id: string | null
           sender_type: Database["public"]["Enums"]["sender_type"]
           sent_at: string
+          status: string | null
           whatsapp_message_id: string | null
         }
         Insert: {
+          chat_id?: string | null
+          client_message_id?: string | null
           content?: string | null
           conversation_id: string
           delivered_at?: string | null
+          direction?: string | null
           id?: string
           media_url?: string | null
           message_type?: Database["public"]["Enums"]["message_type"]
+          provider?: string | null
+          provider_message_id?: string | null
+          raw_payload?: Json | null
           read_at?: string | null
           sender_id?: string | null
           sender_type: Database["public"]["Enums"]["sender_type"]
           sent_at?: string
+          status?: string | null
           whatsapp_message_id?: string | null
         }
         Update: {
+          chat_id?: string | null
+          client_message_id?: string | null
           content?: string | null
           conversation_id?: string
           delivered_at?: string | null
+          direction?: string | null
           id?: string
           media_url?: string | null
           message_type?: Database["public"]["Enums"]["message_type"]
+          provider?: string | null
+          provider_message_id?: string | null
+          raw_payload?: Json | null
           read_at?: string | null
           sender_id?: string | null
           sender_type?: Database["public"]["Enums"]["sender_type"]
           sent_at?: string
+          status?: string | null
           whatsapp_message_id?: string | null
         }
         Relationships: [
