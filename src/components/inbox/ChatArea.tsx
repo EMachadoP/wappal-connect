@@ -431,6 +431,7 @@ export function ChatArea({
           contactId={contact?.id}
           condominiums={condominiums}
           activeCondominiumId={activeCondominiumId}
+          participant={participant}
           onProtocolCreated={(code) => toast.success(`Protocolo ${code} criado`)}
         />
       )}
