@@ -102,9 +102,36 @@ serve(async (req) => {
     // Normalize chat_id - this is the KEY for conversation lookup
     const rawChatId = chatLid || phone || null;
     const chatId = normalizeChatId(rawChatId);
-    
+
     // Detect group: chatId ends with @g.us OR payload indicates group
     const isGroupChat = isGroupChatId(chatId) || Boolean(isGroup);
+
+    // In some Z-API payloads, `phone` may not include "@g.us"; prefer a stable group identifier.
+    // We only accept `phone` as group id when it clearly looks like a group key (has '-' or '@g.us').
+    const groupChatIdRaw = isGroupChat
+      ? (chatLid ||
+          (typeof phone === 'string' && (phone.includes('-') || phone.toLowerCase().includes('@g.us'))
+            ? phone
+            : null) ||
+          payload?.reaction?.referencedMessage?.phone ||
+          null)
+      : null;
+    const groupChatId = normalizeChatId(groupChatIdRaw);
+
+    const conversationKey = isGroupChat ? groupChatId : chatId;
+
+    if (isGroupChat && !conversationKey) {
+      console.log('GROUP message without stable group id (chatLid/phone). Skipping.', {
+        chatLid,
+        phone,
+        messageId,
+        chatName,
+      });
+
+      return new Response(JSON.stringify({ success: true, skipped: true }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
     
     console.log('Processing message:', { 
       fromMe: isFromMe, 
@@ -131,15 +158,13 @@ serve(async (req) => {
 
     // ========== GROUP HANDLING ==========
     if (isGroupChat) {
-      if (!chatId) {
-        throw new Error('Group message without chat_id');
-      }
+      const groupKey = conversationKey!;
 
-      // For groups: find/create contact by chat_id (the group itself)
+      // For groups: find/create contact by chat_lid (the group itself)
       const { data: existingGroupContact } = await supabase
         .from('contacts')
         .select('*')
-        .eq('chat_lid', chatId)
+        .eq('chat_lid', groupKey)
         .eq('is_group', true)
         .maybeSingle();
 
@@ -147,10 +172,13 @@ serve(async (req) => {
         contactRecord = existingGroupContact;
         // Update group name if changed
         if (chatName && chatName !== contactRecord.group_name) {
-          await supabase.from('contacts').update({ 
-            group_name: chatName,
-            name: chatName,
-          }).eq('id', contactRecord.id);
+          await supabase
+            .from('contacts')
+            .update({
+              group_name: chatName,
+              name: chatName,
+            })
+            .eq('id', contactRecord.id);
         }
       } else {
         // Create new group contact
@@ -158,7 +186,7 @@ serve(async (req) => {
         const { data: newContact, error: contactError } = await supabase
           .from('contacts')
           .insert({
-            chat_lid: chatId,
+            chat_lid: groupKey,
             name: groupName,
             is_group: true,
             group_name: groupName,
@@ -173,14 +201,14 @@ serve(async (req) => {
           throw contactError;
         }
         contactRecord = newContact;
-        console.log('Created new group contact:', contactRecord.id, 'for chat_id:', chatId);
+        console.log('Created new group contact:', contactRecord.id, 'for group_key:', groupKey);
       }
 
       // For groups: find conversation ONLY by chat_id
       const { data: convByChatId } = await supabase
         .from('conversations')
         .select('*')
-        .eq('chat_id', chatId)
+        .eq('chat_id', groupKey)
         .maybeSingle();
 
       if (convByChatId) {
@@ -192,7 +220,7 @@ serve(async (req) => {
           .from('conversations')
           .insert({
             contact_id: contactRecord.id,
-            chat_id: chatId,
+            chat_id: groupKey,
             status: 'open',
             unread_count: 1,
             last_message_at: new Date().toISOString(),
@@ -206,7 +234,7 @@ serve(async (req) => {
             const { data: existingConv } = await supabase
               .from('conversations')
               .select('*')
-              .eq('chat_id', chatId)
+              .eq('chat_id', groupKey)
               .single();
             conversation = existingConv;
             console.log('Found existing conversation after race condition:', conversation?.id);
@@ -216,7 +244,7 @@ serve(async (req) => {
           }
         } else {
           conversation = newConversation;
-          console.log('Created new group conversation:', conversation.id, 'with chat_id:', chatId);
+          console.log('Created new group conversation:', conversation.id, 'with chat_id:', groupKey);
         }
       }
 
