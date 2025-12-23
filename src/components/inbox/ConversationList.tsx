@@ -41,6 +41,7 @@ export function ConversationList({
 
   const filteredConversations = conversations
     .filter((conv) => {
+      if (!conv.contact) return false;
       const matchesSearch = conv.contact.name.toLowerCase().includes(search.toLowerCase());
       
       switch (activeTab) {
