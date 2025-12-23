@@ -141,6 +141,7 @@ const DAYS_OF_WEEK = [
 const AVAILABLE_MODELS = {
   lovable: [
     { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash (Recomendado)' },
+    { value: 'google/gemini-3-pro-preview', label: 'Gemini 3 Pro Preview' },
     { value: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
     { value: 'google/gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite (Econômico)' },
     { value: 'openai/gpt-5-mini', label: 'GPT-5 Mini' },
@@ -155,6 +156,7 @@ const AVAILABLE_MODELS = {
     { value: 'gpt-5-mini-2025-08-07', label: 'GPT-5 Mini' },
   ],
   gemini: [
+    { value: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview (Mais Recente)' },
     { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (Recomendado)' },
     { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
     { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
@@ -212,6 +214,8 @@ export default function AdminAIPage() {
   const [providerForm, setProviderForm] = useState({
     provider: 'lovable' as string,
     model: 'google/gemini-2.5-flash',
+    customModel: '',
+    useCustomModel: false,
     temperature: 0.7,
     max_tokens: 1024,
     top_p: 1.0,
@@ -364,10 +368,16 @@ export default function AdminAIPage() {
 
   const handleOpenProviderDialog = (provider?: AIProviderConfig) => {
     if (provider) {
+      // Check if the model is a custom one (not in the available models list)
+      const availableModels = AVAILABLE_MODELS[provider.provider as keyof typeof AVAILABLE_MODELS] || [];
+      const isCustomModel = !availableModels.some(m => m.value === provider.model);
+      
       setEditingProvider(provider);
       setProviderForm({
         provider: provider.provider,
-        model: provider.model,
+        model: isCustomModel ? '' : provider.model,
+        customModel: isCustomModel ? provider.model : '',
+        useCustomModel: isCustomModel,
         temperature: Number(provider.temperature),
         max_tokens: provider.max_tokens,
         top_p: Number(provider.top_p),
@@ -379,6 +389,8 @@ export default function AdminAIPage() {
       setProviderForm({
         provider: 'lovable',
         model: 'google/gemini-2.5-flash',
+        customModel: '',
+        useCustomModel: false,
         temperature: 0.7,
         max_tokens: 1024,
         top_p: 1.0,
@@ -390,13 +402,21 @@ export default function AdminAIPage() {
   };
 
   const handleSaveProvider = async () => {
+    // Determine which model to use
+    const modelToSave = providerForm.useCustomModel ? providerForm.customModel : providerForm.model;
+    
+    if (!modelToSave) {
+      toast({ variant: 'destructive', title: 'Erro', description: 'Selecione ou digite um modelo' });
+      return;
+    }
+    
     try {
       if (editingProvider) {
         const { error } = await supabase
           .from('ai_provider_configs')
           .update({
             provider: providerForm.provider,
-            model: providerForm.model,
+            model: modelToSave,
             temperature: providerForm.temperature,
             max_tokens: providerForm.max_tokens,
             top_p: providerForm.top_p,
@@ -411,7 +431,7 @@ export default function AdminAIPage() {
           .from('ai_provider_configs')
           .insert({
             provider: providerForm.provider,
-            model: providerForm.model,
+            model: modelToSave,
             temperature: providerForm.temperature,
             max_tokens: providerForm.max_tokens,
             top_p: providerForm.top_p,
@@ -1217,6 +1237,8 @@ export default function AdminAIPage() {
                       ...providerForm,
                       provider: v,
                       model: models?.[0]?.value || '',
+                      customModel: '',
+                      useCustomModel: false,
                       key_ref: v === 'lovable' ? 'LOVABLE_API_KEY' : '',
                     });
                   }}
@@ -1233,20 +1255,43 @@ export default function AdminAIPage() {
               </div>
 
               <div className="space-y-2">
-                <Label>Modelo</Label>
-                <Select
-                  value={providerForm.model}
-                  onValueChange={(v) => setProviderForm({ ...providerForm, model: v })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {AVAILABLE_MODELS[providerForm.provider as keyof typeof AVAILABLE_MODELS]?.map(m => (
-                      <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="flex items-center justify-between">
+                  <Label>Modelo</Label>
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      checked={providerForm.useCustomModel}
+                      onCheckedChange={(checked) => setProviderForm({ ...providerForm, useCustomModel: checked })}
+                    />
+                    <Label className="text-xs text-muted-foreground">Modelo custom</Label>
+                  </div>
+                </div>
+                
+                {providerForm.useCustomModel ? (
+                  <Input
+                    value={providerForm.customModel}
+                    onChange={(e) => setProviderForm({ ...providerForm, customModel: e.target.value })}
+                    placeholder="Ex: gemini-3-flash-preview"
+                  />
+                ) : (
+                  <Select
+                    value={providerForm.model}
+                    onValueChange={(v) => setProviderForm({ ...providerForm, model: v })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione um modelo" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {AVAILABLE_MODELS[providerForm.provider as keyof typeof AVAILABLE_MODELS]?.map(m => (
+                        <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  {providerForm.useCustomModel 
+                    ? 'Digite o nome exato do modelo da API (ex: gemini-3-flash-preview)'
+                    : 'Ative "Modelo custom" para usar modelos não listados'}
+                </p>
               </div>
 
               {providerForm.provider !== 'lovable' && (
