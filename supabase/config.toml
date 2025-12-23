@@ -40,7 +40,7 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.protocol-opened]
-verify_jwt = true
+verify_jwt = false
 
 [functions.group-resolution-handler]
 verify_jwt = false
