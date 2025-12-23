@@ -508,11 +508,16 @@ export default function InboxPage() {
   };
 
   const handleResolveConversation = async () => {
-    if (!activeConversationId) return;
+    if (!activeConversationId || !user) return;
 
     const { error } = await supabase
       .from('conversations')
-      .update({ status: 'resolved' })
+      .update({ 
+        status: 'resolved',
+        unread_count: 0,
+        resolved_at: new Date().toISOString(),
+        resolved_by: user.id,
+      })
       .eq('id', activeConversationId);
 
     if (error) {
@@ -524,6 +529,12 @@ export default function InboxPage() {
     } else {
       toast({ title: 'Conversa resolvida' });
       setActiveConversationStatus('resolved');
+      // Refresh conversations list
+      setConversations(prev => prev.map(c => 
+        c.id === activeConversationId 
+          ? { ...c, status: 'resolved', unread_count: 0 }
+          : c
+      ));
       if (isMobile) {
         handleBackToList();
       } else {
@@ -540,6 +551,8 @@ export default function InboxPage() {
       .update({ 
         status: 'open',
         assigned_to: user.id,
+        resolved_at: null,
+        resolved_by: null,
       })
       .eq('id', activeConversationId);
 
@@ -552,6 +565,12 @@ export default function InboxPage() {
     } else {
       toast({ title: 'Conversa reaberta' });
       setActiveConversationStatus('open');
+      // Refresh conversations list
+      setConversations(prev => prev.map(c => 
+        c.id === activeConversationId 
+          ? { ...c, status: 'open' }
+          : c
+      ));
     }
   };
 

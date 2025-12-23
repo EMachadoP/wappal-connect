@@ -27,7 +27,7 @@ interface ConversationListProps {
   isMobile?: boolean;
 }
 
-type TabValue = 'mine' | 'unassigned' | 'all' | 'resolved';
+type TabValue = 'new' | 'all' | 'resolved';
 
 export function ConversationList({
   conversations,
@@ -37,19 +37,20 @@ export function ConversationList({
   isMobile = false,
 }: ConversationListProps) {
   const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState<TabValue>('mine');
+  const [activeTab, setActiveTab] = useState<TabValue>('new');
 
   const filteredConversations = conversations.filter((conv) => {
     const matchesSearch = conv.contact.name.toLowerCase().includes(search.toLowerCase());
     
     switch (activeTab) {
-      case 'mine':
-        return matchesSearch && conv.assigned_to === userId && conv.status === 'open';
-      case 'unassigned':
-        return matchesSearch && !conv.assigned_to && conv.status === 'open';
+      case 'new':
+        // Novas: status='open' AND unread_count>0
+        return matchesSearch && conv.status === 'open' && conv.unread_count > 0;
       case 'all':
-        return matchesSearch && conv.status === 'open';
+        // Todas: status!='resolved'
+        return matchesSearch && conv.status !== 'resolved';
       case 'resolved':
+        // Resolvidas: status='resolved'
         return matchesSearch && conv.status === 'resolved';
       default:
         return matchesSearch;
@@ -57,9 +58,8 @@ export function ConversationList({
   });
 
   const countByTab = {
-    mine: conversations.filter(c => c.assigned_to === userId && c.status === 'open').length,
-    unassigned: conversations.filter(c => !c.assigned_to && c.status === 'open').length,
-    all: conversations.filter(c => c.status === 'open').length,
+    new: conversations.filter(c => c.status === 'open' && c.unread_count > 0).length,
+    all: conversations.filter(c => c.status !== 'resolved').length,
     resolved: conversations.filter(c => c.status === 'resolved').length,
   };
 
@@ -78,18 +78,12 @@ export function ConversationList({
       </div>
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabValue)} className="shrink-0 border-b border-border">
-        <TabsList className="w-full h-auto p-0 bg-transparent grid grid-cols-4">
+        <TabsList className="w-full h-auto p-0 bg-transparent grid grid-cols-3">
           <TabsTrigger
-            value="mine"
+            value="new"
             className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent text-xs px-1"
           >
-            Minha ({countByTab.mine})
-          </TabsTrigger>
-          <TabsTrigger
-            value="unassigned"
-            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent text-xs px-1"
-          >
-            Novas ({countByTab.unassigned})
+            Novas ({countByTab.new})
           </TabsTrigger>
           <TabsTrigger
             value="all"
@@ -101,7 +95,7 @@ export function ConversationList({
             value="resolved"
             className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent text-xs px-1"
           >
-            Resolvidas
+            Resolvidas ({countByTab.resolved})
           </TabsTrigger>
         </TabsList>
       </Tabs>
