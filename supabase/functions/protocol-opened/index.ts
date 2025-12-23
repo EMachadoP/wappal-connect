@@ -9,6 +9,53 @@ const corsHeaders = {
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
+// ============== UTILITY FUNCTIONS ==============
+
+// Title Case PT-BR: capitaliza palavras, mantém preposições em minúsculo
+function titleCasePtBR(input: string): string {
+  if (!input) return input;
+  const keepLower = new Set(["de", "da", "do", "das", "dos", "e", "em", "no", "na", "nos", "nas", "por", "para", "com"]);
+  return input
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .map((word, index) => {
+      if (index > 0 && keepLower.has(word)) return word;
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(" ");
+}
+
+// Traduzir categoria para português
+function translateCategory(category: string): string {
+  const map: Record<string, string> = {
+    'operational': 'Operacional',
+    'support': 'Suporte',
+    'financial': 'Financeiro',
+    'commercial': 'Comercial',
+    'admin': 'Administrativo',
+  };
+  return map[category] || 'Operacional';
+}
+
+// Traduzir prioridade para português
+function translatePriority(priority: string): string {
+  return priority === 'critical' ? 'Crítico' : 'Normal';
+}
+
+// Traduzir role para português
+function translateRole(role: string): string {
+  const map: Record<string, string> = {
+    'porteiro': 'Porteiro',
+    'sindico': 'Síndico',
+    'síndico': 'Síndico',
+    'administrador': 'Administrador',
+    'morador': 'Morador',
+    'fornecedor': 'Fornecedor',
+  };
+  return map[role?.toLowerCase()] || role || 'Não informada';
+}
+
 // Calculate next business day (skip weekends)
 function getNextBusinessDay(date: Date, daysToAdd: number): Date {
   const result = new Date(date);
@@ -56,9 +103,15 @@ serve(async (req) => {
       conversation_id,
       contact_id,
       condominium_id,
+      // Novos campos de auditoria
+      created_by_type,
+      created_by_agent_id,
+      customer_text,
+      ai_summary,
+      participant_id,
     } = await req.json();
 
-    console.log('Protocol opened:', { protocol_code, priority, category });
+    console.log('Protocol opened:', { protocol_code, priority, category, condominium_name, requester_name });
 
     // Check if protocol already has Asana task (idempotency)
     const { data: existingProtocol } = await supabase
@@ -97,22 +150,38 @@ serve(async (req) => {
     let whatsappMessageId: string | null = null;
     let asanaTaskGid: string | null = null;
 
+    // Formatar dados para exibição
+    const formattedCondominiumName = titleCasePtBR(condominium_name) || 'Não identificado';
+    const formattedRequesterName = requester_name || 'Não identificado';
+    const formattedRequesterRole = translateRole(requester_role);
+    const formattedCategory = translateCategory(category || 'operational');
+    const formattedPriority = translatePriority(priority || 'normal');
+
     // Create protocol record if it doesn't exist
     if (!protocolId && !existingProtocol) {
+      const insertData: Record<string, unknown> = {
+        protocol_code,
+        conversation_id,
+        contact_id,
+        condominium_id,
+        status: 'open',
+        priority: priority || 'normal',
+        category: category || 'operational',
+        summary,
+        requester_name: formattedRequesterName,
+        requester_role: formattedRequesterRole,
+      };
+
+      // Adicionar campos de auditoria se fornecidos
+      if (created_by_type) insertData.created_by_type = created_by_type;
+      if (created_by_agent_id) insertData.created_by_agent_id = created_by_agent_id;
+      if (customer_text) insertData.customer_text = customer_text;
+      if (ai_summary) insertData.ai_summary = ai_summary;
+      if (participant_id) insertData.participant_id = participant_id;
+
       const { data: newProtocol, error: createError } = await supabase
         .from('protocols')
-        .insert({
-          protocol_code,
-          conversation_id,
-          contact_id,
-          condominium_id,
-          status: 'open',
-          priority: priority || 'normal',
-          category: category || 'operational',
-          summary,
-          requester_name,
-          requester_role,
-        })
+        .insert(insertData)
         .select()
         .single();
 
@@ -141,15 +210,15 @@ serve(async (req) => {
 
         if (zapiInstanceId && zapiToken) {
           const priorityEmoji = isCritical ? '🔴 CRÍTICO' : '🟢 Normal';
-          const priorityText = isCritical ? 'CRÍTICO - Resolver HOJE' : 'Normal - Resolver até ' + dueDate;
+          const priorityText = isCritical ? 'Resolver HOJE' : `Resolver até ${dueDate}`;
           
           const whatsappMessage = `📋 *NOVO PROTOCOLO*
 
 🔖 *Protocolo:* ${protocol_code}
-🏢 *Condomínio:* ${condominium_name || 'Não informado'}
-👤 *Solicitante:* ${requester_name || 'Não identificado'}
-📌 *Função:* ${requester_role || 'Não informada'}
-📂 *Categoria:* ${(category || 'operational').toUpperCase()}
+🏢 *Condomínio:* ${formattedCondominiumName}
+👤 *Solicitante:* ${formattedRequesterName}
+📌 *Função:* ${formattedRequesterRole}
+📂 *Categoria:* ${formattedCategory}
 
 📝 *Resumo:*
 ${summary || 'Sem descrição'}
@@ -212,18 +281,30 @@ ${priorityEmoji}
               break;
           }
 
+          // ===== TÍTULO PADRONIZADO =====
+          // Formato: [G7-YYYYMMDD-NNNN] Nome do Condomínio
+          const asanaTaskName = `[${protocol_code}] ${formattedCondominiumName}`;
+
+          // ===== DESCRIÇÃO PADRONIZADA EM PORTUGUÊS =====
+          const asanaNotes = `📋 Protocolo: ${protocol_code}
+🏢 Condomínio: ${formattedCondominiumName}
+👤 Solicitante: ${formattedRequesterName}
+📌 Função: ${formattedRequesterRole}
+📂 Categoria: ${formattedCategory}
+⚡ Prioridade: ${formattedPriority}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📝 Resumo do Chamado:
+${summary || 'Sem descrição'}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ Para encerrar: "${protocol_code} - Resolvido"`;
+
           const taskData: Record<string, unknown> = {
             data: {
-              name: `[${protocol_code}] ${summary || 'Novo protocolo'}`,
-              notes: `Protocolo: ${protocol_code}
-Condomínio: ${condominium_name || 'Não informado'}
-Solicitante: ${requester_name || 'Não identificado'}
-Função: ${requester_role || 'Não informada'}
-Categoria: ${category || 'operational'}
-Prioridade: ${priority || 'normal'}
-
-Resumo:
-${summary || 'Sem descrição'}`,
+              name: asanaTaskName,
+              notes: asanaNotes,
               due_on: dueDate,
               projects: [settings.asana_project_id],
             },
@@ -237,7 +318,7 @@ ${summary || 'Sem descrição'}`,
             }];
           }
 
-          console.log('Creating Asana task:', JSON.stringify(taskData));
+          console.log('Creating Asana task:', asanaTaskName);
 
           const asanaResponse = await fetch('https://app.asana.com/api/1.0/tasks', {
             method: 'POST',
