@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { ArrowLeft, Merge, Trash2, Users, MessageSquare, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Merge, Trash2, Users, MessageSquare, AlertTriangle, Wrench } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -36,6 +36,7 @@ export default function AdminDuplicates() {
   const [loading, setLoading] = useState(true);
   const [merging, setMerging] = useState<string | null>(null);
   const [confirmMerge, setConfirmMerge] = useState<DuplicateGroup | null>(null);
+  const [fixingGroups, setFixingGroups] = useState(false);
 
   useEffect(() => {
     fetchDuplicates();
