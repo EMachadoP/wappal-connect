@@ -162,10 +162,14 @@ export function ChatArea({
   }, []);
 
   const scrollToBottom = useCallback((smooth = true) => {
-    bottomRef.current?.scrollIntoView({ 
-      behavior: smooth ? 'smooth' : 'auto',
-      block: 'end' 
-    });
+    const container = messagesContainerRef.current;
+    if (container) {
+      if (smooth) {
+        container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+      } else {
+        container.scrollTop = container.scrollHeight;
+      }
+    }
   }, []);
 
   // Handle scroll to detect if user is at bottom
@@ -183,8 +187,12 @@ export function ChatArea({
 
   // Scroll to bottom on initial load or conversation change
   useEffect(() => {
-    scrollToBottom(false);
-    setShouldAutoScroll(true);
+    // Small delay to ensure DOM is updated
+    const timer = setTimeout(() => {
+      scrollToBottom(false);
+      setShouldAutoScroll(true);
+    }, 50);
+    return () => clearTimeout(timer);
   }, [conversationId, scrollToBottom]);
 
   const handleSend = useCallback(() => {
