@@ -413,6 +413,26 @@ export default function InboxPage() {
   const handleSendMessage = async (content: string) => {
     if (!activeConversationId || !user) return;
 
+    // Pause AI when human sends message (human takes control until manually returned)
+    if (activeAiMode === 'AUTO') {
+      await supabase
+        .from('conversations')
+        .update({
+          ai_mode: 'OFF',
+          human_control: true,
+        })
+        .eq('id', activeConversationId);
+
+      await supabase.from('ai_events').insert({
+        conversation_id: activeConversationId,
+        event_type: 'human_takeover',
+        message: '👤 Atendimento assumido por operador humano.',
+      });
+
+      setActiveAiMode('OFF');
+      setActiveHumanControl(true);
+    }
+
     const requestPayload = {
       conversation_id: activeConversationId,
       content,
