@@ -60,6 +60,7 @@ serve(async (req) => {
 
     // Get sender name if sender_id provided
     let senderName: string | null = null;
+    let agentId: string | null = sender_id || null;
     if (sender_id) {
       const { data: profile } = await supabase
         .from('profiles')
@@ -116,6 +117,8 @@ serve(async (req) => {
         conversation_id: conversation_id,
         sender_type: 'agent',
         sender_id: sender_id || null,
+        agent_id: agentId,
+        agent_name: senderName,
         message_type: message_type,
         content: content,
         media_url: media_url || null,
@@ -146,8 +149,8 @@ serve(async (req) => {
     // Z-API base URL
     const zapiBaseUrl = `https://api.z-api.io/instances/${zapiInstanceId}/token/${zapiToken}`;
 
-    // Prefix message with agent name
-    const prefixedContent = senderName && content 
+    // Prefix message with agent name only for groups
+    const prefixedContent = isGroup && senderName && content 
       ? `*${senderName}:*\n${content}` 
       : content;
 
@@ -269,7 +272,10 @@ serve(async (req) => {
   } catch (error) {
     console.error('Send message error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return new Response(JSON.stringify({ error: errorMessage }), {
+    return new Response(JSON.stringify({ 
+      error: errorMessage, 
+      details: error instanceof Error ? { stack: error.stack } : null 
+    }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
