@@ -12,6 +12,7 @@ import Admin from "./pages/Admin";
 import AdminAI from "./pages/AdminAI";
 import AdminKnowledge from "./pages/AdminKnowledge";
 import AdminZAPI from "./pages/AdminZAPI";
+import AdminContacts from "./pages/AdminContacts";
 import Status from "./pages/Status";
 import NotFound from "./pages/NotFound";
 
@@ -33,6 +34,7 @@ const App = () => (
             <Route path="/admin/ai" element={<AdminAI />} />
             <Route path="/admin/knowledge" element={<AdminKnowledge />} />
             <Route path="/admin/zapi" element={<AdminZAPI />} />
+            <Route path="/admin/contacts" element={<AdminContacts />} />
             <Route path="/inbox/:id" element={<Inbox />} />
             <Route path="/status" element={<Status />} />
             <Route path="*" element={<NotFound />} />
