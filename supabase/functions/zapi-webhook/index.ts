@@ -137,7 +137,8 @@ serve(async (req) => {
       fromMe: isFromMe, 
       type, 
       messageId, 
-      chatId, 
+      chatId,
+      conversationKey,
       direction, 
       isGroup: isGroupChat,
       participantPhone,
@@ -454,7 +455,9 @@ serve(async (req) => {
       displayContent = content ? `[${msgSenderName}]: ${content}` : `[${msgSenderName}]`;
     }
 
-    // INSERT MESSAGE
+    // INSERT MESSAGE - use conversationKey for groups to ensure consistency
+    const messageChatId = isGroupChat ? conversationKey : chatId;
+
     const { data: message, error: msgError } = await supabase
       .from('messages')
       .insert({
@@ -465,7 +468,7 @@ serve(async (req) => {
         media_url: mediaUrl,
         provider: 'zapi',
         provider_message_id: messageId || null,
-        chat_id: chatId,
+        chat_id: messageChatId,
         direction: direction,
         status: 'delivered',
         raw_payload: payload,
