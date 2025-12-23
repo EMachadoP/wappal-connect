@@ -863,7 +863,6 @@ Após perguntar, isso será registrado e não precisará perguntar novamente.
       try {
         // Generate protocol code
         const now = new Date();
-        const yearMonth = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
         const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
         
         // Get next sequence for today
@@ -875,15 +874,125 @@ Após perguntar, isso será registrado e não precisará perguntar novamente.
         const nextSeq = (existingProtocols?.length || 0) + 1;
         const protocolCode = `G7-${dateStr}-${String(nextSeq).padStart(4, '0')}`;
         
-        // Determine category based on conversation history
+        // ========== BUSCAR DADOS ESTRUTURADOS (PRIORIDADE) ==========
+        
+        // 1. Buscar condomínio do active_condominium_id da conversa
+        let condominiumName = 'Não identificado';
+        let condominiumId: string | null = conversation.active_condominium_id || null;
+        
+        if (condominiumId) {
+          // Tentar buscar de entities primeiro
+          const { data: entityData } = await supabase
+            .from('entities')
+            .select('name')
+            .eq('id', condominiumId)
+            .single();
+          
+          if (entityData?.name) {
+            condominiumName = entityData.name;
+          } else {
+            // Fallback para condominiums table
+            const { data: condoData } = await supabase
+              .from('condominiums')
+              .select('name')
+              .eq('id', condominiumId)
+              .single();
+            
+            if (condoData?.name) {
+              condominiumName = condoData.name;
+            }
+          }
+        }
+        
+        // 2. Buscar solicitante do conversation_participant_state
+        let requesterName = 'Não identificado';
+        let requesterRole = 'Não informado';
+        let participantId: string | null = null;
+        
+        const { data: participantState } = await supabase
+          .from('conversation_participant_state')
+          .select('current_participant_id')
+          .eq('conversation_id', conversation_id)
+          .maybeSingle();
+        
+        if (participantState?.current_participant_id) {
+          participantId = participantState.current_participant_id;
+          
+          const { data: participantData } = await supabase
+            .from('participants')
+            .select('name, role_type, entity_id, entities:entity_id(name)')
+            .eq('id', participantId)
+            .single();
+          
+          if (participantData) {
+            requesterName = participantData.name || requesterName;
+            requesterRole = participantData.role_type || requesterRole;
+            
+            // Se não temos condomínio ainda, pegar do participant
+            if (condominiumName === 'Não identificado' && participantData.entities) {
+              const entities = participantData.entities as unknown;
+              const entityInfo = Array.isArray(entities) ? entities[0] : entities;
+              if (entityInfo && typeof entityInfo === 'object' && 'name' in entityInfo) {
+                condominiumName = (entityInfo as { name: string }).name;
+              }
+            }
+          }
+        } else {
+          // Fallback: buscar participante primário do contato
+          if (contact?.id) {
+            const { data: primaryParticipant } = await supabase
+              .from('participants')
+              .select('id, name, role_type, entity_id, entities:entity_id(name)')
+              .eq('contact_id', contact.id)
+              .eq('is_primary', true)
+              .single();
+            
+            if (primaryParticipant) {
+              participantId = primaryParticipant.id;
+              requesterName = primaryParticipant.name || requesterName;
+              requesterRole = primaryParticipant.role_type || requesterRole;
+              
+              if (condominiumName === 'Não identificado' && primaryParticipant.entities) {
+                const entities = primaryParticipant.entities as unknown;
+                const entityInfo = Array.isArray(entities) ? entities[0] : entities;
+                if (entityInfo && typeof entityInfo === 'object' && 'name' in entityInfo) {
+                  condominiumName = (entityInfo as { name: string }).name;
+                }
+              }
+            }
+          }
+        }
+        
+        // 3. Fallback: tentar extrair do contato
+        if (requesterName === 'Não identificado' && contact?.name) {
+          requesterName = contact.name;
+        }
+        
+        // 4. Se ainda não temos condomínio, tentar de contact_condominiums (default)
+        if (condominiumName === 'Não identificado' && contact?.id) {
+          const { data: contactCondo } = await supabase
+            .from('contact_condominiums')
+            .select('condominiums:condominium_id(id, name)')
+            .eq('contact_id', contact.id)
+            .eq('is_default', true)
+            .single();
+          
+          if (contactCondo?.condominiums) {
+            const condos = contactCondo.condominiums as unknown;
+            const condo = Array.isArray(condos) ? condos[0] : condos;
+            if (condo && typeof condo === 'object' && 'name' in condo && 'id' in condo) {
+              condominiumName = (condo as { name: string }).name;
+              condominiumId = (condo as { id: string }).id;
+            }
+          }
+        }
+        
+        // ========== DETERMINAR CATEGORIA E PRIORIDADE ==========
         let category = 'operational';
         let priority = 'normal';
         const fullHistory = conversationHistory.map(m => m.content).join(' ').toLowerCase();
         
         // Detect category
-        if (/portão|cerca|cftv|câmera|semáforo|alarme/i.test(fullHistory)) {
-          category = 'operational';
-        }
         if (/interfone|tv|antena|controle|tag|cartão/i.test(fullHistory)) {
           category = 'support';
         }
@@ -901,33 +1010,22 @@ Após perguntar, isso será registrado e não precisará perguntar novamente.
           }
         }
         
-        // Build summary from last user messages
+        // Build summary from last user messages (customer_text para auditoria)
         const userMsgs = conversationHistory.filter(m => m.role === 'user');
-        const summary = userMsgs.slice(-3).map(m => m.content).join(' ').substring(0, 500);
+        const customerText = userMsgs.slice(-3).map(m => m.content).join('\n\n');
+        const summary = customerText.substring(0, 500);
         
-        // Get condominium name from conversation context
-        let condominiumName = 'Não identificado';
-        const condoMatch = fullHistory.match(/condomínio[:\s]+([^,.\n]+)/i) 
-          || fullHistory.match(/(residencial|edifício|torre)\s+([^,.\n]+)/i);
-        if (condoMatch) {
-          condominiumName = condoMatch[1] || condoMatch[2] || 'Não identificado';
-        }
+        console.log('Protocol data (structured):', { 
+          protocolCode, 
+          condominiumName, 
+          requesterName, 
+          requesterRole, 
+          category, 
+          priority,
+          participantId 
+        });
         
-        // Get requester from context
-        let requesterName = contact?.name || 'Não identificado';
-        let requesterRole = 'Não informado';
-        
-        const nameMatch = fullHistory.match(/(?:aqui\s+é|sou\s+o?a?\s*|meu\s+nome\s+é)\s*([A-ZÀ-Ú][a-zà-ú]+(?:\s+[A-ZÀ-Ú][a-zà-ú]+)?)/i);
-        if (nameMatch) {
-          requesterName = nameMatch[1];
-        }
-        
-        if (/porteir[oa]/i.test(fullHistory)) requesterRole = 'porteiro';
-        if (/síndic[oa]/i.test(fullHistory)) requesterRole = 'síndico';
-        if (/administrador[a]?/i.test(fullHistory)) requesterRole = 'administrador';
-        if (/morador[a]?/i.test(fullHistory)) requesterRole = 'morador';
-        
-        // Call protocol-opened
+        // Call protocol-opened with all data
         const protocolUrl = `${supabaseUrl}/functions/v1/protocol-opened`;
         fetch(protocolUrl, {
           method: 'POST',
@@ -941,10 +1039,15 @@ Após perguntar, isso será registrado e não precisará perguntar novamente.
             category,
             summary,
             condominium_name: condominiumName,
+            condominium_id: condominiumId,
             requester_name: requesterName,
             requester_role: requesterRole,
             conversation_id: conversation_id,
             contact_id: contact?.id,
+            // Campos de auditoria
+            created_by_type: 'ai',
+            customer_text: customerText,
+            participant_id: participantId,
           }),
         }).then(res => res.json()).then(result => {
           console.log('Protocol-opened result:', result);
