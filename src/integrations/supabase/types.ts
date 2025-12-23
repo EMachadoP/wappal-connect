@@ -1241,14 +1241,19 @@ export type Database = {
       }
       protocols: {
         Row: {
+          ai_summary: string | null
           asana_task_gid: string | null
           category: string | null
           condominium_id: string | null
           contact_id: string | null
           conversation_id: string | null
           created_at: string
+          created_by_agent_id: string | null
+          created_by_type: string | null
+          customer_text: string | null
           due_date: string | null
           id: string
+          participant_id: string | null
           priority: string
           protocol_code: string
           requester_name: string | null
@@ -1262,14 +1267,19 @@ export type Database = {
           whatsapp_group_message_id: string | null
         }
         Insert: {
+          ai_summary?: string | null
           asana_task_gid?: string | null
           category?: string | null
           condominium_id?: string | null
           contact_id?: string | null
           conversation_id?: string | null
           created_at?: string
+          created_by_agent_id?: string | null
+          created_by_type?: string | null
+          customer_text?: string | null
           due_date?: string | null
           id?: string
+          participant_id?: string | null
           priority?: string
           protocol_code: string
           requester_name?: string | null
@@ -1283,14 +1293,19 @@ export type Database = {
           whatsapp_group_message_id?: string | null
         }
         Update: {
+          ai_summary?: string | null
           asana_task_gid?: string | null
           category?: string | null
           condominium_id?: string | null
           contact_id?: string | null
           conversation_id?: string | null
           created_at?: string
+          created_by_agent_id?: string | null
+          created_by_type?: string | null
+          customer_text?: string | null
           due_date?: string | null
           id?: string
+          participant_id?: string | null
           priority?: string
           protocol_code?: string
           requester_name?: string | null
@@ -1323,6 +1338,20 @@ export type Database = {
             columns: ["conversation_id"]
             isOneToOne: false
             referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "protocols_created_by_agent_id_fkey"
+            columns: ["created_by_agent_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "protocols_participant_id_fkey"
+            columns: ["participant_id"]
+            isOneToOne: false
+            referencedRelation: "participants"
             referencedColumns: ["id"]
           },
         ]
