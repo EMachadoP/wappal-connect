@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FileText, Send, Building2, Plus } from 'lucide-react';
+import { FileText, Send, Building2, Plus, CheckCircle2 } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -28,6 +28,19 @@ interface Condominium {
   name: string;
 }
 
+interface Entity {
+  id: string;
+  name: string;
+  type: string;
+}
+
+interface Participant {
+  id: string;
+  name: string;
+  role_type?: string | null;
+  entity?: Entity | null;
+}
+
 interface GenerateProtocolModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -35,6 +48,7 @@ interface GenerateProtocolModalProps {
   contactId?: string;
   condominiums: Condominium[];
   activeCondominiumId?: string | null;
+  participant?: Participant | null;
   onProtocolCreated?: (protocolCode: string) => void;
 }
 
@@ -45,6 +59,7 @@ export function GenerateProtocolModal({
   contactId,
   condominiums: contactCondominiums,
   activeCondominiumId,
+  participant,
   onProtocolCreated,
 }: GenerateProtocolModalProps) {
   const [loading, setLoading] = useState(false);
@@ -58,6 +73,7 @@ export function GenerateProtocolModal({
   const [showNewCondoForm, setShowNewCondoForm] = useState(false);
   const [newCondoName, setNewCondoName] = useState('');
   const [creatingCondo, setCreatingCondo] = useState(false);
+  const [entityMatchedCondo, setEntityMatchedCondo] = useState<Condominium | null>(null);
 
   // Fetch all condominiums when modal opens
   useEffect(() => {
@@ -76,6 +92,27 @@ export function GenerateProtocolModal({
 
       if (error) throw error;
       setAllCondominiums(data || []);
+
+      // Try to match entity name with condominium
+      if (participant?.entity?.name && data) {
+        const entityName = participant.entity.name.toLowerCase();
+        const matchedCondo = data.find(c => 
+          c.name.toLowerCase() === entityName ||
+          c.name.toLowerCase().includes(entityName) ||
+          entityName.includes(c.name.toLowerCase())
+        );
+        
+        if (matchedCondo) {
+          setEntityMatchedCondo(matchedCondo);
+          if (!activeCondominiumId) {
+            setCondominiumId(matchedCondo.id);
+          }
+        } else {
+          setEntityMatchedCondo(null);
+          // Pre-fill new condo name with entity name if no match
+          setNewCondoName(participant.entity.name);
+        }
+      }
     } catch (err) {
       console.error('Error fetching condominiums:', err);
       setAllCondominiums([]);
@@ -92,10 +129,12 @@ export function GenerateProtocolModal({
   useEffect(() => {
     if (activeCondominiumId) {
       setCondominiumId(activeCondominiumId);
+    } else if (entityMatchedCondo) {
+      setCondominiumId(entityMatchedCondo.id);
     } else if (availableCondominiums.length === 1) {
       setCondominiumId(availableCondominiums[0].id);
     }
-  }, [activeCondominiumId, availableCondominiums]);
+  }, [activeCondominiumId, availableCondominiums, entityMatchedCondo]);
 
   const handleCreateCondominium = async () => {
     if (!newCondoName.trim()) {
@@ -133,6 +172,12 @@ export function GenerateProtocolModal({
     } finally {
       setCreatingCondo(false);
     }
+  };
+
+  const handleUseEntityAsCondominium = async () => {
+    if (!participant?.entity?.name) return;
+    setNewCondoName(participant.entity.name);
+    setShowNewCondoForm(true);
   };
 
   const handleGenerateProtocol = async () => {
@@ -173,16 +218,23 @@ export function GenerateProtocolModal({
           summary: summary || null,
           status: 'open',
           created_by_type: 'human',
+          requester_name: participant?.name || null,
+          requester_role: participant?.role_type || null,
         })
         .select()
         .single();
 
       if (error) throw error;
 
-      // Update conversation with protocol
+      // Update conversation with protocol and condominium
       await supabase
         .from('conversations')
-        .update({ protocol: protocolCode })
+        .update({ 
+          protocol: protocolCode,
+          active_condominium_id: condominiumId,
+          active_condominium_set_by: 'human',
+          active_condominium_set_at: new Date().toISOString(),
+        })
         .eq('id', conversationId);
 
       // Log event
@@ -214,6 +266,9 @@ export function GenerateProtocolModal({
     }
   };
 
+  // Show entity info if available and no condominium selected
+  const showEntitySuggestion = participant?.entity && !condominiumId && !entityMatchedCondo && !showNewCondoForm;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px]">
@@ -228,9 +283,44 @@ export function GenerateProtocolModal({
         </DialogHeader>
 
         <div className="grid gap-4 py-4">
+          {/* Participant Info - show if identified */}
+          {participant && (
+            <div className="flex items-center gap-2 p-3 bg-muted/50 rounded-lg text-sm">
+              <CheckCircle2 className="w-4 h-4 text-green-500" />
+              <span className="text-muted-foreground">Remetente:</span>
+              <span className="font-medium">{participant.name}</span>
+              {participant.role_type && (
+                <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded">
+                  {participant.role_type}
+                </span>
+              )}
+              {participant.entity && (
+                <>
+                  <span className="text-muted-foreground">•</span>
+                  <Building2 className="w-3.5 h-3.5 text-muted-foreground" />
+                  <span>{participant.entity.name}</span>
+                </>
+              )}
+            </div>
+          )}
+
           {/* Condomínio */}
           <div className="grid gap-2">
             <Label htmlFor="condominium">Condomínio *</Label>
+            
+            {/* Entity suggestion when no condominium matched */}
+            {showEntitySuggestion && (
+              <div className="flex items-center gap-2 p-2 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-md text-sm">
+                <Building2 className="w-4 h-4 text-amber-600" />
+                <span className="flex-1">
+                  Usar <strong>{participant.entity!.name}</strong> como condomínio?
+                </span>
+                <Button size="sm" variant="outline" onClick={handleUseEntityAsCondominium}>
+                  Cadastrar
+                </Button>
+              </div>
+            )}
+
             {showNewCondoForm ? (
               <div className="flex gap-2">
                 <Input
