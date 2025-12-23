@@ -103,33 +103,67 @@ Deno.serve(async (req) => {
         const isGroup = chat.isGroup || false;
         const contactName = chat.name || chat.phone;
         const phone = chat.phone;
+        const groupKey = isGroup ? phone.trim().toLowerCase() : null;
 
         // Check if contact exists
-        let { data: existingContact, error: contactFetchError } = await supabase
-          .from('contacts')
-          .select('id')
-          .eq('phone', phone)
-          .maybeSingle();
+        // - For groups: prefer chat_lid match (stable group key) to avoid creating duplicate group contacts
+        // - For 1:1: keep existing behavior (phone)
+        let existingContact: { id: string } | null = null;
 
-        if (contactFetchError) {
-          console.error('Error fetching contact:', contactFetchError);
-          errors++;
-          continue;
+        if (isGroup && groupKey) {
+          const { data, error: byChatLidErr } = await supabase
+            .from('contacts')
+            .select('id')
+            .eq('is_group', true)
+            .eq('chat_lid', groupKey)
+            .maybeSingle();
+
+          if (byChatLidErr) {
+            console.error('Error fetching group contact by chat_lid:', byChatLidErr);
+            errors++;
+            continue;
+          }
+
+          existingContact = data;
+        }
+
+        if (!existingContact) {
+          const { data, error: contactFetchError } = await supabase
+            .from('contacts')
+            .select('id')
+            .eq('phone', phone)
+            .maybeSingle();
+
+          if (contactFetchError) {
+            console.error('Error fetching contact:', contactFetchError);
+            errors++;
+            continue;
+          }
+
+          existingContact = data;
         }
 
         let contactId: string;
 
         if (existingContact) {
           // Update existing contact
+          const updates: Record<string, unknown> = {
+            name: contactName,
+            profile_picture_url: chat.profileThumbnail || null,
+            is_group: isGroup,
+            group_name: isGroup ? contactName : null,
+            updated_at: new Date().toISOString(),
+          };
+
+          if (isGroup && groupKey) {
+            updates.chat_lid = groupKey;
+            updates.lid_source = 'zapi_sync_history';
+            updates.lid_collected_at = new Date().toISOString();
+          }
+
           const { error: updateError } = await supabase
             .from('contacts')
-            .update({
-              name: contactName,
-              profile_picture_url: chat.profileThumbnail || null,
-              is_group: isGroup,
-              group_name: isGroup ? contactName : null,
-              updated_at: new Date().toISOString(),
-            })
+            .update(updates)
             .eq('id', existingContact.id);
 
           if (updateError) {
@@ -142,15 +176,23 @@ Deno.serve(async (req) => {
           updated++;
         } else {
           // Create new contact
+          const insertData: Record<string, unknown> = {
+            phone: phone,
+            name: contactName,
+            profile_picture_url: chat.profileThumbnail || null,
+            is_group: isGroup,
+            group_name: isGroup ? contactName : null,
+          };
+
+          if (isGroup && groupKey) {
+            insertData.chat_lid = groupKey;
+            insertData.lid_source = 'zapi_sync_history';
+            insertData.lid_collected_at = new Date().toISOString();
+          }
+
           const { data: newContact, error: insertError } = await supabase
             .from('contacts')
-            .insert({
-              phone: phone,
-              name: contactName,
-              profile_picture_url: chat.profileThumbnail || null,
-              is_group: isGroup,
-              group_name: isGroup ? contactName : null,
-            })
+            .insert(insertData)
             .select('id')
             .single();
 
@@ -164,16 +206,31 @@ Deno.serve(async (req) => {
           created++;
         }
 
-        // Check if conversation exists for this contact
-        const { data: existingConversation } = await supabase
-          .from('conversations')
-          .select('id')
-          .eq('contact_id', contactId)
-          .maybeSingle();
+        // Check if conversation exists for this chat
+        // - For groups: prefer chat_id = groupKey to keep a single thread
+        let existingConversation: { id: string; chat_id?: string | null } | null = null;
+
+        if (isGroup && groupKey) {
+          const { data } = await supabase
+            .from('conversations')
+            .select('id, chat_id')
+            .eq('chat_id', groupKey)
+            .maybeSingle();
+          existingConversation = data as any;
+        }
+
+        if (!existingConversation) {
+          const { data } = await supabase
+            .from('conversations')
+            .select('id, chat_id')
+            .eq('contact_id', contactId)
+            .maybeSingle();
+          existingConversation = data as any;
+        }
 
         if (!existingConversation) {
           // Create conversation
-          const lastMessageAt = chat.lastMessageTime 
+          const lastMessageAt = chat.lastMessageTime
             ? new Date(parseInt(chat.lastMessageTime) * 1000).toISOString()
             : new Date().toISOString();
 
@@ -181,18 +238,24 @@ Deno.serve(async (req) => {
             .from('conversations')
             .insert({
               contact_id: contactId,
+              chat_id: isGroup ? groupKey : null,
               status: 'open',
               unread_count: parseInt(chat.unread) || 0,
               last_message_at: lastMessageAt,
             });
 
           if (convError) {
-            console.error('Error creating conversation:', convError);
-            errors++;
+            // Unique chat_id race: fetch the existing one and move on
+            if (convError.code === '23505' && isGroup && groupKey) {
+              console.log('Conversation already exists for group chat_id, skipping create:', groupKey);
+            } else {
+              console.error('Error creating conversation:', convError);
+              errors++;
+            }
           }
         } else {
           // Update conversation with unread count
-          const lastMessageAt = chat.lastMessageTime 
+          const lastMessageAt = chat.lastMessageTime
             ? new Date(parseInt(chat.lastMessageTime) * 1000).toISOString()
             : null;
 
@@ -205,10 +268,11 @@ Deno.serve(async (req) => {
             updateData.last_message_at = lastMessageAt;
           }
 
-          await supabase
-            .from('conversations')
-            .update(updateData)
-            .eq('id', existingConversation.id);
+          if (isGroup && groupKey && !existingConversation.chat_id) {
+            updateData.chat_id = groupKey;
+          }
+
+          await supabase.from('conversations').update(updateData).eq('id', existingConversation.id);
         }
 
       } catch (chatError) {
