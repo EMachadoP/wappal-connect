@@ -14,6 +14,50 @@ export type Database = {
   }
   public: {
     Tables: {
+      agents: {
+        Row: {
+          can_close_protocols: boolean
+          created_at: string
+          id: string
+          is_active: boolean
+          name: string
+          phone: string | null
+          profile_id: string | null
+          role: string | null
+          updated_at: string
+        }
+        Insert: {
+          can_close_protocols?: boolean
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          name: string
+          phone?: string | null
+          profile_id?: string | null
+          role?: string | null
+          updated_at?: string
+        }
+        Update: {
+          can_close_protocols?: boolean
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          name?: string
+          phone?: string | null
+          profile_id?: string | null
+          role?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agents_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ai_conversation_state: {
         Row: {
           ai_disabled_reason: string | null
@@ -757,6 +801,48 @@ export type Database = {
         }
         Relationships: []
       }
+      integrations_settings: {
+        Row: {
+          asana_enabled: boolean
+          asana_project_id: string | null
+          asana_section_admin: string | null
+          asana_section_financeiro: string | null
+          asana_section_operacional: string | null
+          asana_section_support: string | null
+          created_at: string
+          id: string
+          updated_at: string
+          whatsapp_group_id: string | null
+          whatsapp_notifications_enabled: boolean
+        }
+        Insert: {
+          asana_enabled?: boolean
+          asana_project_id?: string | null
+          asana_section_admin?: string | null
+          asana_section_financeiro?: string | null
+          asana_section_operacional?: string | null
+          asana_section_support?: string | null
+          created_at?: string
+          id?: string
+          updated_at?: string
+          whatsapp_group_id?: string | null
+          whatsapp_notifications_enabled?: boolean
+        }
+        Update: {
+          asana_enabled?: boolean
+          asana_project_id?: string | null
+          asana_section_admin?: string | null
+          asana_section_financeiro?: string | null
+          asana_section_operacional?: string | null
+          asana_section_support?: string | null
+          created_at?: string
+          id?: string
+          updated_at?: string
+          whatsapp_group_id?: string | null
+          whatsapp_notifications_enabled?: boolean
+        }
+        Relationships: []
+      }
       kb_embeddings: {
         Row: {
           created_at: string
@@ -1149,6 +1235,94 @@ export type Database = {
             columns: ["team_id"]
             isOneToOne: false
             referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      protocols: {
+        Row: {
+          asana_task_gid: string | null
+          category: string | null
+          condominium_id: string | null
+          contact_id: string | null
+          conversation_id: string | null
+          created_at: string
+          due_date: string | null
+          id: string
+          priority: string
+          protocol_code: string
+          requester_name: string | null
+          requester_role: string | null
+          resolved_at: string | null
+          resolved_by_agent_id: string | null
+          resolved_by_name: string | null
+          status: string
+          summary: string | null
+          updated_at: string
+          whatsapp_group_message_id: string | null
+        }
+        Insert: {
+          asana_task_gid?: string | null
+          category?: string | null
+          condominium_id?: string | null
+          contact_id?: string | null
+          conversation_id?: string | null
+          created_at?: string
+          due_date?: string | null
+          id?: string
+          priority?: string
+          protocol_code: string
+          requester_name?: string | null
+          requester_role?: string | null
+          resolved_at?: string | null
+          resolved_by_agent_id?: string | null
+          resolved_by_name?: string | null
+          status?: string
+          summary?: string | null
+          updated_at?: string
+          whatsapp_group_message_id?: string | null
+        }
+        Update: {
+          asana_task_gid?: string | null
+          category?: string | null
+          condominium_id?: string | null
+          contact_id?: string | null
+          conversation_id?: string | null
+          created_at?: string
+          due_date?: string | null
+          id?: string
+          priority?: string
+          protocol_code?: string
+          requester_name?: string | null
+          requester_role?: string | null
+          resolved_at?: string | null
+          resolved_by_agent_id?: string | null
+          resolved_by_name?: string | null
+          status?: string
+          summary?: string | null
+          updated_at?: string
+          whatsapp_group_message_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "protocols_condominium_id_fkey"
+            columns: ["condominium_id"]
+            isOneToOne: false
+            referencedRelation: "condominiums"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "protocols_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "protocols_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
             referencedColumns: ["id"]
           },
         ]
