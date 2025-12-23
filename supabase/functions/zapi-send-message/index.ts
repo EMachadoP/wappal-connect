@@ -25,7 +25,7 @@ serve(async (req) => {
   try {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
-    const { conversation_id, content, message_type = 'text', media_url, sender_id, client_message_id: providedClientId } = await req.json();
+    const { conversation_id, content, message_type = 'text', media_url, sender_id, client_message_id: providedClientId, sender_name: providedSenderName } = await req.json();
 
     if (!conversation_id || (!content && !media_url)) {
       return new Response(JSON.stringify({ error: 'Missing required fields' }), {
@@ -56,12 +56,14 @@ serve(async (req) => {
       });
     }
 
-    console.log('Sending message:', { conversation_id, message_type, clientMessageId, sender_id });
+    console.log('Sending message:', { conversation_id, message_type, clientMessageId, sender_id, providedSenderName });
 
-    // Get sender name if sender_id provided
-    let senderName: string | null = null;
+    // Get sender name - priority: providedSenderName > profile name lookup > "G7"
+    let senderName: string | null = providedSenderName || null;
     let agentId: string | null = sender_id || null;
-    if (sender_id) {
+    
+    // If no providedSenderName but we have sender_id, look up the profile
+    if (!senderName && sender_id) {
       const { data: profile } = await supabase
         .from('profiles')
         .select('name')
@@ -71,6 +73,11 @@ serve(async (req) => {
       if (profile?.name) {
         senderName = profile.name;
       }
+    }
+    
+    // Fallback to "G7" if still no name
+    if (!senderName) {
+      senderName = 'G7';
     }
 
     // Get conversation and contact
@@ -149,10 +156,15 @@ serve(async (req) => {
     // Z-API base URL
     const zapiBaseUrl = `https://api.z-api.io/instances/${zapiInstanceId}/token/${zapiToken}`;
 
-    // Prefix message with agent name only for groups
-    const prefixedContent = isGroup && senderName && content 
-      ? `*${senderName}:*\n${content}` 
-      : content;
+    // Prefix message with agent name (always, for consistency in WhatsApp)
+    // Only add prefix if content doesn't already start with *Name:*
+    let prefixedContent = content;
+    if (content && senderName) {
+      const prefixPattern = /^\*[^*]+:\*\s*/;
+      if (!prefixPattern.test(content)) {
+        prefixedContent = `*${senderName}:*\n${content}`;
+      }
+    }
 
     let zapiEndpoint: string;
     let zapiBody: Record<string, unknown>;
