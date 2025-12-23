@@ -35,6 +35,7 @@ interface AISettings {
   anti_spam_seconds: number;
   max_messages_per_hour: number;
   human_request_pause_hours: number;
+  schedule_json: ScheduleJson;
 }
 
 interface AITeamSettings {
@@ -249,7 +250,26 @@ export default function AdminAIPage() {
         .single();
       
       if (settingsData) {
-        setSettings(settingsData as AISettings);
+        // Cast schedule_json properly
+        const scheduleJson = settingsData.schedule_json as unknown as ScheduleJson | null;
+        const defaultSchedule: ScheduleJson = {
+          days: {
+            monday: { enabled: true, start: '08:00', end: '18:00' },
+            tuesday: { enabled: true, start: '08:00', end: '18:00' },
+            wednesday: { enabled: true, start: '08:00', end: '18:00' },
+            thursday: { enabled: true, start: '08:00', end: '18:00' },
+            friday: { enabled: true, start: '08:00', end: '18:00' },
+            saturday: { enabled: true, start: '08:00', end: '12:00' },
+            sunday: { enabled: false, start: '08:00', end: '12:00' },
+          },
+          exceptions: [],
+        };
+        
+        setSettings({
+          ...settingsData,
+          policies_json: settingsData.policies_json as Record<string, unknown> ?? {},
+          schedule_json: scheduleJson ?? defaultSchedule,
+        } as AISettings);
       }
 
       // Fetch team settings
@@ -323,6 +343,7 @@ export default function AdminAIPage() {
           anti_spam_seconds: settings.anti_spam_seconds,
           max_messages_per_hour: settings.max_messages_per_hour,
           human_request_pause_hours: settings.human_request_pause_hours,
+          schedule_json: settings.schedule_json as unknown as Json,
         })
         .eq('id', settings.id);
 
@@ -661,6 +682,67 @@ export default function AdminAIPage() {
                       className="w-32"
                     />
                   </div>
+                </CardContent>
+              </Card>
+
+              {/* Global Schedule Card */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Horário de Funcionamento Global da IA</CardTitle>
+                  <CardDescription>
+                    Define quando a IA responde automaticamente. Aplica-se a todas as conversas sem configuração de equipe.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-3">
+                    {DAYS_OF_WEEK.map(day => {
+                      const daySchedule = settings?.schedule_json?.days?.[day.key] || { enabled: false, start: '08:00', end: '18:00' };
+                      return (
+                        <div key={day.key} className="flex items-center gap-4 p-3 border rounded-lg">
+                          <Switch
+                            checked={daySchedule.enabled}
+                            onCheckedChange={(checked) => {
+                              if (!settings) return;
+                              const newSchedule = { ...settings.schedule_json };
+                              newSchedule.days[day.key] = { ...daySchedule, enabled: checked };
+                              setSettings({ ...settings, schedule_json: newSchedule });
+                            }}
+                          />
+                          <span className="w-24 font-medium">{day.label}</span>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type="time"
+                              value={daySchedule.start}
+                              onChange={(e) => {
+                                if (!settings) return;
+                                const newSchedule = { ...settings.schedule_json };
+                                newSchedule.days[day.key] = { ...daySchedule, start: e.target.value };
+                                setSettings({ ...settings, schedule_json: newSchedule });
+                              }}
+                              disabled={!daySchedule.enabled}
+                              className="w-32"
+                            />
+                            <span className="text-muted-foreground">até</span>
+                            <Input
+                              type="time"
+                              value={daySchedule.end}
+                              onChange={(e) => {
+                                if (!settings) return;
+                                const newSchedule = { ...settings.schedule_json };
+                                newSchedule.days[day.key] = { ...daySchedule, end: e.target.value };
+                                setSettings({ ...settings, schedule_json: newSchedule });
+                              }}
+                              disabled={!daySchedule.enabled}
+                              className="w-32"
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    Fora do horário, a IA envia a mensagem de fallback configurada no prompt.
+                  </p>
                 </CardContent>
               </Card>
 

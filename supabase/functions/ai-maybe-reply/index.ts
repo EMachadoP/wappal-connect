@@ -242,8 +242,9 @@ serve(async (req) => {
       }
     }
 
-    // Check schedule - Default is 24/7 when no team settings configured
-    const schedule = (teamSettings?.schedule_json || {
+    // Check schedule - Priority: teamSettings > global settings > 24/7 default
+    // First check if settings has a schedule_json, otherwise use 24/7 as fallback
+    const globalSchedule = settings.schedule_json || {
       days: {
         monday: { enabled: true, start: '00:00', end: '23:59' },
         tuesday: { enabled: true, start: '00:00', end: '23:59' },
@@ -254,7 +255,10 @@ serve(async (req) => {
         sunday: { enabled: true, start: '00:00', end: '23:59' },
       },
       exceptions: [],
-    }) as ScheduleJson;
+    };
+    
+    // Use team settings schedule if available, otherwise use global schedule
+    const schedule = (teamSettings?.schedule_json || globalSchedule) as ScheduleJson;
 
     const scheduleResult = isWithinSchedule(schedule, settings.timezone);
 

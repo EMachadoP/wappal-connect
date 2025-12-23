@@ -176,6 +176,7 @@ export type Database = {
           max_messages_per_hour: number
           memory_message_count: number
           policies_json: Json | null
+          schedule_json: Json | null
           timezone: string
           updated_at: string
         }
@@ -191,6 +192,7 @@ export type Database = {
           max_messages_per_hour?: number
           memory_message_count?: number
           policies_json?: Json | null
+          schedule_json?: Json | null
           timezone?: string
           updated_at?: string
         }
@@ -206,6 +208,7 @@ export type Database = {
           max_messages_per_hour?: number
           memory_message_count?: number
           policies_json?: Json | null
+          schedule_json?: Json | null
           timezone?: string
           updated_at?: string
         }
