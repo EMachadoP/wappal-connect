@@ -227,13 +227,70 @@ serve(async (req) => {
     let mergedConversations = 0;
     let movedMessages = 0;
 
-    for (const [groupKey, items] of byKey.entries()) {
+    for (const [groupKey, itemsRaw] of byKey.entries()) {
+      // Deduplicate by convId
+      const uniq = new Map<string, { convId: string; created_at: string; contact_id: string }>();
+      for (const it of itemsRaw) uniq.set(it.convId, it);
+      const items = Array.from(uniq.values());
+
       if (items.length <= 1) continue;
 
-      // Choose primary as earliest created
-      items.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-      const primary = items[0];
-      const duplicates = items.slice(1);
+      // Prefer a conversation that already owns chat_id=groupKey as primary (prevents leaving primary without chat_id)
+      const { data: ownerConv, error: ownerErr } = await supabaseAdmin
+        .from("conversations")
+        .select("id, created_at, contact_id")
+        .eq("chat_id", groupKey)
+        .maybeSingle();
+      if (ownerErr) throw ownerErr;
+
+      let primary = ownerConv
+        ? { convId: ownerConv.id, created_at: ownerConv.created_at, contact_id: ownerConv.contact_id }
+        : items.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())[0];
+
+      // Ensure primary has the correct chat_id/contact key
+      if (!dryRun) {
+        const { error: ensureChatIdErr } = await supabaseAdmin
+          .from("conversations")
+          .update({ chat_id: groupKey })
+          .eq("id", primary.convId);
+        if (ensureChatIdErr && ensureChatIdErr.code !== "23505") throw ensureChatIdErr;
+
+        const { data: primaryConvRow, error: primaryRowErr } = await supabaseAdmin
+          .from("conversations")
+          .select("contact_id")
+          .eq("id", primary.convId)
+          .single();
+        if (primaryRowErr) throw primaryRowErr;
+
+        const { error: ensureContactErr } = await supabaseAdmin
+          .from("contacts")
+          .update({ chat_lid: groupKey })
+          .eq("id", primaryConvRow.contact_id);
+
+        if (ensureContactErr) {
+          if (ensureContactErr.code === "23505") {
+            const { data: existingContact, error: findErr } = await supabaseAdmin
+              .from("contacts")
+              .select("id")
+              .eq("is_group", true)
+              .eq("chat_lid", groupKey)
+              .maybeSingle();
+            if (findErr) throw findErr;
+            if (existingContact?.id) {
+              const { error: relinkErr } = await supabaseAdmin
+                .from("conversations")
+                .update({ contact_id: existingContact.id })
+                .eq("id", primary.convId);
+              if (relinkErr) throw relinkErr;
+            }
+          } else {
+            throw ensureContactErr;
+          }
+        }
+      }
+
+      const duplicates = items.filter((x) => x.convId !== primary.convId);
+      if (duplicates.length === 0) continue;
 
       if (!dryRun) {
         for (const dup of duplicates) {
@@ -253,10 +310,7 @@ serve(async (req) => {
             metadata: { merged_from: dup.convId, group_key: groupKey, merged_at: new Date().toISOString() },
           });
 
-          const { error: delErr } = await supabaseAdmin
-            .from("conversations")
-            .delete()
-            .eq("id", dup.convId);
+          const { error: delErr } = await supabaseAdmin.from("conversations").delete().eq("id", dup.convId);
           if (delErr) throw delErr;
 
           mergedConversations++;

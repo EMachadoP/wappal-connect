@@ -33,22 +33,33 @@ interface DuplicateGroup {
 export default function AdminDuplicates() {
   const navigate = useNavigate();
   const [duplicates, setDuplicates] = useState<DuplicateGroup[]>([]);
+  const [groupMissingKey, setGroupMissingKey] = useState<
+    {
+      id: string;
+      contact_id: string;
+      contact_name: string;
+      created_at: string;
+      last_message_at: string | null;
+      message_count: number;
+    }[]
+  >([]);
   const [loading, setLoading] = useState(true);
   const [merging, setMerging] = useState<string | null>(null);
   const [confirmMerge, setConfirmMerge] = useState<DuplicateGroup | null>(null);
   const [fixingGroups, setFixingGroups] = useState(false);
 
   useEffect(() => {
-    fetchDuplicates();
+    refresh();
   }, []);
 
-  async function fetchDuplicates() {
+  async function refresh() {
     setLoading(true);
     try {
-      // Find conversations with duplicate chat_ids
+      // 1) Duplicate chat_id groups (should be rare now due to unique constraint)
       const { data: convs, error } = await supabase
-        .from('conversations')
-        .select(`
+        .from("conversations")
+        .select(
+          `
           id,
           chat_id,
           contact_id,
@@ -56,30 +67,27 @@ export default function AdminDuplicates() {
           last_message_at,
           created_at,
           contacts!inner(name, is_group, group_name)
-        `)
-        .not('chat_id', 'is', null)
-        .order('chat_id')
-        .order('created_at', { ascending: true });
+        `
+        )
+        .not("chat_id", "is", null)
+        .order("chat_id")
+        .order("created_at", { ascending: true });
 
       if (error) throw error;
 
-      // Group by chat_id and find duplicates
-      const grouped: Record<string, DuplicateGroup['conversations']> = {};
-      
+      const grouped: Record<string, DuplicateGroup["conversations"]> = {};
+
       for (const conv of convs || []) {
         const chatId = conv.chat_id!;
-        if (!grouped[chatId]) {
-          grouped[chatId] = [];
-        }
-        
-        // Get message count for this conversation
+        if (!grouped[chatId]) grouped[chatId] = [];
+
         const { count } = await supabase
-          .from('messages')
-          .select('*', { count: 'exact', head: true })
-          .eq('conversation_id', conv.id);
+          .from("messages")
+          .select("*", { count: "exact", head: true })
+          .eq("conversation_id", conv.id);
 
         const contact = conv.contacts as { name: string; is_group: boolean; group_name: string | null };
-        
+
         grouped[chatId].push({
           id: conv.id,
           contact_id: conv.contact_id,
@@ -91,20 +99,59 @@ export default function AdminDuplicates() {
         });
       }
 
-      // Filter to only those with duplicates
       const duplicateGroups: DuplicateGroup[] = Object.entries(grouped)
         .filter(([_, convs]) => convs.length > 1)
         .map(([chat_id, conversations]) => ({
           chat_id,
-          conversations: conversations.sort((a, b) => 
-            new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          conversations: conversations.sort(
+            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
           ),
         }));
 
       setDuplicates(duplicateGroups);
+
+      // 2) Group conversations missing stable chat_id (this is what causes "grupo espalhado")
+      const { data: groupConvs, error: gErr } = await supabase
+        .from("conversations")
+        .select(
+          `
+          id,
+          contact_id,
+          created_at,
+          last_message_at,
+          contacts!inner(name, is_group, group_name)
+        `
+        )
+        .is("chat_id", null)
+        .eq("contacts.is_group", true)
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (gErr) throw gErr;
+
+      const issues: typeof groupMissingKey = [];
+      for (const conv of groupConvs || []) {
+        const { count } = await supabase
+          .from("messages")
+          .select("*", { count: "exact", head: true })
+          .eq("conversation_id", conv.id);
+
+        const contact = conv.contacts as { name: string; is_group: boolean; group_name: string | null };
+
+        issues.push({
+          id: conv.id,
+          contact_id: conv.contact_id,
+          contact_name: contact.group_name || contact.name,
+          created_at: conv.created_at,
+          last_message_at: conv.last_message_at,
+          message_count: count || 0,
+        });
+      }
+
+      setGroupMissingKey(issues);
     } catch (error) {
-      console.error('Error fetching duplicates:', error);
-      toast.error('Erro ao buscar duplicados');
+      console.error("Error refreshing duplicates:", error);
+      toast.error("Erro ao buscar inconsistências");
     } finally {
       setLoading(false);
     }
@@ -172,20 +219,20 @@ export default function AdminDuplicates() {
   async function handleFixGroupDuplicates() {
     setFixingGroups(true);
     try {
-      const { data, error } = await supabase.functions.invoke('zapi-fix-group-duplicates', {
+      const { data, error } = await supabase.functions.invoke("zapi-fix-group-duplicates", {
         body: { dryRun: false, limit: 500 },
       });
 
       if (error) throw error;
 
-      toast.success('Correção de grupos concluída', {
+      toast.success("Correção de grupos concluída", {
         description: `Normalizadas: ${data?.normalized ?? 0} • Mescladas: ${data?.mergedConversations ?? 0} • Mensagens movidas: ${data?.movedMessages ?? 0} • Sem chave: ${data?.skippedNoKey ?? 0}`,
       });
 
-      fetchDuplicates();
+      refresh();
     } catch (err) {
-      console.error('Error fixing group duplicates:', err);
-      toast.error('Erro ao corrigir grupos antigos');
+      console.error("Error fixing group duplicates:", err);
+      toast.error("Erro ao corrigir grupos antigos");
     } finally {
       setFixingGroups(false);
     }
@@ -213,24 +260,58 @@ export default function AdminDuplicates() {
         <div className="flex justify-between items-center gap-2 flex-wrap">
           <div className="flex items-center gap-2 text-muted-foreground">
             <AlertTriangle className="h-4 w-4" />
-            <span>{duplicates.length} grupo(s) de duplicados encontrado(s)</span>
+            <span>
+              {duplicates.length} duplicado(s) por chat_id • {groupMissingKey.length} grupo(s) sem chat_id
+            </span>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" onClick={handleFixGroupDuplicates} disabled={loading || fixingGroups}>
               <Wrench className="h-4 w-4 mr-2" />
-              {fixingGroups ? 'Corrigindo...' : 'Corrigir grupos antigos'}
+              {fixingGroups ? "Corrigindo..." : "Corrigir grupos antigos"}
             </Button>
-            <Button variant="outline" onClick={fetchDuplicates} disabled={loading || fixingGroups}>
-              {loading ? 'Buscando...' : 'Atualizar'}
+            <Button variant="outline" onClick={refresh} disabled={loading || fixingGroups}>
+              {loading ? "Buscando..." : "Atualizar"}
             </Button>
           </div>
         </div>
+
+        {groupMissingKey.length > 0 && !loading && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Grupos sem chat_id (causa conversas espalhadas)</CardTitle>
+              <CardDescription>
+                Essas conversas foram criadas sem um identificador estável do grupo. Clique em “Corrigir grupos antigos”.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div className="divide-y">
+                {groupMissingKey.map((conv) => (
+                  <div key={conv.id} className="p-4 flex items-center justify-between gap-4">
+                    <div>
+                      <p className="font-medium">{conv.contact_name}</p>
+                      <p className="text-sm text-muted-foreground">
+                        Criada em: {new Date(conv.created_at).toLocaleString("pt-BR")}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                      <div className="flex items-center gap-1">
+                        <MessageSquare className="h-4 w-4" />
+                        {conv.message_count} msgs
+                      </div>
+                      <Badge variant="secondary">Sem chat_id</Badge>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {duplicates.length === 0 && !loading ? (
           <Card>
             <CardContent className="py-12 text-center text-muted-foreground">
               <Users className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>Nenhuma conversa duplicada encontrada</p>
+              <p>Nenhuma conversa duplicada por chat_id encontrada</p>
             </CardContent>
           </Card>
         ) : (
@@ -240,24 +321,14 @@ export default function AdminDuplicates() {
                 <div className="flex items-center justify-between">
                   <div>
                     <CardTitle className="text-base flex items-center gap-2">
-                      {isGroupChat(group.chat_id) && (
-                        <Badge variant="secondary">Grupo</Badge>
-                      )}
-                      <code className="text-sm bg-background px-2 py-1 rounded">
-                        {group.chat_id}
-                      </code>
+                      {isGroupChat(group.chat_id) && <Badge variant="secondary">Grupo</Badge>}
+                      <code className="text-sm bg-background px-2 py-1 rounded">{group.chat_id}</code>
                     </CardTitle>
-                    <CardDescription>
-                      {group.conversations.length} conversas com o mesmo identificador
-                    </CardDescription>
+                    <CardDescription>{group.conversations.length} conversas com o mesmo identificador</CardDescription>
                   </div>
-                  <Button
-                    size="sm"
-                    onClick={() => setConfirmMerge(group)}
-                    disabled={merging === group.chat_id}
-                  >
+                  <Button size="sm" onClick={() => setConfirmMerge(group)} disabled={merging === group.chat_id}>
                     <Merge className="h-4 w-4 mr-2" />
-                    {merging === group.chat_id ? 'Mesclando...' : 'Mesclar'}
+                    {merging === group.chat_id ? "Mesclando..." : "Mesclar"}
                   </Button>
                 </div>
               </CardHeader>
@@ -266,9 +337,7 @@ export default function AdminDuplicates() {
                   {group.conversations.map((conv, index) => (
                     <div
                       key={conv.id}
-                      className={`p-4 flex items-center justify-between ${
-                        index === 0 ? 'bg-green-50 dark:bg-green-900/10' : ''
-                      }`}
+                      className={`p-4 flex items-center justify-between ${index === 0 ? "bg-green-50 dark:bg-green-900/10" : ""}`}
                     >
                       <div className="flex items-center gap-3">
                         <div className="flex-shrink-0">
@@ -286,7 +355,7 @@ export default function AdminDuplicates() {
                         <div>
                           <p className="font-medium">{conv.contact_name}</p>
                           <p className="text-sm text-muted-foreground">
-                            Criada em: {new Date(conv.created_at).toLocaleString('pt-BR')}
+                            Criada em: {new Date(conv.created_at).toLocaleString("pt-BR")}
                           </p>
                         </div>
                       </div>
@@ -295,9 +364,7 @@ export default function AdminDuplicates() {
                           <MessageSquare className="h-4 w-4" />
                           {conv.message_count} msgs
                         </div>
-                        <Badge variant={conv.status === 'open' ? 'default' : 'secondary'}>
-                          {conv.status}
-                        </Badge>
+                        <Badge variant={conv.status === "open" ? "default" : "secondary"}>{conv.status}</Badge>
                       </div>
                     </div>
                   ))}
