@@ -240,6 +240,25 @@ serve(async (req) => {
       }
     }
 
+    // FILTER OUT CALL NOTIFICATIONS - these are not actual messages
+    const notification = sanitizeString(payload.notification, 100);
+    const CALL_NOTIFICATIONS = [
+      'CALL_VOICE', 'CALL_MISSED_VOICE', 'CALL_VIDEO', 'CALL_MISSED_VIDEO',
+      'CALL_MISSED_GROUP_VOICE', 'CALL_MISSED_GROUP_VIDEO'
+    ];
+    
+    if (notification && CALL_NOTIFICATIONS.includes(notification)) {
+      console.log('Ignoring call notification:', notification, 'for', chatName || phone);
+      return new Response(JSON.stringify({ 
+        success: true, 
+        skipped: true,
+        reason: 'call_notification',
+        notification_type: notification,
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     const isFromMe = Boolean(fromMe);
     const direction = isFromMe ? 'outbound' : 'inbound';
     
