@@ -6,8 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-internal-secret',
 };
 
-// Audio transcription constants
-const AUDIO_ACK_MESSAGE = "Recebi seu áudio 👍 Estou verificando aqui e já te retorno.";
+// Audio transcription constants (no ack message - just transcribe silently)
 
 // Transcribe audio using Lovable AI Gateway (Gemini)
 // deno-lint-ignore no-explicit-any
@@ -699,17 +698,7 @@ serve(async (req) => {
       if (!existingTranscript) {
         console.log('Audio needs transcription');
         
-        // Send acknowledgment message first
-        await supabase.functions.invoke('zapi-send-message', {
-          body: {
-            conversation_id: conversation_id,
-            content: AUDIO_ACK_MESSAGE,
-            message_type: 'text',
-            sender_name: 'Ana Mônica',
-          },
-        });
-        
-        // Transcribe the audio
+        // Transcribe the audio silently (no ack message)
         const { transcript, error: transcriptError } = await transcribeAudio(
           supabase,
           lastInboundMsg.media_url,
