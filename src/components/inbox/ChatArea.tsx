@@ -16,7 +16,7 @@ interface Message {
   message_type: string;
   media_url?: string | null;
   sent_at: string;
-  sender_type: string;
+  sender_type: 'contact' | 'agent' | 'system';
   sender_id?: string | null;
   delivered_at?: string | null;
   read_at?: string | null;
@@ -307,6 +307,7 @@ export function ChatArea({
                 mediaUrl={msg.media_url}
                 sentAt={msg.sent_at}
                 isOutgoing={msg.sender_type === 'agent'}
+                isSystem={msg.sender_type === 'system'}
                 deliveredAt={msg.delivered_at}
                 readAt={msg.read_at}
                 senderName={msg.agent_name || (msg.sender_type === 'agent' ? getSenderName(msg.sender_id || msg.agent_id) : null)}
