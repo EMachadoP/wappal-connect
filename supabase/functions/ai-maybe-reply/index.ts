@@ -848,6 +848,121 @@ Após perguntar, isso será registrado e não precisará perguntar novamente.
 
     console.log('Sending sanitized AI response:', sanitizedResponse.substring(0, 200));
 
+    // DETECT PROTOCOL CREATION - When AI says "Chamado registrado" or similar
+    const protocolCreationPatterns = [
+      /chamado\s+registrado/i,
+      /protocolo\s*:\s*G7-/i,
+      /vou\s+registrar\s+o\s+chamado/i,
+    ];
+    
+    const isCreatingProtocol = protocolCreationPatterns.some(p => p.test(sanitizedResponse));
+    
+    if (isCreatingProtocol && conversation) {
+      console.log('Detected protocol creation in AI response, triggering protocol-opened');
+      
+      try {
+        // Generate protocol code
+        const now = new Date();
+        const yearMonth = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+        const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+        
+        // Get next sequence for today
+        const { data: existingProtocols } = await supabase
+          .from('protocols')
+          .select('protocol_code')
+          .like('protocol_code', `G7-${dateStr}-%`);
+        
+        const nextSeq = (existingProtocols?.length || 0) + 1;
+        const protocolCode = `G7-${dateStr}-${String(nextSeq).padStart(4, '0')}`;
+        
+        // Determine category based on conversation history
+        let category = 'operational';
+        let priority = 'normal';
+        const fullHistory = conversationHistory.map(m => m.content).join(' ').toLowerCase();
+        
+        // Detect category
+        if (/portão|cerca|cftv|câmera|semáforo|alarme/i.test(fullHistory)) {
+          category = 'operational';
+        }
+        if (/interfone|tv|antena|controle|tag|cartão/i.test(fullHistory)) {
+          category = 'support';
+        }
+        if (/boleto|nota|cobrança|fatura|pagamento/i.test(fullHistory)) {
+          category = 'financial';
+        }
+        if (/orçamento|contrato|proposta|valor/i.test(fullHistory)) {
+          category = 'commercial';
+        }
+        
+        // Detect priority (critical if gate/fence/cftv completely down)
+        if (/não\s+(abre|funciona|liga)|travad[oa]|fora\s+do\s+ar|inoperante|todas\s+as\s+câmeras/i.test(fullHistory)) {
+          if (/portão|cerca|cftv|câmera/i.test(fullHistory)) {
+            priority = 'critical';
+          }
+        }
+        
+        // Build summary from last user messages
+        const userMsgs = conversationHistory.filter(m => m.role === 'user');
+        const summary = userMsgs.slice(-3).map(m => m.content).join(' ').substring(0, 500);
+        
+        // Get condominium name from conversation context
+        let condominiumName = 'Não identificado';
+        const condoMatch = fullHistory.match(/condomínio[:\s]+([^,.\n]+)/i) 
+          || fullHistory.match(/(residencial|edifício|torre)\s+([^,.\n]+)/i);
+        if (condoMatch) {
+          condominiumName = condoMatch[1] || condoMatch[2] || 'Não identificado';
+        }
+        
+        // Get requester from context
+        let requesterName = contact?.name || 'Não identificado';
+        let requesterRole = 'Não informado';
+        
+        const nameMatch = fullHistory.match(/(?:aqui\s+é|sou\s+o?a?\s*|meu\s+nome\s+é)\s*([A-ZÀ-Ú][a-zà-ú]+(?:\s+[A-ZÀ-Ú][a-zà-ú]+)?)/i);
+        if (nameMatch) {
+          requesterName = nameMatch[1];
+        }
+        
+        if (/porteir[oa]/i.test(fullHistory)) requesterRole = 'porteiro';
+        if (/síndic[oa]/i.test(fullHistory)) requesterRole = 'síndico';
+        if (/administrador[a]?/i.test(fullHistory)) requesterRole = 'administrador';
+        if (/morador[a]?/i.test(fullHistory)) requesterRole = 'morador';
+        
+        // Call protocol-opened
+        const protocolUrl = `${supabaseUrl}/functions/v1/protocol-opened`;
+        fetch(protocolUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${supabaseServiceKey}`,
+          },
+          body: JSON.stringify({
+            protocol_code: protocolCode,
+            priority,
+            category,
+            summary,
+            condominium_name: condominiumName,
+            requester_name: requesterName,
+            requester_role: requesterRole,
+            conversation_id: conversation_id,
+            contact_id: contact?.id,
+          }),
+        }).then(res => res.json()).then(result => {
+          console.log('Protocol-opened result:', result);
+        }).catch(err => {
+          console.error('Protocol-opened error:', err);
+        });
+        
+        // Update conversation with protocol
+        await supabase
+          .from('conversations')
+          .update({ protocol: protocolCode })
+          .eq('id', conversation_id);
+          
+      } catch (protocolError) {
+        console.error('Error creating protocol:', protocolError);
+      }
+    }
+
     // Send the AI response via WhatsApp
     const { error: sendError } = await supabase.functions.invoke('zapi-send-message', {
       body: {

@@ -226,9 +226,50 @@ Telefone não autorizado: ${participant_phone || 'Desconhecido'}`);
         .eq('id', protocol.conversation_id);
     }
 
-    // ========== 4. Send confirmation message ==========
+    // ========== 4. Send confirmation message to group ==========
     const asanaNote = asanaCompleted ? ' (Asana finalizado)' : '';
+    console.log('Sending resolution confirmation to group:', targetGroupId);
     await sendGroupMessage(`✅ Protocolo *${protocolCode}* resolvido por *${resolverName}*${asanaNote}.`);
+
+    // ========== 5. Notify original conversation (if exists) ==========
+    if (protocol.conversation_id) {
+      try {
+        const { data: originalConv } = await supabase
+          .from('conversations')
+          .select('contact_id, contacts(phone, chat_lid)')
+          .eq('id', protocol.conversation_id)
+          .single();
+          
+        // deno-lint-ignore no-explicit-any
+        const contactData = originalConv?.contacts as any;
+        if (contactData) {
+          const zapiInstanceId = Deno.env.get('ZAPI_INSTANCE_ID');
+          const zapiToken = Deno.env.get('ZAPI_TOKEN');
+          
+          if (zapiInstanceId && zapiToken) {
+            const contactIdentifier = contactData.chat_lid || contactData.phone;
+            if (contactIdentifier) {
+              const clientMessage = `✅ Seu chamado (Protocolo ${protocolCode}) foi resolvido! 
+
+Agradecemos o contato. Se precisar de algo mais, é só enviar uma mensagem.`;
+              
+              const zapiUrl = `https://api.z-api.io/instances/${zapiInstanceId}/token/${zapiToken}/send-text`;
+              await fetch(zapiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  phone: contactIdentifier,
+                  message: clientMessage,
+                }),
+              });
+              console.log('Notified original contact about resolution');
+            }
+          }
+        }
+      } catch (notifyError) {
+        console.error('Error notifying original contact:', notifyError);
+      }
+    }
 
     return new Response(JSON.stringify({
       success: true,
