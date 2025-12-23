@@ -858,6 +858,19 @@ Após perguntar, isso será registrado e não precisará perguntar novamente.
       status: 'success',
     });
 
+    // Log AI usage for analytics
+    await supabase.from('ai_usage_logs').insert({
+      conversation_id,
+      team_id: teamSettings?.team_id,
+      provider: aiResponse.provider,
+      model: aiResponse.model,
+      mode: conversation.ai_mode || 'AUTO',
+      input_tokens: aiResponse.tokens_in || 0,
+      output_tokens: aiResponse.tokens_out || 0,
+      latency_ms: aiResponse.latency_ms,
+      estimated: !aiResponse.tokens_in && !aiResponse.tokens_out,
+    });
+
     console.log('AI reply sent successfully');
 
     return new Response(
