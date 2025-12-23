@@ -138,12 +138,45 @@ serve(async (req) => {
 
       // Normalize contact + conversation keys
       if (!dryRun) {
+        // Check if another conversation already has this chat_id
         if (!convChatId) {
+          const { data: existingConv, error: findConvErr } = await supabaseAdmin
+            .from("conversations")
+            .select("id, created_at, contact_id")
+            .eq("chat_id", groupKey)
+            .maybeSingle();
+
+          if (findConvErr) throw findConvErr;
+
+          if (existingConv && existingConv.id !== conv.id) {
+            // Another conversation already owns this chat_id - add to merge list
+            const list = byKey.get(groupKey) || [];
+            // Add both if not already there
+            if (!list.find((x) => x.convId === existingConv.id)) {
+              list.push({ convId: existingConv.id, created_at: existingConv.created_at, contact_id: existingConv.contact_id });
+            }
+            list.push({ convId: conv.id, created_at: conv.created_at, contact_id: conv.contact_id });
+            byKey.set(groupKey, list);
+            normalized++;
+            continue; // Skip update, will be merged later
+          }
+
+          // No conflict, safe to update
           const { error: updConvErr } = await supabaseAdmin
             .from("conversations")
             .update({ chat_id: groupKey })
             .eq("id", conv.id);
-          if (updConvErr) throw updConvErr;
+          if (updConvErr) {
+            if (updConvErr.code === "23505") {
+              // Race condition: another conversation got this chat_id, add to merge
+              const list = byKey.get(groupKey) || [];
+              list.push({ convId: conv.id, created_at: conv.created_at, contact_id: conv.contact_id });
+              byKey.set(groupKey, list);
+              normalized++;
+              continue;
+            }
+            throw updConvErr;
+          }
         }
 
         if (!contactChatLid) {
