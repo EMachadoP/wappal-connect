@@ -169,6 +169,28 @@ export default function AdminDuplicates() {
     }
   }
 
+  async function handleFixGroupDuplicates() {
+    setFixingGroups(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('zapi-fix-group-duplicates', {
+        body: { dryRun: false, limit: 500 },
+      });
+
+      if (error) throw error;
+
+      toast.success('Correção de grupos concluída', {
+        description: `Normalizadas: ${data?.normalized ?? 0} • Mescladas: ${data?.mergedConversations ?? 0} • Mensagens movidas: ${data?.movedMessages ?? 0} • Sem chave: ${data?.skippedNoKey ?? 0}`,
+      });
+
+      fetchDuplicates();
+    } catch (err) {
+      console.error('Error fixing group duplicates:', err);
+      toast.error('Erro ao corrigir grupos antigos');
+    } finally {
+      setFixingGroups(false);
+    }
+  }
+
   const isGroupChat = (chatId: string) => chatId.includes('@g.us');
 
   return (
@@ -188,14 +210,20 @@ export default function AdminDuplicates() {
       </header>
 
       <main className="p-6 max-w-4xl mx-auto space-y-6">
-        <div className="flex justify-between items-center">
+        <div className="flex justify-between items-center gap-2 flex-wrap">
           <div className="flex items-center gap-2 text-muted-foreground">
             <AlertTriangle className="h-4 w-4" />
             <span>{duplicates.length} grupo(s) de duplicados encontrado(s)</span>
           </div>
-          <Button variant="outline" onClick={fetchDuplicates} disabled={loading}>
-            {loading ? 'Buscando...' : 'Atualizar'}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={handleFixGroupDuplicates} disabled={loading || fixingGroups}>
+              <Wrench className="h-4 w-4 mr-2" />
+              {fixingGroups ? 'Corrigindo...' : 'Corrigir grupos antigos'}
+            </Button>
+            <Button variant="outline" onClick={fetchDuplicates} disabled={loading || fixingGroups}>
+              {loading ? 'Buscando...' : 'Atualizar'}
+            </Button>
+          </div>
         </div>
 
         {duplicates.length === 0 && !loading ? (
