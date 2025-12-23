@@ -371,8 +371,11 @@ export default function InboxPage() {
 
       if (!isCancelled) setLoadingMessages(false);
 
+      // Store conversation IDs in a ref-like variable for realtime
+      const activeThreadConversationIds = conversationIds;
+
       const channel = supabase
-        .channel(`messages-thread-${conversationIds.join('-')}`)
+        .channel(`messages-thread-${activeConversationId}`)
         .on(
           'postgres_changes',
           {
@@ -382,7 +385,8 @@ export default function InboxPage() {
           },
           (payload) => {
             const newMessage = payload.new as any as Message;
-            if (!conversationIds.includes((newMessage as any).conversation_id)) return;
+            // Check if message belongs to any conversation in thread
+            if (!activeThreadConversationIds.includes((newMessage as any).conversation_id)) return;
 
             setMessages((prev) => {
               if (prev.some((m) => m.id === newMessage.id)) return prev;
@@ -390,6 +394,22 @@ export default function InboxPage() {
                 (a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime()
               );
             });
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'messages',
+          },
+          (payload) => {
+            const updatedMessage = payload.new as any as Message;
+            if (!activeThreadConversationIds.includes((updatedMessage as any).conversation_id)) return;
+
+            setMessages((prev) =>
+              prev.map((m) => (m.id === updatedMessage.id ? updatedMessage : m))
+            );
           }
         )
         .subscribe();
