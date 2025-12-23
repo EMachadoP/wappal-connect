@@ -623,8 +623,46 @@ serve(async (req) => {
 
     console.log('Message saved:', message.id, { direction, isGroup: isGroupChat });
 
-    // Trigger AI auto-reply for inbound messages
-    if (!isFromMe) {
+    // Check for protocol resolution in group messages
+    if (isGroupChat && !isFromMe && content) {
+      const resolutionPatterns = [
+        /(G7-\d{8}-\d{4,})\s*[-–—]\s*resolvido/i,
+        /protocolo[:\s]*(G7-\d{8}-\d{4,}).*resolvido/i,
+        /(G7-\d{8}-\d{4,})\s+resolvido/i,
+        /(\d{6,}-\d{4,})\s*[-–—]\s*resolvido/i,
+      ];
+      
+      const isResolutionMessage = resolutionPatterns.some(pattern => pattern.test(content));
+      
+      if (isResolutionMessage) {
+        console.log('Detected resolution message, triggering handler');
+        try {
+          const resolutionUrl = `${supabaseUrl}/functions/v1/group-resolution-handler`;
+          fetch(resolutionUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              message_content: content,
+              participant_phone: msgSenderPhone,
+              participant_name: msgSenderName,
+              group_id: conversationKey,
+              message_id: messageId,
+            }),
+          }).then(res => res.json()).then(resolutionResult => {
+            console.log('Resolution handler result:', resolutionResult);
+          }).catch(resErr => {
+            console.error('Resolution handler error:', resErr);
+          });
+        } catch (resError) {
+          console.error('Failed to trigger resolution handler:', resError);
+        }
+      }
+    }
+
+    // Trigger AI auto-reply for inbound messages (non-group only)
+    if (!isFromMe && !isGroupChat) {
       try {
         const aiUrl = `${supabaseUrl}/functions/v1/ai-maybe-reply`;
         fetch(aiUrl, {

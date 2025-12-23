@@ -35,3 +35,12 @@ verify_jwt = true
 
 [functions.notify-open-tickets-group]
 verify_jwt = true
+
+[functions.zapi-fix-group-duplicates]
+verify_jwt = true
+
+[functions.protocol-opened]
+verify_jwt = true
+
+[functions.group-resolution-handler]
+verify_jwt = false
