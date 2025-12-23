@@ -71,11 +71,38 @@ serve(async (req) => {
 
     console.log('Admin user creating agent:', user.id);
 
-    const { email, password, name, team_id } = await req.json();
+    const rawBody = await req.json();
+    
+    // Input validation
+    const MAX_NAME_LENGTH = 100;
+    const MAX_EMAIL_LENGTH = 255;
+    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    
+    const email = typeof rawBody.email === 'string' ? rawBody.email.trim().slice(0, MAX_EMAIL_LENGTH) : '';
+    const password = typeof rawBody.password === 'string' ? rawBody.password : '';
+    const name = typeof rawBody.name === 'string' ? rawBody.name.trim().slice(0, MAX_NAME_LENGTH) : '';
+    const team_id = rawBody.team_id && UUID_REGEX.test(rawBody.team_id) ? rawBody.team_id : null;
 
     if (!email || !password || !name) {
       return new Response(
         JSON.stringify({ error: 'Email, senha e nome são obrigatórios' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+    
+    // Validate email format
+    if (!EMAIL_REGEX.test(email)) {
+      return new Response(
+        JSON.stringify({ error: 'Formato de email inválido' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+    
+    // Validate name length
+    if (name.length < 2 || name.length > MAX_NAME_LENGTH) {
+      return new Response(
+        JSON.stringify({ error: 'Nome deve ter entre 2 e 100 caracteres' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }

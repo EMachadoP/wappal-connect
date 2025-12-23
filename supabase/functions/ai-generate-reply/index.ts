@@ -6,6 +6,40 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Input validation constants
+const MAX_MESSAGE_CONTENT_LENGTH = 8192;
+const MAX_SYSTEM_PROMPT_LENGTH = 16384;
+const MAX_MESSAGES_COUNT = 50;
+const VALID_ROLES = ['user', 'assistant', 'system'] as const;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Sanitize string: trim, enforce max length
+function sanitizeString(value: unknown, maxLength: number): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value !== 'string') return '';
+  return value.trim().slice(0, maxLength);
+}
+
+// Validate and sanitize messages array
+function validateMessages(rawMessages: unknown): { role: string; content: string }[] {
+  if (!Array.isArray(rawMessages)) return [];
+  
+  return rawMessages
+    .slice(0, MAX_MESSAGES_COUNT)
+    .filter((msg): msg is { role: string; content: string } => {
+      if (!msg || typeof msg !== 'object') return false;
+      const role = (msg as Record<string, unknown>).role;
+      const content = (msg as Record<string, unknown>).content;
+      return typeof role === 'string' && 
+             VALID_ROLES.includes(role as typeof VALID_ROLES[number]) &&
+             typeof content === 'string';
+    })
+    .map(msg => ({
+      role: msg.role,
+      content: sanitizeString(msg.content, MAX_MESSAGE_CONTENT_LENGTH),
+    }));
+}
+
 interface AIProviderConfig {
   id: string;
   provider: 'openai' | 'gemini' | 'lovable';
@@ -15,12 +49,6 @@ interface AIProviderConfig {
   top_p: number;
   active: boolean;
   key_ref: string;
-}
-
-interface GenerateRequest {
-  messages: { role: string; content: string }[];
-  systemPrompt: string;
-  providerId?: string;
 }
 
 serve(async (req) => {
@@ -35,7 +63,13 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { messages, systemPrompt, providerId, ragEnabled = true } = await req.json() as GenerateRequest & { ragEnabled?: boolean };
+    const rawBody = await req.json();
+    
+    // Validate and sanitize inputs
+    const messages = validateMessages(rawBody.messages);
+    const systemPrompt = sanitizeString(rawBody.systemPrompt, MAX_SYSTEM_PROMPT_LENGTH);
+    const providerId = rawBody.providerId && UUID_REGEX.test(rawBody.providerId) ? rawBody.providerId : undefined;
+    const ragEnabled = rawBody.ragEnabled !== false;
 
     // RAG: Search for relevant knowledge snippets
     let ragContext = '';

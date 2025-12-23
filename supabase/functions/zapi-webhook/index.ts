@@ -9,10 +9,34 @@ const corsHeaders = {
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
+// Input validation constants
+const MAX_TEXT_LENGTH = 4096;
+const MAX_PHONE_LENGTH = 30;
+const MAX_NAME_LENGTH = 100;
+const MAX_CHAT_LID_LENGTH = 100;
+
+// Sanitize string: trim, enforce max length, remove control characters
+function sanitizeString(value: unknown, maxLength: number): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') return null;
+  // Remove control characters except newlines and tabs
+  const cleaned = value.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+  return cleaned.trim().slice(0, maxLength) || null;
+}
+
+// Validate phone number format (digits only, optional + prefix)
+function sanitizePhone(value: unknown): string | null {
+  if (!value || typeof value !== 'string') return null;
+  // Remove all non-digit characters except leading +
+  const cleaned = value.replace(/[^\d+]/g, '').slice(0, MAX_PHONE_LENGTH);
+  if (cleaned.length < 5) return null; // Too short to be valid
+  return cleaned;
+}
+
 // Normalize chat_id: trim, lowercase
 function normalizeChatId(chatId: string | null | undefined): string | null {
   if (!chatId) return null;
-  return chatId.trim().toLowerCase();
+  return chatId.trim().toLowerCase().slice(0, MAX_CHAT_LID_LENGTH);
 }
 
 // Check if this is a group chat (ends with @g.us)
@@ -174,27 +198,26 @@ serve(async (req) => {
     
     console.log('Z-API Webhook received:', JSON.stringify(payload, null, 2));
 
-    const {
-      phone,
-      chatLid,
-      isGroup,
-      messageId,
-      fromMe,
-      type,
-      text,
-      image,
-      video,
-      audio,
-      document,
-      contact,
-      senderName,
-      senderPhoto,
-      timestamp,
-      participantPhone,
-      participantLid,
-      participantName,
-      chatName,
-    } = payload;
+    // Extract and sanitize webhook payload fields
+    const phone = sanitizePhone(payload.phone);
+    const chatLid = sanitizeString(payload.chatLid, MAX_CHAT_LID_LENGTH);
+    const isGroup = Boolean(payload.isGroup);
+    const messageId = sanitizeString(payload.messageId, 100);
+    const fromMe = Boolean(payload.fromMe);
+    const type = sanitizeString(payload.type, 50);
+    const text = payload.text;
+    const image = payload.image;
+    const video = payload.video;
+    const audio = payload.audio;
+    const document = payload.document;
+    const contact = payload.contact;
+    const senderName = sanitizeString(payload.senderName, MAX_NAME_LENGTH);
+    const senderPhoto = payload.senderPhoto;
+    const timestamp = typeof payload.timestamp === 'number' ? payload.timestamp : null;
+    const participantPhone = sanitizePhone(payload.participantPhone);
+    const participantLid = sanitizeString(payload.participantLid, MAX_CHAT_LID_LENGTH);
+    const participantName = sanitizeString(payload.participantName, MAX_NAME_LENGTH);
+    const chatName = sanitizeString(payload.chatName, MAX_NAME_LENGTH);
 
     // IDEMPOTENCY CHECK
     if (messageId) {
