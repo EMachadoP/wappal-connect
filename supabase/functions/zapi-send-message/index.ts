@@ -12,8 +12,12 @@ const zapiInstanceId = Deno.env.get('ZAPI_INSTANCE_ID')!;
 const zapiToken = Deno.env.get('ZAPI_TOKEN')!;
 const zapiClientToken = Deno.env.get('ZAPI_CLIENT_TOKEN')!;
 
+// Generate a unique client message ID
+function generateClientMessageId(): string {
+  return `client_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+}
+
 serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -21,7 +25,7 @@ serve(async (req) => {
   try {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
-    const { conversation_id, content, message_type = 'text', media_url, sender_id } = await req.json();
+    const { conversation_id, content, message_type = 'text', media_url, sender_id, client_message_id: providedClientId } = await req.json();
 
     if (!conversation_id || (!content && !media_url)) {
       return new Response(JSON.stringify({ error: 'Missing required fields' }), {
@@ -30,7 +34,29 @@ serve(async (req) => {
       });
     }
 
-    console.log('Sending message:', { conversation_id, message_type, hasContent: !!content, hasMedia: !!media_url, sender_id });
+    // Generate or use provided client_message_id for idempotency
+    const clientMessageId = providedClientId || generateClientMessageId();
+
+    // IDEMPOTENCY CHECK: Check if message with this client_message_id already exists
+    const { data: existingMessage } = await supabase
+      .from('messages')
+      .select('id, provider_message_id, status')
+      .eq('client_message_id', clientMessageId)
+      .maybeSingle();
+
+    if (existingMessage) {
+      console.log('Message already exists with client_message_id:', clientMessageId);
+      return new Response(JSON.stringify({ 
+        success: true, 
+        duplicate: true,
+        message_id: existingMessage.id,
+        provider_message_id: existingMessage.provider_message_id,
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    console.log('Sending message:', { conversation_id, message_type, clientMessageId, sender_id });
 
     // Get sender name if sender_id provided
     let senderName: string | null = null;
@@ -62,8 +88,8 @@ serve(async (req) => {
     }
 
     const contact = conversation.contacts;
+    const chatId = conversation.chat_id || contact.chat_lid;
     
-    // Determine recipient: prefer LID, fallback to phone
     let recipient = contact.lid || contact.phone;
     
     if (!recipient) {
@@ -73,113 +99,8 @@ serve(async (req) => {
       });
     }
 
-    console.log('Sending to recipient:', recipient, 'Sender:', senderName);
-
-    // Z-API base URL
-    const zapiBaseUrl = `https://api.z-api.io/instances/${zapiInstanceId}/token/${zapiToken}`;
-
-    let zapiResponse;
-    let zapiEndpoint: string;
-    let zapiBody: Record<string, unknown>;
-
-    // Prefix message with agent name on separate line if available
-    const prefixedContent = senderName && content 
-      ? `*${senderName}:*\n${content}` 
-      : content;
-
-    // Build request based on message type
-    switch (message_type) {
-      case 'image':
-        zapiEndpoint = '/send-image';
-        zapiBody = {
-          phone: recipient,
-          image: media_url,
-          caption: prefixedContent || '',
-        };
-        break;
-      case 'video':
-        zapiEndpoint = '/send-video';
-        zapiBody = {
-          phone: recipient,
-          video: media_url,
-          caption: prefixedContent || '',
-        };
-        break;
-      case 'audio':
-        zapiEndpoint = '/send-audio';
-        zapiBody = {
-          phone: recipient,
-          audio: media_url,
-        };
-        break;
-      case 'document':
-        zapiEndpoint = '/send-document';
-        zapiBody = {
-          phone: recipient,
-          document: media_url,
-          fileName: content || 'document',
-        };
-        break;
-      default:
-        zapiEndpoint = '/send-text';
-        zapiBody = {
-          phone: recipient,
-          message: prefixedContent,
-        };
-    }
-
-    console.log('Z-API request:', { endpoint: zapiEndpoint, body: zapiBody });
-
-    // Send to Z-API
-    zapiResponse = await fetch(`${zapiBaseUrl}${zapiEndpoint}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Client-Token': zapiClientToken,
-      },
-      body: JSON.stringify(zapiBody),
-    });
-
-    const zapiResult = await zapiResponse.json();
-    console.log('Z-API response:', zapiResult);
-
-    if (!zapiResponse.ok) {
-      // If LID fails, try with phone as fallback
-      if (contact.lid && contact.phone && recipient === contact.lid) {
-        console.log('LID failed, trying phone fallback...');
-        
-        zapiBody.phone = contact.phone;
-        
-        const fallbackResponse = await fetch(`${zapiBaseUrl}${zapiEndpoint}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Client-Token': zapiClientToken,
-          },
-          body: JSON.stringify(zapiBody),
-        });
-
-        const fallbackResult = await fallbackResponse.json();
-        console.log('Z-API fallback response:', fallbackResult);
-
-        if (!fallbackResponse.ok) {
-          return new Response(JSON.stringify({ error: 'Failed to send message', details: fallbackResult }), {
-            status: 500,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          });
-        }
-
-        Object.assign(zapiResult, fallbackResult);
-      } else {
-        return new Response(JSON.stringify({ error: 'Failed to send message', details: zapiResult }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-    }
-
-    // Save message to database
-    const { data: message, error: msgError } = await supabase
+    // SAVE MESSAGE FIRST with status='queued' (before sending to Z-API)
+    const { data: savedMessage, error: saveError } = await supabase
       .from('messages')
       .insert({
         conversation_id: conversation_id,
@@ -188,16 +109,132 @@ serve(async (req) => {
         message_type: message_type,
         content: content,
         media_url: media_url || null,
-        whatsapp_message_id: zapiResult.messageId || zapiResult.zapiMessageId || null,
+        provider: 'zapi',
+        client_message_id: clientMessageId,
+        chat_id: chatId,
+        direction: 'outbound',
+        status: 'queued',
         sent_at: new Date().toISOString(),
       })
       .select()
       .single();
 
-    if (msgError) {
-      console.error('Error saving message:', msgError);
-      throw msgError;
+    if (saveError) {
+      // Check for duplicate constraint
+      if (saveError.code === '23505') {
+        console.log('Duplicate message via constraint:', clientMessageId);
+        return new Response(JSON.stringify({ success: true, duplicate: true }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      console.error('Error saving message:', saveError);
+      throw saveError;
     }
+
+    console.log('Message queued:', savedMessage.id, 'client_message_id:', clientMessageId);
+
+    // Z-API base URL
+    const zapiBaseUrl = `https://api.z-api.io/instances/${zapiInstanceId}/token/${zapiToken}`;
+
+    // Prefix message with agent name
+    const prefixedContent = senderName && content 
+      ? `*${senderName}:*\n${content}` 
+      : content;
+
+    let zapiEndpoint: string;
+    let zapiBody: Record<string, unknown>;
+
+    switch (message_type) {
+      case 'image':
+        zapiEndpoint = '/send-image';
+        zapiBody = { phone: recipient, image: media_url, caption: prefixedContent || '' };
+        break;
+      case 'video':
+        zapiEndpoint = '/send-video';
+        zapiBody = { phone: recipient, video: media_url, caption: prefixedContent || '' };
+        break;
+      case 'audio':
+        zapiEndpoint = '/send-audio';
+        zapiBody = { phone: recipient, audio: media_url };
+        break;
+      case 'document':
+        zapiEndpoint = '/send-document';
+        zapiBody = { phone: recipient, document: media_url, fileName: content || 'document' };
+        break;
+      default:
+        zapiEndpoint = '/send-text';
+        zapiBody = { phone: recipient, message: prefixedContent };
+    }
+
+    console.log('Z-API request:', { endpoint: zapiEndpoint, body: zapiBody });
+
+    // Send to Z-API
+    let zapiResponse = await fetch(`${zapiBaseUrl}${zapiEndpoint}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Client-Token': zapiClientToken,
+      },
+      body: JSON.stringify(zapiBody),
+    });
+
+    let zapiResult = await zapiResponse.json();
+    console.log('Z-API response:', zapiResult);
+
+    // Fallback to phone if LID fails
+    if (!zapiResponse.ok && contact.lid && contact.phone && recipient === contact.lid) {
+      console.log('LID failed, trying phone fallback...');
+      zapiBody.phone = contact.phone;
+      
+      const fallbackResponse = await fetch(`${zapiBaseUrl}${zapiEndpoint}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Client-Token': zapiClientToken,
+        },
+        body: JSON.stringify(zapiBody),
+      });
+
+      zapiResult = await fallbackResponse.json();
+      console.log('Z-API fallback response:', zapiResult);
+
+      if (!fallbackResponse.ok) {
+        // Update message status to failed
+        await supabase
+          .from('messages')
+          .update({ status: 'failed' })
+          .eq('id', savedMessage.id);
+        
+        return new Response(JSON.stringify({ error: 'Failed to send message', details: zapiResult }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+    } else if (!zapiResponse.ok) {
+      // Update message status to failed
+      await supabase
+        .from('messages')
+        .update({ status: 'failed' })
+        .eq('id', savedMessage.id);
+      
+      return new Response(JSON.stringify({ error: 'Failed to send message', details: zapiResult }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Extract provider_message_id from Z-API response
+    const providerMessageId = zapiResult.messageId || zapiResult.zapiMessageId || null;
+
+    // UPDATE MESSAGE with provider_message_id and status='sent'
+    await supabase
+      .from('messages')
+      .update({
+        provider_message_id: providerMessageId,
+        whatsapp_message_id: providerMessageId,
+        status: 'sent',
+      })
+      .eq('id', savedMessage.id);
 
     // Update conversation last_message_at
     await supabase
@@ -208,12 +245,13 @@ serve(async (req) => {
       })
       .eq('id', conversation_id);
 
-    console.log('Message saved:', message.id);
+    console.log('Message sent successfully:', savedMessage.id, 'provider_message_id:', providerMessageId);
 
     return new Response(JSON.stringify({ 
       success: true, 
-      message_id: message.id,
-      whatsapp_message_id: zapiResult.messageId || zapiResult.zapiMessageId,
+      message_id: savedMessage.id,
+      client_message_id: clientMessageId,
+      provider_message_id: providerMessageId,
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });

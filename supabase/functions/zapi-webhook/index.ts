@@ -17,30 +17,18 @@ serve(async (req) => {
 
   try {
     // Validate webhook authentication
-    // Z-API can send token via x-zapi-token header OR Client-Token header
     const zapiToken = Deno.env.get('ZAPI_TOKEN');
     const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN');
     
     const requestZapiToken = req.headers.get('x-zapi-token') || req.headers.get('X-ZAPI-Token');
     const requestClientToken = req.headers.get('client-token') || req.headers.get('Client-Token');
     
-    // Validate: accept if either token matches
     const isValidZapiToken = zapiToken && requestZapiToken && requestZapiToken === zapiToken;
     const isValidClientToken = clientToken && requestClientToken && requestClientToken === clientToken;
     
-    // Only require authentication if tokens are configured AND request doesn't match
     if ((zapiToken || clientToken) && !isValidZapiToken && !isValidClientToken) {
-      // Log more details for debugging
-      console.log('Token validation failed:', {
-        hasZapiToken: !!zapiToken,
-        hasClientToken: !!clientToken,
-        receivedZapiToken: !!requestZapiToken,
-        receivedClientToken: !!requestClientToken,
-      });
-      
-      // If no tokens were sent, just warn but allow (Z-API default config doesn't send tokens)
       if (!requestZapiToken && !requestClientToken) {
-        console.log('Warning: No authentication token received from Z-API. Consider configuring webhook security.');
+        console.log('Warning: No authentication token received from Z-API.');
       } else {
         console.log('Invalid webhook token - rejecting request');
         return new Response(
@@ -48,8 +36,6 @@ serve(async (req) => {
           { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
-    } else if (isValidZapiToken || isValidClientToken) {
-      console.log('Webhook token validated successfully');
     }
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
@@ -57,7 +43,6 @@ serve(async (req) => {
     
     console.log('Z-API Webhook received:', JSON.stringify(payload, null, 2));
 
-    // Z-API message structure
     const {
       phone,
       chatLid,
@@ -80,16 +65,37 @@ serve(async (req) => {
       chatName,
     } = payload;
 
-    // For fromMe messages, we'll still save them so they appear in the inbox
-    // This handles messages sent from other AI/systems or from the phone directly
-    const isFromMe = Boolean(fromMe);
-    console.log('Processing message:', { fromMe: isFromMe, type, messageId });
+    // IDEMPOTENCY CHECK: Skip if we already processed this message
+    if (messageId) {
+      const { data: existingMessage } = await supabase
+        .from('messages')
+        .select('id')
+        .eq('provider', 'zapi')
+        .eq('provider_message_id', messageId)
+        .maybeSingle();
 
-    // Determine if group and extract identifiers
+      if (existingMessage) {
+        console.log('Message already exists, skipping:', messageId);
+        return new Response(JSON.stringify({ 
+          success: true, 
+          duplicate: true,
+          message_id: existingMessage.id,
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
+    const isFromMe = Boolean(fromMe);
     const isGroupChat = Boolean(isGroup);
+    const direction = isFromMe ? 'outbound' : 'inbound';
     
-    // For groups: use the group chat as the "contact", individual sender stored in message
-    // For individual: use the sender as the contact
+    // Use chatLid as the stable chat identifier
+    const chatId = chatLid || null;
+    
+    console.log('Processing message:', { fromMe: isFromMe, type, messageId, chatId, direction });
+
+    // Extract contact/group info
     let contactLid: string | null = null;
     let contactPhone: string | null = null;
     let contactName: string;
@@ -97,61 +103,50 @@ serve(async (req) => {
     let groupName: string | null = null;
 
     if (isGroupChat) {
-      // Group message: contact is the group itself
       const isLid = phone?.includes('@lid') || chatLid?.includes('@lid');
       contactLid = isLid ? (phone || chatLid) : null;
-      contactPhone = null; // Groups don't have phone numbers
+      contactPhone = null;
       contactName = chatName || senderName || 'Grupo';
       groupName = chatName || contactName;
       contactPhoto = null;
-      console.log('Processing GROUP message:', { contactLid, groupName, participantName });
     } else {
-      // Individual message
       const isLid = phone?.includes('@lid');
       contactLid = isLid ? phone : contact?.lid || null;
       contactPhone = isLid ? null : phone?.replace(/\D/g, '') || null;
       contactName = senderName || contact?.name || contactPhone || contactLid || 'Contato Desconhecido';
       contactPhoto = senderPhoto || contact?.profilePicture || null;
-      console.log('Processing INDIVIDUAL message:', { contactLid, contactPhone, contactName });
     }
 
-    // Find or create contact/group
+    // Find or create contact
     let contactRecord;
     
-    // Try to find by LID first
     if (contactLid) {
       const { data: existingByLid } = await supabase
         .from('contacts')
         .select('*')
         .eq('lid', contactLid)
         .single();
-      
       contactRecord = existingByLid;
     }
     
-    // If not found and has phone, try by phone
     if (!contactRecord && contactPhone) {
       const { data: existingByPhone } = await supabase
         .from('contacts')
         .select('*')
         .eq('phone', contactPhone)
         .maybeSingle();
-      
       contactRecord = existingByPhone;
     }
 
-    // If still not found and has chatLid, try by chat_lid (stable thread id)
     if (!contactRecord && chatLid) {
       const { data: existingByChatLid } = await supabase
         .from('contacts')
         .select('*')
         .eq('chat_lid', chatLid)
         .maybeSingle();
-
       contactRecord = existingByChatLid;
     }
 
-    // Create new contact if not found
     if (!contactRecord) {
       const { data: newContact, error: contactError } = await supabase
         .from('contacts')
@@ -176,7 +171,7 @@ serve(async (req) => {
       }
       
       contactRecord = newContact;
-      console.log('Created new contact/group:', contactRecord.id, { isGroup: isGroupChat });
+      console.log('Created new contact:', contactRecord.id);
     } else {
       // Update contact with latest info
       const updates: Record<string, unknown> = {};
@@ -186,50 +181,69 @@ serve(async (req) => {
         updates.lid_source = 'zapi_webhook';
         updates.lid_collected_at = new Date().toISOString();
       }
-      if (contactPhone && !contactRecord.phone) {
-        updates.phone = contactPhone;
-      }
-      if (chatLid && !contactRecord.chat_lid) {
-        updates.chat_lid = chatLid;
-      }
-      if (contactName && contactRecord.name === 'Contato Desconhecido') {
-        updates.name = contactName;
-      }
-      if (contactPhoto && !contactRecord.profile_picture_url) {
-        updates.profile_picture_url = contactPhoto;
-      }
+      if (contactPhone && !contactRecord.phone) updates.phone = contactPhone;
+      if (chatLid && !contactRecord.chat_lid) updates.chat_lid = chatLid;
+      if (contactName && contactRecord.name === 'Contato Desconhecido') updates.name = contactName;
+      if (contactPhoto && !contactRecord.profile_picture_url) updates.profile_picture_url = contactPhoto;
       if (isGroupChat && !contactRecord.is_group) {
         updates.is_group = true;
         updates.group_name = groupName;
       }
-      // Update whatsapp_display_name if different
       if (senderName && senderName !== contactRecord.whatsapp_display_name) {
         updates.whatsapp_display_name = senderName;
       }
 
       if (Object.keys(updates).length > 0) {
-        await supabase
-          .from('contacts')
-          .update(updates)
-          .eq('id', contactRecord.id);
+        await supabase.from('contacts').update(updates).eq('id', contactRecord.id);
         console.log('Updated contact with:', updates);
       }
     }
 
-    // Find or create conversation - ONE conversation per contact/group (like WhatsApp)
-    let { data: conversation } = await supabase
-      .from('conversations')
-      .select('*')
-      .eq('contact_id', contactRecord.id)
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .single();
+    // FIND CONVERSATION BY CHAT_ID FIRST (idempotent), then by contact_id
+    let conversation;
+    
+    if (chatId) {
+      const { data: convByChatId } = await supabase
+        .from('conversations')
+        .select('*')
+        .eq('chat_id', chatId)
+        .maybeSingle();
+      
+      if (convByChatId) {
+        conversation = convByChatId;
+        console.log('Found conversation by chat_id:', conversation.id);
+      }
+    }
+
+    if (!conversation) {
+      const { data: convByContact } = await supabase
+        .from('conversations')
+        .select('*')
+        .eq('contact_id', contactRecord.id)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      
+      conversation = convByContact;
+      
+      if (conversation) {
+        // Update chat_id if missing
+        if (chatId && !conversation.chat_id) {
+          await supabase
+            .from('conversations')
+            .update({ chat_id: chatId })
+            .eq('id', conversation.id);
+          console.log('Updated conversation with chat_id:', chatId);
+        }
+      }
+    }
 
     if (!conversation) {
       const { data: newConversation, error: convError } = await supabase
         .from('conversations')
         .insert({
           contact_id: contactRecord.id,
+          chat_id: chatId,
           status: 'open',
           unread_count: 1,
           last_message_at: new Date().toISOString(),
@@ -243,17 +257,15 @@ serve(async (req) => {
       }
       
       conversation = newConversation;
-      console.log('Created new conversation:', conversation.id);
+      console.log('Created new conversation:', conversation.id, 'with chat_id:', chatId);
     } else {
-      // Update existing conversation
-      // For messages from contact: reopen if resolved, increment unread
-      // For messages from us (fromMe): just update last_message_at
+      // Update conversation
       const updateData: Record<string, unknown> = {
         last_message_at: new Date().toISOString(),
       };
       
       if (!isFromMe) {
-        updateData.status = 'open'; // Reopen if was resolved
+        updateData.status = 'open';
         updateData.unread_count = conversation.unread_count + 1;
         updateData.marked_unread = false;
       }
@@ -262,16 +274,13 @@ serve(async (req) => {
         .from('conversations')
         .update(updateData)
         .eq('id', conversation.id);
-      console.log('Using existing conversation:', conversation.id, { isFromMe });
     }
 
     // Determine message type and content
-    // Z-API can send text in different formats: text.message, text (string), or message
     let messageType: 'text' | 'image' | 'video' | 'audio' | 'document' = 'text';
     let content: string | null = null;
     let mediaUrl = null;
 
-    // Extract text content - handle multiple Z-API formats
     if (typeof text === 'string') {
       content = text;
     } else if (text?.message) {
@@ -281,8 +290,6 @@ serve(async (req) => {
     } else if (payload.body) {
       content = payload.body;
     }
-    
-    console.log('Text extraction:', { text, payloadMessage: payload.message, payloadBody: payload.body, extractedContent: content });
 
     if (image) {
       messageType = 'image';
@@ -301,14 +308,14 @@ serve(async (req) => {
       content = document.fileName || content || null;
     }
 
-    // For group messages, prepend participant name to content
+    // For group messages, prepend participant name
     let displayContent = content;
     if (isGroupChat && (participantName || senderName)) {
       const participant = participantName || senderName;
       displayContent = content ? `[${participant}]: ${content}` : `[${participant}]`;
     }
 
-    // Save message - use 'agent' sender_type for fromMe messages
+    // INSERT MESSAGE WITH IDEMPOTENCY (unique constraint on provider + provider_message_id)
     const { data: message, error: msgError } = await supabase
       .from('messages')
       .insert({
@@ -317,6 +324,12 @@ serve(async (req) => {
         message_type: messageType,
         content: displayContent,
         media_url: mediaUrl,
+        provider: 'zapi',
+        provider_message_id: messageId || null,
+        chat_id: chatId,
+        direction: direction,
+        status: 'delivered',
+        raw_payload: payload,
         whatsapp_message_id: messageId,
         sent_at: timestamp ? new Date(timestamp * 1000).toISOString() : new Date().toISOString(),
       })
@@ -324,13 +337,23 @@ serve(async (req) => {
       .single();
 
     if (msgError) {
+      // Check if it's a duplicate constraint violation
+      if (msgError.code === '23505') {
+        console.log('Duplicate message detected via constraint:', messageId);
+        return new Response(JSON.stringify({ 
+          success: true, 
+          duplicate: true,
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
       console.error('Error creating message:', msgError);
       throw msgError;
     }
 
-    console.log('Message saved:', message.id, { isFromMe, sender_type: isFromMe ? 'agent' : 'contact' });
+    console.log('Message saved:', message.id, { direction, status: 'delivered' });
 
-    // Only trigger AI auto-reply for messages from contacts (not fromMe)
+    // Trigger AI auto-reply only for inbound messages
     if (!isFromMe) {
       try {
         const aiUrl = `${supabaseUrl}/functions/v1/ai-maybe-reply`;
@@ -349,7 +372,6 @@ serve(async (req) => {
         });
       } catch (aiError) {
         console.error('Failed to trigger AI:', aiError);
-        // Don't fail the webhook if AI fails
       }
     }
 
