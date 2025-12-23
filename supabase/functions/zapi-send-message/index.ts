@@ -12,6 +12,33 @@ const zapiInstanceId = Deno.env.get('ZAPI_INSTANCE_ID')!;
 const zapiToken = Deno.env.get('ZAPI_TOKEN')!;
 const zapiClientToken = Deno.env.get('ZAPI_CLIENT_TOKEN')!;
 
+// Input validation constants
+const MAX_CONTENT_LENGTH = 4096;
+const MAX_URL_LENGTH = 2048;
+const MAX_NAME_LENGTH = 100;
+const VALID_MESSAGE_TYPES = ['text', 'image', 'video', 'audio', 'document'] as const;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const URL_REGEX = /^https?:\/\/.+/i;
+
+// Validate UUID format
+function isValidUUID(value: unknown): boolean {
+  return typeof value === 'string' && UUID_REGEX.test(value);
+}
+
+// Validate URL format
+function isValidURL(value: unknown): boolean {
+  if (!value || typeof value !== 'string') return false;
+  return URL_REGEX.test(value) && value.length <= MAX_URL_LENGTH;
+}
+
+// Sanitize string: trim, enforce max length, remove control characters
+function sanitizeString(value: unknown, maxLength: number): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') return null;
+  const cleaned = value.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+  return cleaned.trim().slice(0, maxLength) || null;
+}
+
 // Generate a unique client message ID
 function generateClientMessageId(): string {
   return `client_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
@@ -25,10 +52,27 @@ serve(async (req) => {
   try {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
-    const { conversation_id, content, message_type = 'text', media_url, sender_id, client_message_id: providedClientId, sender_name: providedSenderName } = await req.json();
+    const rawBody = await req.json();
+    
+    // Validate and sanitize inputs
+    const conversation_id = rawBody.conversation_id;
+    const message_type = VALID_MESSAGE_TYPES.includes(rawBody.message_type) ? rawBody.message_type : 'text';
+    const content = sanitizeString(rawBody.content, MAX_CONTENT_LENGTH);
+    const media_url = isValidURL(rawBody.media_url) ? rawBody.media_url : null;
+    const sender_id = isValidUUID(rawBody.sender_id) ? rawBody.sender_id : null;
+    const providedClientId = sanitizeString(rawBody.client_message_id, 100);
+    const providedSenderName = sanitizeString(rawBody.sender_name, MAX_NAME_LENGTH);
 
-    if (!conversation_id || (!content && !media_url)) {
-      return new Response(JSON.stringify({ error: 'Missing required fields' }), {
+    // Validate conversation_id is a valid UUID
+    if (!isValidUUID(conversation_id)) {
+      return new Response(JSON.stringify({ error: 'Invalid conversation_id format' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (!content && !media_url) {
+      return new Response(JSON.stringify({ error: 'Missing required fields: content or media_url' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
