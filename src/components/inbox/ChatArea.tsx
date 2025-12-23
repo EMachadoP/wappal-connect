@@ -8,6 +8,7 @@ import { EmojiPicker } from './EmojiPicker';
 import { ConversationActionsMenu } from './ConversationActionsMenu';
 import { ParticipantHeader } from './ParticipantHeader';
 import { IdentifyParticipantModal } from './IdentifyParticipantModal';
+import { AIControlBar } from './AIControlBar';
 import { useParticipantInfo } from '@/hooks/useParticipantInfo';
 interface Message {
   id: string;
@@ -58,6 +59,9 @@ interface ChatAreaProps {
   conversationPriority?: string;
   assignedTo?: string | null;
   markedUnread?: boolean;
+  aiMode?: 'AUTO' | 'COPILOT' | 'OFF';
+  aiPausedUntil?: string | null;
+  humanControl?: boolean;
   onSendMessage: (content: string) => void;
   onSendFile?: (file: File) => void;
   onResolveConversation?: () => void;
@@ -68,6 +72,7 @@ interface ChatAreaProps {
   onAssignAgent?: (agentId: string) => void;
   onAssignTeam?: (teamId: string) => void;
   onAddLabel?: (labelId: string) => void;
+  onAiModeChange?: (mode: 'AUTO' | 'COPILOT' | 'OFF') => void;
   loading?: boolean;
   isMobile?: boolean;
 }
@@ -86,6 +91,9 @@ export function ChatArea({
   conversationPriority = 'normal',
   assignedTo,
   markedUnread,
+  aiMode = 'AUTO',
+  aiPausedUntil,
+  humanControl = false,
   onSendMessage,
   onSendFile,
   onResolveConversation,
@@ -96,6 +104,7 @@ export function ChatArea({
   onAssignAgent,
   onAssignTeam,
   onAddLabel,
+  onAiModeChange,
   loading,
   isMobile = false,
 }: ChatAreaProps) {
@@ -246,6 +255,17 @@ export function ChatArea({
             />
           </div>
         </div>
+      )}
+
+      {/* AI Control Bar */}
+      {conversationId && (
+        <AIControlBar
+          conversationId={conversationId}
+          aiMode={aiMode}
+          aiPausedUntil={aiPausedUntil ?? null}
+          humanControl={humanControl}
+          onModeChange={onAiModeChange}
+        />
       )}
 
       {/* Participant Header - Sender Identification */}

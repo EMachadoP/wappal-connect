@@ -77,6 +77,9 @@ export default function InboxPage() {
   const [activeConversationStatus, setActiveConversationStatus] = useState<string>('open');
   const [activeConversationPriority, setActiveConversationPriority] = useState<string>('normal');
   const [activeAssignedTo, setActiveAssignedTo] = useState<string | null>(null);
+  const [activeAiMode, setActiveAiMode] = useState<'AUTO' | 'COPILOT' | 'OFF'>('AUTO');
+  const [activeAiPausedUntil, setActiveAiPausedUntil] = useState<string | null>(null);
+  const [activeHumanControl, setActiveHumanControl] = useState(false);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [labels, setLabels] = useState<Label[]>([]);
@@ -272,6 +275,9 @@ export default function InboxPage() {
           priority,
           assigned_to,
           contact_id,
+          ai_mode,
+          ai_paused_until,
+          human_control,
           contacts (
             id,
             name,
@@ -305,6 +311,9 @@ export default function InboxPage() {
         setActiveConversationStatus(selectedConv.status);
         setActiveConversationPriority((selectedConv as any).priority || 'normal');
         setActiveAssignedTo(selectedConv.assigned_to);
+        setActiveAiMode((selectedConv as any).ai_mode || 'AUTO');
+        setActiveAiPausedUntil((selectedConv as any).ai_paused_until || null);
+        setActiveHumanControl((selectedConv as any).human_control || false);
       }
 
       let threadContactIds: string[] = [contactId];
@@ -647,6 +656,9 @@ export default function InboxPage() {
             conversationStatus={activeConversationStatus}
             conversationPriority={activeConversationPriority}
             assignedTo={activeAssignedTo}
+            aiMode={activeAiMode}
+            aiPausedUntil={activeAiPausedUntil}
+            humanControl={activeHumanControl}
             onSendMessage={handleSendMessage}
             onSendFile={handleSendFile}
             onResolveConversation={handleResolveConversation}
@@ -657,6 +669,7 @@ export default function InboxPage() {
             onAssignAgent={handleAssignAgent}
             onAssignTeam={handleAssignTeam}
             onAddLabel={handleAddLabel}
+            onAiModeChange={setActiveAiMode}
             loading={loadingMessages}
             isMobile
           />
@@ -700,6 +713,9 @@ export default function InboxPage() {
           conversationStatus={activeConversationStatus}
           conversationPriority={activeConversationPriority}
           assignedTo={activeAssignedTo}
+          aiMode={activeAiMode}
+          aiPausedUntil={activeAiPausedUntil}
+          humanControl={activeHumanControl}
           onSendMessage={handleSendMessage}
           onSendFile={handleSendFile}
           onResolveConversation={handleResolveConversation}
@@ -710,6 +726,7 @@ export default function InboxPage() {
           onAssignAgent={handleAssignAgent}
           onAssignTeam={handleAssignTeam}
           onAddLabel={handleAddLabel}
+          onAiModeChange={setActiveAiMode}
           loading={loadingMessages}
         />
       </div>
