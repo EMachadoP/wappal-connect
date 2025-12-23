@@ -1043,6 +1043,9 @@ export type Database = {
           sender_type: Database["public"]["Enums"]["sender_type"]
           sent_at: string
           status: string | null
+          transcribed_at: string | null
+          transcript: string | null
+          transcript_provider: string | null
           whatsapp_message_id: string | null
         }
         Insert: {
@@ -1067,6 +1070,9 @@ export type Database = {
           sender_type: Database["public"]["Enums"]["sender_type"]
           sent_at?: string
           status?: string | null
+          transcribed_at?: string | null
+          transcript?: string | null
+          transcript_provider?: string | null
           whatsapp_message_id?: string | null
         }
         Update: {
@@ -1091,6 +1097,9 @@ export type Database = {
           sender_type?: Database["public"]["Enums"]["sender_type"]
           sent_at?: string
           status?: string | null
+          transcribed_at?: string | null
+          transcript?: string | null
+          transcript_provider?: string | null
           whatsapp_message_id?: string | null
         }
         Relationships: [
