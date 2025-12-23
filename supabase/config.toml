@@ -19,7 +19,7 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.ai-generate-reply]
-verify_jwt = true
+verify_jwt = false
 
 [functions.ai-maybe-reply]
 verify_jwt = false
