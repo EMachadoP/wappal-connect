@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Navigate } from 'react-router-dom';
-import { Plus, Trash2, RefreshCw, History, Pencil, UserPlus, Shield, ShieldOff, Users } from 'lucide-react';
+import { Navigate, useNavigate } from 'react-router-dom';
+import { Plus, Trash2, RefreshCw, History, Pencil, UserPlus, Shield, ShieldOff, Users, Copy } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useUserRole } from '@/hooks/useUserRole';
@@ -42,6 +42,7 @@ export default function AdminPage() {
   const { user, loading: authLoading } = useAuth();
   const { isAdmin, loading: roleLoading } = useUserRole();
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   const [agents, setAgents] = useState<Profile[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -470,6 +471,14 @@ export default function AdminPage() {
         <div className="flex items-center justify-between flex-wrap gap-4">
           <h1 className="text-2xl font-bold">Administração</h1>
           <div className="flex gap-2 flex-wrap">
+            <Button 
+              variant="outline" 
+              className="gap-2"
+              onClick={() => navigate('/admin/duplicates')}
+            >
+              <Copy className="w-4 h-4" />
+              Duplicados
+            </Button>
             <Button 
               variant="outline" 
               className="gap-2"

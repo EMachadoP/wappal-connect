@@ -783,6 +783,8 @@ export type Database = {
           raw_payload: Json | null
           read_at: string | null
           sender_id: string | null
+          sender_name: string | null
+          sender_phone: string | null
           sender_type: Database["public"]["Enums"]["sender_type"]
           sent_at: string
           status: string | null
@@ -803,6 +805,8 @@ export type Database = {
           raw_payload?: Json | null
           read_at?: string | null
           sender_id?: string | null
+          sender_name?: string | null
+          sender_phone?: string | null
           sender_type: Database["public"]["Enums"]["sender_type"]
           sent_at?: string
           status?: string | null
@@ -823,6 +827,8 @@ export type Database = {
           raw_payload?: Json | null
           read_at?: string | null
           sender_id?: string | null
+          sender_name?: string | null
+          sender_phone?: string | null
           sender_type?: Database["public"]["Enums"]["sender_type"]
           sent_at?: string
           status?: string | null
@@ -1101,6 +1107,7 @@ export type Database = {
           title: string
         }[]
       }
+      normalize_chat_id: { Args: { raw_chat_id: string }; Returns: string }
     }
     Enums: {
       app_role: "admin" | "agent"

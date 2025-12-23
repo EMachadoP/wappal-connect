@@ -9,6 +9,18 @@ const corsHeaders = {
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
+// Normalize chat_id: trim, lowercase
+function normalizeChatId(chatId: string | null | undefined): string | null {
+  if (!chatId) return null;
+  return chatId.trim().toLowerCase();
+}
+
+// Check if this is a group chat (ends with @g.us)
+function isGroupChatId(chatId: string | null | undefined): boolean {
+  if (!chatId) return false;
+  return chatId.toLowerCase().includes('@g.us');
+}
+
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -87,13 +99,33 @@ serve(async (req) => {
     }
 
     const isFromMe = Boolean(fromMe);
-    const isGroupChat = Boolean(isGroup);
     const direction = isFromMe ? 'outbound' : 'inbound';
     
-    // Use chatLid as the stable chat identifier
-    const chatId = chatLid || null;
+    // Normalize chat_id for consistent lookup
+    const rawChatId = chatLid || null;
+    const chatId = normalizeChatId(rawChatId);
+    const isGroupChat = isGroupChatId(chatId) || Boolean(isGroup);
     
-    console.log('Processing message:', { fromMe: isFromMe, type, messageId, chatId, direction });
+    // For group messages: extract sender (participant) info separately
+    let senderPhone: string | null = null;
+    let senderDisplayName: string | null = null;
+    
+    if (isGroupChat) {
+      // participantPhone/participantLid is the actual sender in a group
+      senderPhone = participantPhone?.replace(/\D/g, '') || null;
+      senderDisplayName = participantName || senderName || null;
+    }
+    
+    console.log('Processing message:', { 
+      fromMe: isFromMe, 
+      type, 
+      messageId, 
+      chatId, 
+      direction, 
+      isGroup: isGroupChat,
+      senderPhone,
+      senderDisplayName 
+    });
 
     // Extract contact/group info
     let contactLid: string | null = null;
@@ -103,10 +135,11 @@ serve(async (req) => {
     let groupName: string | null = null;
 
     if (isGroupChat) {
-      const isLid = phone?.includes('@lid') || chatLid?.includes('@lid');
-      contactLid = isLid ? (phone || chatLid) : null;
-      contactPhone = null;
-      contactName = chatName || senderName || 'Grupo';
+      // For groups: use the group chat_id as the identifier, NOT participant phone
+      const isLidGroup = chatId?.includes('@lid') || false;
+      contactLid = isLidGroup ? chatId : null;
+      contactPhone = null; // Groups don't have a phone
+      contactName = chatName || 'Grupo';
       groupName = chatName || contactName;
       contactPhoto = null;
     } else {
@@ -332,6 +365,9 @@ serve(async (req) => {
         raw_payload: payload,
         whatsapp_message_id: messageId,
         sent_at: timestamp ? new Date(timestamp * 1000).toISOString() : new Date().toISOString(),
+        // Group participant info
+        sender_phone: senderPhone,
+        sender_name: senderDisplayName,
       })
       .select()
       .single();
