@@ -305,6 +305,82 @@ export type Database = {
           },
         ]
       }
+      ai_usage_logs: {
+        Row: {
+          conversation_id: string | null
+          cost_usd: number | null
+          created_at: string
+          estimated: boolean | null
+          id: string
+          input_tokens: number
+          latency_ms: number | null
+          message_id: string | null
+          mode: string
+          model: string
+          output_tokens: number
+          provider: string
+          team_id: string | null
+          total_tokens: number | null
+          user_id: string | null
+        }
+        Insert: {
+          conversation_id?: string | null
+          cost_usd?: number | null
+          created_at?: string
+          estimated?: boolean | null
+          id?: string
+          input_tokens?: number
+          latency_ms?: number | null
+          message_id?: string | null
+          mode?: string
+          model: string
+          output_tokens?: number
+          provider: string
+          team_id?: string | null
+          total_tokens?: number | null
+          user_id?: string | null
+        }
+        Update: {
+          conversation_id?: string | null
+          cost_usd?: number | null
+          created_at?: string
+          estimated?: boolean | null
+          id?: string
+          input_tokens?: number
+          latency_ms?: number | null
+          message_id?: string | null
+          mode?: string
+          model?: string
+          output_tokens?: number
+          provider?: string
+          team_id?: string | null
+          total_tokens?: number | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_usage_logs_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_usage_logs_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
+            referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_usage_logs_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       contacts: {
         Row: {
           chat_lid: string | null
