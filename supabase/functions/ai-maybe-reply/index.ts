@@ -689,6 +689,9 @@ serve(async (req) => {
     // Fetch participant info for context
     let participantContext = '';
     let shouldUsePersonalName = true;
+    let isPortaria = false; // Flag for doorman/reception - neutral greeting without name
+    let isAdministradora = false; // Flag for building management companies
+    let participantRole = '';
     
     if (contact?.id) {
       // Get primary participant for this contact
@@ -715,6 +718,28 @@ serve(async (req) => {
         displayNameType = typeResult || 'UNKNOWN';
       }
 
+      // Check for special roles/tags that require different greeting behavior
+      const tags = (contact.tags || []).map((t: string) => t.toLowerCase());
+      const PORTARIA_ROLES = ['porteiro', 'portaria', 'recepcionista', 'recepção', 'recepcao', 'vigilante', 'segurança', 'seguranca'];
+      const ADMINISTRADORA_ROLES = ['administradora', 'administrador', 'gestora', 'gestor', 'síndica', 'sindica', 'síndico', 'sindico'];
+      
+      // Check tags first
+      isPortaria = PORTARIA_ROLES.some(role => tags.includes(role));
+      isAdministradora = ADMINISTRADORA_ROLES.some(role => tags.includes(role));
+      
+      // Check participant role_type
+      if (participantData?.role_type) {
+        const roleNormalized = participantData.role_type.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        participantRole = participantData.role_type;
+        
+        if (PORTARIA_ROLES.some(r => roleNormalized.includes(r.normalize('NFD').replace(/[\u0300-\u036f]/g, '')))) {
+          isPortaria = true;
+        }
+        if (ADMINISTRADORA_ROLES.some(r => roleNormalized.includes(r.normalize('NFD').replace(/[\u0300-\u036f]/g, '')))) {
+          isAdministradora = true;
+        }
+      }
+
       // Build context header
       participantContext = `
 --- CONTEXTO DO CONTATO ---
@@ -722,6 +747,27 @@ Telefone: ${contact.phone || 'N/A'}
 Nome WhatsApp: ${contact.whatsapp_display_name || 'N/A'} (${displayNameType === 'ENTITY_NAME' ? 'Nome de entidade - NÃO usar como nome pessoal' : 'Possível nome pessoal'})
 Tags: ${(contact.tags || []).join(', ') || 'Nenhuma'}
 `;
+
+      // Special greeting rules based on role
+      if (isPortaria) {
+        participantContext += `
+--- REGRA DE SAUDAÇÃO: PORTARIA ---
+IMPORTANTE: Este contato é de uma PORTARIA (possivelmente revezamento de porteiros).
+- NÃO use nome pessoal na saudação
+- Use saudação neutra: "Bom dia/Boa tarde/Boa noite! Em que posso ajudar?"
+- Só peça o nome quando precisar abrir protocolo: "Para registrar o chamado, posso anotar seu nome? (Se preferir, pode ser só 'Portaria')."
+`;
+        shouldUsePersonalName = false;
+      }
+
+      if (isAdministradora) {
+        participantContext += `
+--- REGRA DE SAUDAÇÃO: ADMINISTRADORA ---
+IMPORTANTE: Este contato é de uma ADMINISTRADORA que pode atender múltiplos condomínios.
+- Sempre pergunte qual condomínio quando houver dúvida
+- Use tratamento formal mas sem nome
+`;
+      }
 
       if (participantData) {
         const entity = participantData.entities as { id: string; name: string; type: string } | null;
@@ -732,8 +778,10 @@ Função: ${participantData.role_type || 'N/A'}
 Entidade: ${entity?.name || 'N/A'}
 Confiança: ${Math.round(participantData.confidence * 100)}%
 `;
-        // Use personal name only if confidence is high enough
-        shouldUsePersonalName = participantData.confidence >= 0.7;
+        // Use personal name only if:
+        // 1. Confidence is high enough
+        // 2. NOT a portaria role (they may be different people sharing the phone)
+        shouldUsePersonalName = participantData.confidence >= 0.7 && !isPortaria;
       } else {
         participantContext += `
 --- IDENTIDADE NÃO CONFIRMADA ---
@@ -744,11 +792,19 @@ O remetente ainda não foi identificado. NÃO use nomes pessoais até que a iden
 
       // Check if we need to ask for identification
       if (!participantData && (!convParticipantState || !convParticipantState.identification_asked)) {
-        participantContext += `
+        // Different prompt for portaria vs other contacts
+        if (isPortaria) {
+          participantContext += `
+INSTRUÇÃO: Na saudação use: "Bom dia/Boa tarde/Boa noite! Em que posso ajudar?"
+NÃO pergunte nome inicialmente - só peça quando precisar registrar um protocolo.
+`;
+        } else {
+          participantContext += `
 INSTRUÇÃO: Na próxima resposta, pergunte educadamente: "Por gentileza, poderia me informar seu nome, de qual condomínio/empresa fala e qual sua função?"
 Após perguntar, isso será registrado e não precisará perguntar novamente.
 `;
-        // Mark that we asked
+        }
+        // Mark that we asked (or skipped for portaria)
         await supabase
           .from('conversation_participant_state')
           .upsert({
