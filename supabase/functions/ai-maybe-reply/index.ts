@@ -1122,12 +1122,13 @@ Após perguntar, isso será registrado e não precisará perguntar novamente.
       }
     }
 
-    // Send the AI response via WhatsApp
+    // Send the AI response via WhatsApp with AI agent name
     const { error: sendError } = await supabase.functions.invoke('zapi-send-message', {
       body: {
         conversation_id: conversation_id,
         content: sanitizedResponse,
         message_type: 'text',
+        sender_name: 'Ana Mônica', // AI assistant name for WhatsApp prefix
       },
     });
 
