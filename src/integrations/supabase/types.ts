@@ -568,6 +568,8 @@ export type Database = {
         Row: {
           ai_mode: string | null
           ai_paused_until: string | null
+          assigned_at: string | null
+          assigned_by: string | null
           assigned_to: string | null
           chat_id: string | null
           contact_id: string
@@ -590,6 +592,8 @@ export type Database = {
         Insert: {
           ai_mode?: string | null
           ai_paused_until?: string | null
+          assigned_at?: string | null
+          assigned_by?: string | null
           assigned_to?: string | null
           chat_id?: string | null
           contact_id: string
@@ -612,6 +616,8 @@ export type Database = {
         Update: {
           ai_mode?: string | null
           ai_paused_until?: string | null
+          assigned_at?: string | null
+          assigned_by?: string | null
           assigned_to?: string | null
           chat_id?: string | null
           contact_id?: string
@@ -1200,8 +1206,8 @@ export type Database = {
     Enums: {
       app_role: "admin" | "agent"
       conversation_status: "open" | "resolved"
-      message_type: "text" | "image" | "video" | "audio" | "document"
-      sender_type: "contact" | "agent"
+      message_type: "text" | "image" | "video" | "audio" | "document" | "system"
+      sender_type: "contact" | "agent" | "system"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1331,8 +1337,8 @@ export const Constants = {
     Enums: {
       app_role: ["admin", "agent"],
       conversation_status: ["open", "resolved"],
-      message_type: ["text", "image", "video", "audio", "document"],
-      sender_type: ["contact", "agent"],
+      message_type: ["text", "image", "video", "audio", "document", "system"],
+      sender_type: ["contact", "agent", "system"],
     },
   },
 } as const

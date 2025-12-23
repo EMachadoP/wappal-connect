@@ -41,7 +41,7 @@ interface Message {
   message_type: string;
   media_url: string | null;
   sent_at: string;
-  sender_type: string;
+  sender_type: 'contact' | 'agent' | 'system';
   sender_id: string | null;
   delivered_at: string | null;
   read_at: string | null;
@@ -615,16 +615,34 @@ export default function InboxPage() {
   };
 
   const handleAssignAgent = async (agentId: string) => {
-    if (!activeConversationId) return;
+    if (!activeConversationId || !user) return;
 
+    const agent = profiles.find(p => p.id === agentId);
+    const currentUser = profiles.find(p => p.id === user.id);
+
+    // Update conversation with assignment details
     const { error } = await supabase
       .from('conversations')
-      .update({ assigned_to: agentId })
+      .update({ 
+        assigned_to: agentId,
+        assigned_at: new Date().toISOString(),
+        assigned_by: user.id,
+      })
       .eq('id', activeConversationId);
 
     if (!error) {
       setActiveAssignedTo(agentId);
-      const agent = profiles.find(p => p.id === agentId);
+      
+      // Insert system message for assignment
+      const systemMessageContent = `✅ Atribuída para ${agent?.name || 'agente'} por ${currentUser?.name || 'usuário'}`;
+      await supabase.from('messages').insert({
+        conversation_id: activeConversationId,
+        sender_type: 'system',
+        message_type: 'system',
+        content: systemMessageContent,
+        sent_at: new Date().toISOString(),
+      });
+
       toast({ title: `Atribuído a ${agent?.name || 'agente'}` });
     }
   };
