@@ -845,6 +845,8 @@ export type Database = {
       }
       messages: {
         Row: {
+          agent_id: string | null
+          agent_name: string | null
           chat_id: string | null
           client_message_id: string | null
           content: string | null
@@ -867,6 +869,8 @@ export type Database = {
           whatsapp_message_id: string | null
         }
         Insert: {
+          agent_id?: string | null
+          agent_name?: string | null
           chat_id?: string | null
           client_message_id?: string | null
           content?: string | null
@@ -889,6 +893,8 @@ export type Database = {
           whatsapp_message_id?: string | null
         }
         Update: {
+          agent_id?: string | null
+          agent_name?: string | null
           chat_id?: string | null
           client_message_id?: string | null
           content?: string | null

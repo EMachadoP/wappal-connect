@@ -45,6 +45,8 @@ interface Message {
   sender_id: string | null;
   delivered_at: string | null;
   read_at: string | null;
+  agent_id?: string | null;
+  agent_name?: string | null;
 }
 
 interface Profile {
@@ -405,34 +407,43 @@ export default function InboxPage() {
   const handleSendMessage = async (content: string) => {
     if (!activeConversationId || !user) return;
 
+    const requestPayload = {
+      conversation_id: activeConversationId,
+      content,
+      message_type: 'text',
+      sender_id: user.id,
+    };
+
     try {
+      console.log('[zapi-send-message] Request payload:', requestPayload);
+      
       const { data, error } = await supabase.functions.invoke('zapi-send-message', {
-        body: {
-          conversation_id: activeConversationId,
-          content,
-          message_type: 'text',
-          sender_id: user.id,
-        },
+        body: requestPayload,
       });
 
+      console.log('[zapi-send-message] Response:', { data, error });
+
       if (error) {
+        console.error('[zapi-send-message] Error:', error);
         toast({
           variant: 'destructive',
           title: 'Erro ao enviar mensagem',
-          description: error.message,
+          description: `zapi-send-message: ${error.message}`,
         });
       } else if (data?.error) {
+        console.error('[zapi-send-message] Error response:', data);
         toast({
           variant: 'destructive',
           title: 'Erro ao enviar mensagem',
-          description: data.error,
+          description: `zapi-send-message: ${data.error}${data.details ? ` - ${JSON.stringify(data.details)}` : ''}`,
         });
       }
     } catch (err) {
+      console.error('[zapi-send-message] Exception:', err);
       toast({
         variant: 'destructive',
         title: 'Erro ao enviar mensagem',
-        description: 'Falha ao conectar com o serviço de envio',
+        description: 'zapi-send-message: Falha ao conectar com o serviço de envio',
       });
     }
   };
@@ -460,30 +471,38 @@ export default function InboxPage() {
 
       const { data: urlData } = supabase.storage.from('chat-files').getPublicUrl(filePath);
 
+      const requestPayload = {
+        conversation_id: activeConversationId,
+        file_url: urlData.publicUrl,
+        file_name: file.name,
+        file_type: file.type,
+        sender_id: user.id,
+      };
+
+      console.log('[zapi-send-file] Request payload:', requestPayload);
+
       const { data, error } = await supabase.functions.invoke('zapi-send-file', {
-        body: {
-          conversation_id: activeConversationId,
-          file_url: urlData.publicUrl,
-          file_name: file.name,
-          file_type: file.type,
-          sender_id: user.id,
-        },
+        body: requestPayload,
       });
 
+      console.log('[zapi-send-file] Response:', { data, error });
+
       if (error || data?.error) {
+        console.error('[zapi-send-file] Error:', error || data);
         toast({
           variant: 'destructive',
           title: 'Erro ao enviar arquivo',
-          description: error?.message || data?.error,
+          description: `zapi-send-file: ${error?.message || data?.error}${data?.details ? ` - ${JSON.stringify(data.details)}` : ''}`,
         });
       } else {
         toast({ title: 'Arquivo enviado' });
       }
     } catch (err) {
+      console.error('[zapi-send-file] Exception:', err);
       toast({
         variant: 'destructive',
         title: 'Erro ao enviar arquivo',
-        description: 'Falha ao conectar com o serviço de envio',
+        description: 'zapi-send-file: Falha ao conectar com o serviço de envio',
       });
     }
   };
