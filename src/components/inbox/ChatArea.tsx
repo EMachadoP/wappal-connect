@@ -9,7 +9,9 @@ import { ConversationActionsMenu } from './ConversationActionsMenu';
 import { ParticipantHeader } from './ParticipantHeader';
 import { IdentifyParticipantModal } from './IdentifyParticipantModal';
 import { AIControlBar } from './AIControlBar';
+import { CondominiumChips } from './CondominiumSelector';
 import { useParticipantInfo } from '@/hooks/useParticipantInfo';
+import { useContactCondominiums } from '@/hooks/useContactCondominiums';
 interface Message {
   id: string;
   content?: string | null;
@@ -50,6 +52,12 @@ interface Label {
   color: string;
 }
 
+interface Condominium {
+  id: string;
+  name: string;
+  is_default?: boolean;
+}
+
 interface ChatAreaProps {
   contact: Contact | null;
   messages: Message[];
@@ -64,6 +72,8 @@ interface ChatAreaProps {
   aiMode?: 'AUTO' | 'COPILOT' | 'OFF';
   aiPausedUntil?: string | null;
   humanControl?: boolean;
+  activeCondominiumId?: string | null;
+  activeCondominiumSetBy?: string | null;
   onSendMessage: (content: string) => void;
   onSendFile?: (file: File) => void;
   onResolveConversation?: () => void;
@@ -75,6 +85,7 @@ interface ChatAreaProps {
   onAssignTeam?: (teamId: string) => void;
   onAddLabel?: (labelId: string) => void;
   onAiModeChange?: (mode: 'AUTO' | 'COPILOT' | 'OFF') => void;
+  onSelectCondominium?: (condominiumId: string) => void;
   loading?: boolean;
   isMobile?: boolean;
 }
@@ -96,6 +107,8 @@ export function ChatArea({
   aiMode = 'AUTO',
   aiPausedUntil,
   humanControl = false,
+  activeCondominiumId,
+  activeCondominiumSetBy,
   onSendMessage,
   onSendFile,
   onResolveConversation,
@@ -107,6 +120,7 @@ export function ChatArea({
   onAssignTeam,
   onAddLabel,
   onAiModeChange,
+  onSelectCondominium,
   loading,
   isMobile = false,
 }: ChatAreaProps) {
@@ -125,6 +139,16 @@ export function ChatArea({
     displayNameType,
     refetch: refetchParticipant,
   } = useParticipantInfo(contact?.id, conversationId ?? undefined);
+
+  // Fetch condominiums for the contact
+  const {
+    condominiums,
+    loading: loadingCondominiums,
+  } = useContactCondominiums(contact?.id ?? null);
+
+  // Check if condominium selection is needed
+  const needsCondominiumSelection = condominiums.length > 1 && !activeCondominiumId;
+
   // Smart auto-scroll: only scroll if user is at bottom
   const checkIfAtBottom = useCallback(() => {
     const container = messagesContainerRef.current;
@@ -277,8 +301,24 @@ export function ChatArea({
           whatsappDisplayName={contactInfo?.whatsapp_display_name || contact.whatsapp_display_name}
           participant={participant}
           displayNameType={displayNameType}
+          conversationId={conversationId ?? undefined}
+          condominiums={condominiums}
+          activeCondominiumId={activeCondominiumId}
+          activeCondominiumSetBy={activeCondominiumSetBy}
+          loadingCondominiums={loadingCondominiums}
           onIdentify={() => setIdentifyModalOpen(true)}
+          onSelectCondominium={onSelectCondominium}
         />
+      )}
+
+      {/* Condominium Selection Chips - shown when AI asks or selection needed */}
+      {needsCondominiumSelection && onSelectCondominium && (
+        <div className="px-4 py-2">
+          <CondominiumChips
+            condominiums={condominiums}
+            onSelect={onSelectCondominium}
+          />
+        </div>
       )}
 
       {/* Messages - Independent scroll area */}

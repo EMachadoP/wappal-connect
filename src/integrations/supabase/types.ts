@@ -381,6 +381,66 @@ export type Database = {
           },
         ]
       }
+      condominiums: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      contact_condominiums: {
+        Row: {
+          condominium_id: string
+          contact_id: string
+          created_at: string
+          id: string
+          is_default: boolean
+        }
+        Insert: {
+          condominium_id: string
+          contact_id: string
+          created_at?: string
+          id?: string
+          is_default?: boolean
+        }
+        Update: {
+          condominium_id?: string
+          contact_id?: string
+          created_at?: string
+          id?: string
+          is_default?: boolean
+        }
+        Relationships: [
+          {
+            foreignKeyName: "contact_condominiums_condominium_id_fkey"
+            columns: ["condominium_id"]
+            isOneToOne: false
+            referencedRelation: "condominiums"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contact_condominiums_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       contacts: {
         Row: {
           chat_lid: string | null
@@ -566,6 +626,10 @@ export type Database = {
       }
       conversations: {
         Row: {
+          active_condominium_confidence: number | null
+          active_condominium_id: string | null
+          active_condominium_set_at: string | null
+          active_condominium_set_by: string | null
           ai_mode: string | null
           ai_paused_until: string | null
           assigned_at: string | null
@@ -590,6 +654,10 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          active_condominium_confidence?: number | null
+          active_condominium_id?: string | null
+          active_condominium_set_at?: string | null
+          active_condominium_set_by?: string | null
           ai_mode?: string | null
           ai_paused_until?: string | null
           assigned_at?: string | null
@@ -614,6 +682,10 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          active_condominium_confidence?: number | null
+          active_condominium_id?: string | null
+          active_condominium_set_at?: string | null
+          active_condominium_set_by?: string | null
           ai_mode?: string | null
           ai_paused_until?: string | null
           assigned_at?: string | null
@@ -638,6 +710,13 @@ export type Database = {
           updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "conversations_active_condominium_id_fkey"
+            columns: ["active_condominium_id"]
+            isOneToOne: false
+            referencedRelation: "condominiums"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "conversations_assigned_to_fkey"
             columns: ["assigned_to"]
