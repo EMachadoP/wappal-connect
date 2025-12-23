@@ -6,6 +6,110 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-internal-secret',
 };
 
+// Audio transcription constants
+const AUDIO_ACK_MESSAGE = "Recebi seu áudio 👍 Estou verificando aqui e já te retorno.";
+
+// Transcribe audio using Lovable AI Gateway (Gemini)
+// deno-lint-ignore no-explicit-any
+async function transcribeAudio(
+  supabase: any,
+  mediaUrl: string,
+  messageId: string
+): Promise<{ transcript: string | null; error?: string }> {
+  try {
+    console.log('Transcribing audio from:', mediaUrl);
+    
+    // Download the audio file
+    const audioResponse = await fetch(mediaUrl);
+    if (!audioResponse.ok) {
+      console.error('Failed to download audio:', audioResponse.status);
+      return { transcript: null, error: 'Failed to download audio' };
+    }
+    
+    const audioBlob = await audioResponse.blob();
+    const audioBuffer = await audioBlob.arrayBuffer();
+    const base64Audio = btoa(String.fromCharCode(...new Uint8Array(audioBuffer)));
+    const mimeType = audioResponse.headers.get('content-type') || 'audio/ogg';
+    
+    console.log('Audio downloaded, size:', audioBuffer.byteLength, 'type:', mimeType);
+    
+    // Use Lovable AI Gateway with Gemini Flash (supports audio)
+    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
+    if (!lovableApiKey) {
+      console.error('LOVABLE_API_KEY not configured');
+      return { transcript: null, error: 'API key not configured' };
+    }
+    
+    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${lovableApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: 'Transcreva este áudio em português brasileiro. Retorne APENAS a transcrição, sem introduções, explicações ou comentários adicionais. Se não conseguir entender o áudio, retorne "[inaudível]".'
+              },
+              {
+                type: 'input_audio',
+                input_audio: {
+                  data: base64Audio,
+                  format: mimeType.includes('mp3') ? 'mp3' : mimeType.includes('wav') ? 'wav' : 'ogg'
+                }
+              }
+            ]
+          }
+        ],
+        temperature: 0.1,
+        max_tokens: 2048,
+      }),
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Transcription API error:', response.status, errorText);
+      return { transcript: null, error: `API error: ${response.status}` };
+    }
+    
+    const result = await response.json();
+    const transcript = result.choices?.[0]?.message?.content?.trim() || null;
+    
+    console.log('Transcription result:', transcript?.substring(0, 100));
+    
+    // Save transcript to message using raw SQL to avoid type issues
+    if (transcript) {
+      const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+      const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+      
+      await fetch(`${supabaseUrl}/rest/v1/messages?id=eq.${messageId}`, {
+        method: 'PATCH',
+        headers: {
+          'apikey': supabaseServiceKey,
+          'Authorization': `Bearer ${supabaseServiceKey}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          transcript,
+          transcribed_at: new Date().toISOString(),
+          transcript_provider: 'gemini-2.5-flash',
+        }),
+      });
+    }
+    
+    return { transcript };
+  } catch (error) {
+    console.error('Transcription error:', error);
+    return { transcript: null, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
+
 interface DaySchedule {
   enabled: boolean;
   start: string;
@@ -566,13 +670,97 @@ serve(async (req) => {
       );
     }
 
-    // Get conversation history
+    // ========== AUDIO TRANSCRIPTION CHECK ==========
+    // Get the last inbound message to check if it's audio
+    const { data: lastInboundMsg } = await supabase
+      .from('messages')
+      .select('id, message_type, media_url, content')
+      .eq('conversation_id', conversation_id)
+      .eq('sender_type', 'contact')
+      .order('sent_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    // Check if last message is audio and needs transcription
+    if (lastInboundMsg?.message_type === 'audio' && lastInboundMsg.media_url) {
+      console.log('Last message is audio, checking for transcript');
+      
+      // Check if already transcribed (stored in message)
+      const { data: msgWithTranscript } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('id', lastInboundMsg.id)
+        .single();
+      
+      // Access transcript via raw data since types not updated yet
+      const rawMsg = msgWithTranscript as Record<string, unknown>;
+      const existingTranscript = rawMsg?.transcript as string | null;
+      
+      if (!existingTranscript) {
+        console.log('Audio needs transcription');
+        
+        // Send acknowledgment message first
+        await supabase.functions.invoke('zapi-send-message', {
+          body: {
+            conversation_id: conversation_id,
+            content: AUDIO_ACK_MESSAGE,
+            message_type: 'text',
+            sender_name: 'Ana Mônica',
+          },
+        });
+        
+        // Transcribe the audio
+        const { transcript, error: transcriptError } = await transcribeAudio(
+          supabase,
+          lastInboundMsg.media_url,
+          lastInboundMsg.id
+        );
+        
+        if (transcriptError || !transcript) {
+          console.error('Failed to transcribe audio:', transcriptError);
+          // Continue without transcript - AI will respond based on context
+        } else {
+          console.log('Audio transcribed successfully');
+        }
+      }
+    }
+
+    // Get conversation history (now includes transcript if just added)
     const { data: messages } = await supabase
       .from('messages')
-      .select('content, sender_type, sent_at')
+      .select('id, content, sender_type, sent_at, message_type, media_url')
       .eq('conversation_id', conversation_id)
       .order('sent_at', { ascending: false })
       .limit(settings.memory_message_count);
+
+    // Get transcripts for audio messages (raw query to handle new columns)
+    const audioMessageIds = (messages || [])
+      .filter(m => m.message_type === 'audio')
+      .map(() => ''); // We'll fetch all messages with transcripts
+    
+    // Fetch messages with transcripts using REST API to avoid type issues
+    let transcriptMap: Record<string, string> = {};
+    if (audioMessageIds.length > 0) {
+      try {
+        const transcriptResponse = await fetch(
+          `${supabaseUrl}/rest/v1/messages?conversation_id=eq.${conversation_id}&message_type=eq.audio&select=id,transcript`,
+          {
+            headers: {
+              'apikey': supabaseServiceKey,
+              'Authorization': `Bearer ${supabaseServiceKey}`,
+            },
+          }
+        );
+        const transcriptData = await transcriptResponse.json();
+        for (const item of transcriptData || []) {
+          if (item.transcript) {
+            transcriptMap[item.id] = item.transcript;
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to fetch transcripts:', e);
+      }
+    }
 
     // BOT DETECTION (Anti-loop)
     const botLikelihood = calculateBotLikelihood(messages || []);
@@ -639,13 +827,30 @@ serve(async (req) => {
       );
     }
 
+    // Build conversation history, using transcripts for audio messages
     const conversationHistory = (messages || [])
       .reverse()
       .filter(m => m.content)
-      .map(m => ({
-        role: m.sender_type === 'contact' ? 'user' : 'assistant',
-        content: m.content!,
-      }));
+      .map(m => {
+        // For audio messages, use transcript if available
+        let messageContent = m.content!;
+        
+        if (m.message_type === 'audio') {
+          // Check if we have a transcript for this message
+          const transcript = m.id ? transcriptMap[m.id] : null;
+          if (transcript) {
+            messageContent = `[Áudio transcrito]: ${transcript}`;
+          } else if (m.content.includes('🎤 Áudio')) {
+            // Audio without transcript - indicate it's an audio
+            messageContent = '[Mensagem de áudio não transcrita]';
+          }
+        }
+        
+        return {
+          role: m.sender_type === 'contact' ? 'user' : 'assistant',
+          content: messageContent,
+        };
+      });
 
     // Check if customer requested human
     const lastUserMessage = conversationHistory[conversationHistory.length - 1];
