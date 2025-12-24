@@ -6,17 +6,21 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-internal-secret',
 };
 
-// Audio transcription constants (no ack message - just transcribe silently)
-
-// Transcribe audio using Lovable AI Gateway (Gemini)
+// Audio transcription using OpenAI Whisper (much more accurate than Gemini for audio)
 // deno-lint-ignore no-explicit-any
 async function transcribeAudio(
-  supabase: any,
+  _supabase: any,
   mediaUrl: string,
   messageId: string
 ): Promise<{ transcript: string | null; error?: string }> {
   try {
     console.log('Transcribing audio from:', mediaUrl);
+    
+    const openaiKey = Deno.env.get('OPENAI_API_KEY');
+    if (!openaiKey) {
+      console.error('OPENAI_API_KEY not configured');
+      return { transcript: null, error: 'OpenAI API key not configured' };
+    }
     
     // Download the audio file
     const audioResponse = await fetch(mediaUrl);
@@ -26,62 +30,50 @@ async function transcribeAudio(
     }
     
     const audioBlob = await audioResponse.blob();
-    const audioBuffer = await audioBlob.arrayBuffer();
-    const base64Audio = btoa(String.fromCharCode(...new Uint8Array(audioBuffer)));
-    const mimeType = audioResponse.headers.get('content-type') || 'audio/ogg';
+    console.log('Audio downloaded, size:', audioBlob.size, 'type:', audioBlob.type);
     
-    console.log('Audio downloaded, size:', audioBuffer.byteLength, 'type:', mimeType);
+    // Determine file extension from content type or URL
+    let extension = 'ogg';
+    if (mediaUrl.includes('.mp3')) extension = 'mp3';
+    else if (mediaUrl.includes('.m4a')) extension = 'm4a';
+    else if (mediaUrl.includes('.wav')) extension = 'wav';
+    else if (mediaUrl.includes('.opus')) extension = 'opus';
+    else if (audioBlob.type.includes('mpeg')) extension = 'mp3';
+    else if (audioBlob.type.includes('mp4')) extension = 'm4a';
+    else if (audioBlob.type.includes('ogg')) extension = 'ogg';
     
-    // Use Lovable AI Gateway with Gemini Flash (supports audio)
-    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
-    if (!lovableApiKey) {
-      console.error('LOVABLE_API_KEY not configured');
-      return { transcript: null, error: 'API key not configured' };
-    }
+    // Prepare form data for OpenAI Whisper API
+    const formData = new FormData();
+    const file = new File([audioBlob], `audio.${extension}`, { 
+      type: audioBlob.type || 'audio/ogg' 
+    });
+    formData.append('file', file);
+    formData.append('model', 'whisper-1');
+    formData.append('language', 'pt'); // Portuguese
+    formData.append('response_format', 'json');
     
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    // Call OpenAI Whisper API
+    console.log('Calling OpenAI Whisper API for message:', messageId);
+    const whisperResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${lovableApiKey}`,
-        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${openaiKey}`,
       },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'text',
-                text: 'Transcreva este áudio em português brasileiro. Retorne APENAS a transcrição, sem introduções, explicações ou comentários adicionais. Se não conseguir entender o áudio, retorne "[inaudível]".'
-              },
-              {
-                type: 'input_audio',
-                input_audio: {
-                  data: base64Audio,
-                  format: mimeType.includes('mp3') ? 'mp3' : mimeType.includes('wav') ? 'wav' : 'ogg'
-                }
-              }
-            ]
-          }
-        ],
-        temperature: 0.1,
-        max_tokens: 2048,
-      }),
+      body: formData,
     });
     
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Transcription API error:', response.status, errorText);
-      return { transcript: null, error: `API error: ${response.status}` };
+    if (!whisperResponse.ok) {
+      const errorText = await whisperResponse.text();
+      console.error('Whisper API error:', whisperResponse.status, errorText);
+      return { transcript: null, error: `Whisper API error: ${whisperResponse.status}` };
     }
     
-    const result = await response.json();
-    const transcript = result.choices?.[0]?.message?.content?.trim() || null;
+    const whisperResult = await whisperResponse.json();
+    const transcript = whisperResult.text?.trim() || null;
     
-    console.log('Transcription result:', transcript?.substring(0, 100));
+    console.log('Transcription result for', messageId, ':', transcript?.substring(0, 100));
     
-    // Save transcript to message using raw SQL to avoid type issues
+    // Save transcript to message
     if (transcript) {
       const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
       const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -97,9 +89,11 @@ async function transcribeAudio(
         body: JSON.stringify({
           transcript,
           transcribed_at: new Date().toISOString(),
-          transcript_provider: 'gemini-2.5-flash',
+          transcript_provider: 'openai-whisper',
         }),
       });
+      
+      console.log('Transcript saved for message:', messageId);
     }
     
     return { transcript };
