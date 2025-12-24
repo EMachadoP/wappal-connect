@@ -4,6 +4,7 @@ import { ArrowLeft, Users } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { useNotificationSound } from '@/hooks/useNotificationSound';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { ConversationList } from '@/components/inbox/ConversationList';
 import { ChatArea } from '@/components/inbox/ChatArea';
@@ -72,6 +73,7 @@ export default function InboxPage() {
   const isMobile = useIsMobile();
   const { user, loading: authLoading } = useAuth();
   const { toast } = useToast();
+  const { playNotificationSound } = useNotificationSound();
   
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(conversationIdParam || null);
@@ -311,6 +313,32 @@ export default function InboxPage() {
         () => {
           // Nova conversa: refetch para aplicar lógica de agrupamento por thread
           fetchConversations();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        async (payload) => {
+          const newMessage = payload.new as any;
+          // Only notify for inbound messages from contacts (not agent/system)
+          if (newMessage.sender_type !== 'contact') return;
+          
+          // Get the conversation to check if it's assigned to current user and not resolved
+          const { data: conv } = await supabase
+            .from('conversations')
+            .select('assigned_to, status')
+            .eq('id', newMessage.conversation_id)
+            .maybeSingle();
+          
+          if (!conv) return;
+          
+          // Skip if conversation is resolved
+          if (conv.status === 'resolved') return;
+          
+          // Play sound if: assigned to current user OR unassigned
+          if (conv.assigned_to === user?.id || conv.assigned_to === null) {
+            playNotificationSound();
+          }
         }
       )
       .subscribe();
