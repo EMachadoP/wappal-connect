@@ -372,7 +372,31 @@ export default function InboxPage() {
       if (!isCancelled) setLoadingMessages(false);
 
       // Store conversation IDs in a ref-like variable for realtime
-      const activeThreadConversationIds = conversationIds;
+      let activeThreadConversationIds = conversationIds;
+      const activeContactId = contactId;
+      const activeThreadPhone = threadPhone;
+      const activeThreadChatLid = threadChatLid;
+      const activeThreadLid = threadLid;
+
+      // Function to refresh thread conversation IDs if a new conversation is created
+      const refreshThreadConversationIds = async () => {
+        let refreshContactIds: string[] = [activeContactId];
+        if (activeThreadChatLid || activeThreadPhone || activeThreadLid) {
+          let q = supabase.from('contacts').select('id');
+          if (activeThreadChatLid) q = q.eq('chat_lid', activeThreadChatLid);
+          else q = activeThreadPhone ? q.eq('phone', activeThreadPhone) : q.eq('lid', activeThreadLid);
+          const { data: refreshContacts } = await q;
+          if (refreshContacts?.length) {
+            refreshContactIds = refreshContacts.map((c: any) => c.id);
+          }
+        }
+        const { data: refreshConvs } = await supabase
+          .from('conversations')
+          .select('id')
+          .in('contact_id', refreshContactIds);
+        activeThreadConversationIds = refreshConvs?.map((c: any) => c.id) || [activeConversationId];
+        return activeThreadConversationIds;
+      };
 
       const channel = supabase
         .channel(`messages-thread-${activeConversationId}`)
@@ -383,10 +407,18 @@ export default function InboxPage() {
             schema: 'public',
             table: 'messages',
           },
-          (payload) => {
+          async (payload) => {
             const newMessage = payload.new as any as Message;
-            // Check if message belongs to any conversation in thread
-            if (!activeThreadConversationIds.includes((newMessage as any).conversation_id)) return;
+            const msgConvId = (newMessage as any).conversation_id;
+            
+            // If message is from unknown conversation, check if it's from our thread
+            if (!activeThreadConversationIds.includes(msgConvId)) {
+              // Refresh thread conversation IDs to catch newly created conversations
+              const updatedIds = await refreshThreadConversationIds();
+              if (!updatedIds.includes(msgConvId)) {
+                return; // Not our thread
+              }
+            }
 
             setMessages((prev) => {
               if (prev.some((m) => m.id === newMessage.id)) return prev;
@@ -403,9 +435,14 @@ export default function InboxPage() {
             schema: 'public',
             table: 'messages',
           },
-          (payload) => {
+          async (payload) => {
             const updatedMessage = payload.new as any as Message;
-            if (!activeThreadConversationIds.includes((updatedMessage as any).conversation_id)) return;
+            const msgConvId = (updatedMessage as any).conversation_id;
+            
+            if (!activeThreadConversationIds.includes(msgConvId)) {
+              const updatedIds = await refreshThreadConversationIds();
+              if (!updatedIds.includes(msgConvId)) return;
+            }
 
             setMessages((prev) =>
               prev.map((m) => (m.id === updatedMessage.id ? updatedMessage : m))
