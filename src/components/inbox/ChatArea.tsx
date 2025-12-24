@@ -27,6 +27,7 @@ interface Message {
   read_at?: string | null;
   agent_id?: string | null;
   agent_name?: string | null;
+  transcript?: string | null;
 }
 
 interface Contact {
@@ -379,6 +380,7 @@ export function ChatArea({
                 readAt={msg.read_at}
                 senderName={msg.agent_name || (msg.sender_type === 'agent' ? getSenderName(msg.sender_id || msg.agent_id) : null)}
                 isAIGenerated={msg.sender_type === 'agent' && !msg.sender_id && !msg.agent_id}
+                transcript={msg.transcript}
               />
             ))}
             <div ref={bottomRef} className="h-1" />

@@ -785,6 +785,48 @@ serve(async (req) => {
 
     console.log('Message saved:', message.id, { direction, isGroup: isGroupChat });
 
+    // Trigger transcription for audio messages
+    if (messageType === 'audio' && mediaUrl && !isFromMe) {
+      const transcribeUrl = `${supabaseUrl}/functions/v1/transcribe-audio`;
+      console.log('Triggering transcription for audio message:', message.id);
+      
+      const transcribeTask = async () => {
+        try {
+          const result = await fetchWithRetry(
+            transcribeUrl,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ 
+                message_id: message.id, 
+                audio_url: mediaUrl 
+              }),
+            },
+            2, // max retries
+            1000 // base delay 1s
+          );
+          
+          if (result.success) {
+            console.log('Transcription result:', result.data);
+          } else {
+            console.error('Transcription failed:', result.error);
+          }
+        } catch (err) {
+          console.error('Transcription task error:', err);
+        }
+      };
+      
+      // @ts-ignore - EdgeRuntime is available in Supabase Edge Functions
+      if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
+        // @ts-ignore
+        EdgeRuntime.waitUntil(transcribeTask());
+      } else {
+        transcribeTask().catch(err => console.error('Transcription error:', err));
+      }
+    }
+
     // Check for protocol resolution in group messages
     if (isGroupChat && !isFromMe && content) {
       const resolutionPatterns = [
