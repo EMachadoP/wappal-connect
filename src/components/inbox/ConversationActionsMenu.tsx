@@ -205,7 +205,7 @@ export function ConversationActionsMenu({
               profiles.map((profile) => (
                 <DropdownMenuItem
                   key={profile.id}
-                  onClick={() => onAssignAgent?.(profile.id)}
+                  onSelect={() => onAssignAgent?.(profile.id)}
                 >
                   {profile.name}
                   {assignedTo === profile.id && <span className="ml-auto">✓</span>}
@@ -228,7 +228,7 @@ export function ConversationActionsMenu({
               teams.map((team) => (
                 <DropdownMenuItem
                   key={team.id}
-                  onClick={() => onAssignTeam?.(team.id)}
+                  onSelect={() => onAssignTeam?.(team.id)}
                 >
                   {team.name}
                 </DropdownMenuItem>

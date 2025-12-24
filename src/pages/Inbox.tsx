@@ -698,30 +698,37 @@ export default function InboxPage() {
   const handleAssignAgent = async (agentId: string) => {
     if (!activeConversationId || !user) return;
 
-    const agent = profiles.find(p => p.id === agentId);
-    const currentUser = profiles.find(p => p.id === user.id);
+    try {
+      const agent = profiles.find((p) => p.id === agentId);
+      const currentUser = profiles.find((p) => p.id === user.id);
 
-    // Update conversation with assignment details
-    const { error } = await supabase
-      .from('conversations')
-      .update({ 
-        assigned_to: agentId,
-        assigned_at: new Date().toISOString(),
-        assigned_by: user.id,
-      })
-      .eq('id', activeConversationId);
+      // Update conversation with assignment details
+      const { error } = await supabase
+        .from('conversations')
+        .update({
+          assigned_to: agentId,
+          assigned_at: new Date().toISOString(),
+          assigned_by: user.id,
+        })
+        .eq('id', activeConversationId);
 
-    if (!error) {
+      if (error) {
+        toast({
+          variant: 'destructive',
+          title: 'Erro ao atribuir conversa',
+          description: error.message,
+        });
+        return;
+      }
+
       setActiveAssignedTo(agentId);
-      setConversations(prev => prev.map(c =>
-        c.id === activeConversationId
-          ? { ...c, assigned_to: agentId }
-          : c
-      ));
-      
-      // Insert system message for assignment
+      setConversations((prev) =>
+        prev.map((c) => (c.id === activeConversationId ? { ...c, assigned_to: agentId } : c))
+      );
+
+      // Insert system message for assignment (non-blocking)
       const systemMessageContent = `✅ Atribuída para ${agent?.name || 'agente'} por ${currentUser?.name || 'usuário'}`;
-      await supabase.from('messages').insert({
+      const { error: msgError } = await supabase.from('messages').insert({
         conversation_id: activeConversationId,
         sender_type: 'system',
         message_type: 'system',
@@ -729,7 +736,21 @@ export default function InboxPage() {
         sent_at: new Date().toISOString(),
       });
 
+      if (msgError) {
+        toast({
+          variant: 'destructive',
+          title: 'Atribuída, mas sem registrar mensagem',
+          description: msgError.message,
+        });
+      }
+
       toast({ title: `Atribuído a ${agent?.name || 'agente'}` });
+    } catch (e: any) {
+      toast({
+        variant: 'destructive',
+        title: 'Erro inesperado ao atribuir',
+        description: e?.message || 'Tente novamente',
+      });
     }
   };
 
