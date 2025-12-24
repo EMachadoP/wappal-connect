@@ -16,21 +16,20 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const payload = await req.json();
     
-    console.log('[Z-API Webhook] Payload:', JSON.stringify(payload, null, 2));
+    console.log('[Z-API Webhook] Payload recebido');
 
     const messageId = payload.messageId;
     const fromMe = Boolean(payload.fromMe);
-    const phone = payload.phone;
-    const chatLid = payload.chatLid;
     const isGroup = Boolean(payload.isGroup);
     
-    // Identificador único da conversa
-    const rawChatId = chatLid || phone;
-    if (!rawChatId) return new Response(JSON.stringify({ error: 'No phone/chatLid' }), { status: 400 });
+    // Normalização do ID: removemos @c.us mas mantemos @g.us para grupos
+    const rawId = (payload.chatLid || payload.phone || "").trim().toLowerCase();
+    if (!rawId) return new Response(JSON.stringify({ error: 'No identifier found' }), { status: 400 });
     
-    const chatId = rawChatId.trim().toLowerCase();
+    const chatId = isGroup ? rawId : rawId.replace('@c.us', '');
+    const phoneOnly = chatId.replace(/\D/g, '');
 
-    // Extração robusta de conteúdo
+    // Extração de conteúdo
     let content = "";
     if (typeof payload.text === 'string') content = payload.text;
     else if (payload.text?.message) content = payload.text.message;
@@ -38,57 +37,45 @@ serve(async (req) => {
     else if (payload.body) content = payload.body;
     else if (payload.image?.caption) content = payload.image.caption;
     else if (payload.video?.caption) content = payload.video.caption;
-
-    // Se for mensagem de sistema ou vazia (ex: vcard), usamos o tipo como fallback
     if (!content && payload.type) content = `[${payload.type}]`;
 
     // 1. Localizar ou criar Contato
-    const { data: contact } = await supabase
+    let contactId;
+    const { data: existingContact } = await supabase
       .from('contacts')
       .select('id')
-      .or(`chat_lid.eq.${chatId},phone.eq.${chatId.replace(/\D/g, '')}`)
+      .or(`chat_lid.eq."${chatId}",phone.eq."${phoneOnly}"`)
       .maybeSingle();
 
-    let contactId = contact?.id;
-
-    if (!contactId) {
-      const { data: newContact } = await supabase
+    if (existingContact) {
+      contactId = existingContact.id;
+    } else {
+      const { data: newContact, error: contactError } = await supabase
         .from('contacts')
         .insert({
           name: payload.senderName || payload.chatName || chatId,
-          phone: isGroup ? null : chatId.replace(/\D/g, ''),
+          phone: isGroup ? null : phoneOnly,
           chat_lid: chatId,
           is_group: isGroup,
         })
         .select('id')
         .single();
-      contactId = newContact?.id;
+      
+      if (contactError) throw contactError;
+      contactId = newContact.id;
     }
 
-    // 2. Localizar ou criar Conversa (baseado no thread_key)
+    // 2. Localizar ou criar Conversa (Usando o chatId normalizado como thread_key)
     const threadKey = chatId;
     const { data: conv } = await supabase
       .from('conversations')
-      .select('id, unread_count, ai_mode')
+      .select('id, unread_count')
       .eq('thread_key', threadKey)
       .maybeSingle();
 
-    let conversationId = conv?.id;
-
-    if (!conversationId) {
-      const { data: newConv } = await supabase
-        .from('conversations')
-        .insert({
-          contact_id: contactId,
-          chat_id: chatId,
-          thread_key: threadKey,
-          status: 'open',
-        })
-        .select('id')
-        .single();
-      conversationId = newConv?.id;
-    } else {
-      // Atualizar metadados da conversa
+    let conversationId;
+    if (conv) {
+      conversationId = conv.id;
       await supabase
         .from('conversations')
         .update({
@@ -97,25 +84,39 @@ serve(async (req) => {
           unread_count: fromMe ? 0 : (conv.unread_count || 0) + 1,
         })
         .eq('id', conversationId);
+    } else {
+      const { data: newConv, error: convError } = await supabase
+        .from('conversations')
+        .insert({
+          contact_id: contactId,
+          chat_id: chatId,
+          thread_key: threadKey,
+          status: 'open',
+          unread_count: fromMe ? 0 : 1,
+        })
+        .select('id')
+        .single();
+      
+      if (convError) throw convError;
+      conversationId = newConv.id;
     }
 
     // 3. Salvar Mensagem
     await supabase.from('messages').insert({
       conversation_id: conversationId,
       sender_type: fromMe ? 'agent' : 'contact',
-      message_type: payload.type === 'text' ? 'text' : (payload.image ? 'image' : (payload.audio ? 'audio' : 'text')),
+      message_type: payload.type === 'image' ? 'image' : (payload.type === 'audio' ? 'audio' : 'text'),
       content: content,
       provider: 'zapi',
       provider_message_id: messageId,
       chat_id: chatId,
       direction: fromMe ? 'outbound' : 'inbound',
       sent_at: new Date().toISOString(),
+      media_url: payload.image?.url || payload.audio?.url || payload.video?.url || null,
     });
 
-    // 4. Disparar IA se for mensagem recebida e não for grupo
-    if (!fromMe && !isGroup && conversationId) {
-      console.log('[Webhook] Chamando ai-maybe-reply para:', conversationId);
-      // Chamada assíncrona
+    // 4. IA - Resposta automática
+    if (!fromMe && !isGroup) {
       fetch(`${supabaseUrl}/functions/v1/ai-maybe-reply`, {
         method: 'POST',
         headers: {
@@ -123,13 +124,15 @@ serve(async (req) => {
           'Authorization': `Bearer ${supabaseServiceKey}`,
         },
         body: JSON.stringify({ conversation_id: conversationId }),
-      }).catch(err => console.error('Erro ao disparar IA:', err));
+      }).catch(err => console.error('Erro assíncrono IA:', err));
     }
 
-    return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ success: true, conversationId }), { 
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+    });
 
   } catch (error) {
-    console.error('[Webhook Error]', error);
+    console.error('[Webhook Error]', error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });
