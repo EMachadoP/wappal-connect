@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Navigate, useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Users } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
@@ -487,14 +487,23 @@ export default function InboxPage() {
       };
     };
 
-    let unsubscribe: void | (() => void);
+    const cleanupRef: { current: (() => void) | null } = { current: null };
+
     fetchMessages().then((cleanup) => {
-      unsubscribe = cleanup;
+      if (isCancelled) {
+        // Component unmounted before fetch completed, cleanup immediately
+        if (cleanup) cleanup();
+      } else {
+        cleanupRef.current = cleanup || null;
+      }
     });
 
     return () => {
       isCancelled = true;
-      if (typeof unsubscribe === 'function') unsubscribe();
+      if (cleanupRef.current) {
+        cleanupRef.current();
+        cleanupRef.current = null;
+      }
     };
   }, [activeConversationId, toast]);
 
