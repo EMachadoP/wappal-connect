@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-internal-secret',
 };
 
-// --- Tipos Locais ---
+// --- TIPOS ---
 type Contact = {
   id: string;
   name: string;
@@ -30,6 +30,7 @@ type Context = {
 
 type Middleware = (ctx: Context, next: () => Promise<void>) => Promise<void>;
 
+// --- ERROS ---
 class PipelineAbortError extends Error {
   constructor(public reason: string) {
     super(reason);
@@ -37,7 +38,7 @@ class PipelineAbortError extends Error {
   }
 }
 
-// --- Middlewares Consolidados ---
+// --- MIDDLEWARES ---
 
 const loadInitialData: Middleware = async (ctx, next) => {
   const supabase = createClient(ctx.supabaseUrl, ctx.supabaseServiceKey);
@@ -48,7 +49,7 @@ const loadInitialData: Middleware = async (ctx, next) => {
     .eq('id', ctx.conversationId)
     .single();
 
-  if (convError || !conv) throw new Error(`Conversa ${ctx.conversationId} não encontrada`);
+  if (convError || !conv) throw new Error(`Conversa não encontrada: ${ctx.conversationId}`);
 
   ctx.conversation = conv;
   ctx.contact = conv.contacts;
@@ -60,17 +61,14 @@ const checkFilters: Middleware = async (ctx, next) => {
   const { conversation, contact } = ctx;
   if (!conversation) return;
 
-  // Filtro de Modo
-  if (conversation.ai_mode === 'OFF') throw new PipelineAbortError('IA desativada para esta conversa');
+  if (conversation.ai_mode === 'OFF') throw new PipelineAbortError('IA desativada');
 
-  // Filtro de Controle Humano
   if (conversation.human_control && conversation.typing_lock_until) {
     if (new Date(conversation.typing_lock_until) > new Date()) {
-      throw new PipelineAbortError('Atendimento humano ativo ou pausado');
+      throw new PipelineAbortError('Humano ativo no momento');
     }
   }
 
-  // Filtro de Tags
   const tags = contact?.tags || [];
   if (tags.includes('fornecedor')) throw new PipelineAbortError('Remetente identificado como fornecedor');
 
@@ -82,17 +80,15 @@ const processResponse: Middleware = async (ctx, next) => {
   
   console.log(`[Pipeline] Gerando resposta para: ${ctx.conversationId}`);
   
-  // 1. Gera a resposta usando a outra Edge Function
   const { data: aiResult, error: aiError } = await supabase.functions.invoke('ai-generate-reply', {
     body: { conversation_id: ctx.conversationId }
   });
 
   if (aiError || !aiResult?.text) {
-    console.error('Falha na geração ou resposta vazia', aiError);
+    console.error('Falha na geração IA', aiError);
     return;
   }
 
-  // 2. Envia a mensagem via Z-API
   await supabase.functions.invoke('zapi-send-message', {
     body: {
       conversation_id: ctx.conversationId,
@@ -105,7 +101,7 @@ const processResponse: Middleware = async (ctx, next) => {
   await next();
 };
 
-// --- Pipeline Engine ---
+// --- ENGINE ---
 async function executePipeline(ctx: Context, middlewares: Middleware[]) {
   let index = 0;
   const next = async (): Promise<void> => {
@@ -117,7 +113,7 @@ async function executePipeline(ctx: Context, middlewares: Middleware[]) {
   await next();
 }
 
-// --- Servidor HTTP ---
+// --- SERVIDOR ---
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
