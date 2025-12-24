@@ -52,7 +52,7 @@ export function ConversationList({
         case 'unassigned':
           return conv.status === 'open' && !conv.assigned_to;
         case 'all':
-          return conv.status === 'open'; // Agora mostra TUDO que está aberto
+          return conv.status === 'open';
         case 'resolved':
           return conv.status === 'resolved';
         default:
@@ -83,17 +83,17 @@ export function ConversationList({
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabValue)} className="shrink-0 border-b border-border">
         <TabsList className="w-full h-auto p-0 bg-transparent grid grid-cols-4">
-          <TabsTrigger value="mine" className="text-[10px] px-1">Minhas ({countByTab.mine})</TabsTrigger>
-          <TabsTrigger value="unassigned" className="text-[10px] px-1">Fila ({countByTab.unassigned})</TabsTrigger>
-          <TabsTrigger value="all" className="text-[10px] px-1">Todos ({countByTab.all})</TabsTrigger>
-          <TabsTrigger value="resolved" className="text-[10px] px-1">OK</TabsTrigger>
+          <TabsTrigger value="mine" className="text-[10px] px-1 py-3 h-auto">Minhas ({countByTab.mine})</TabsTrigger>
+          <TabsTrigger value="unassigned" className="text-[10px] px-1 py-3 h-auto">Fila ({countByTab.unassigned})</TabsTrigger>
+          <TabsTrigger value="all" className="text-[10px] px-1 py-3 h-auto">Todos ({countByTab.all})</TabsTrigger>
+          <TabsTrigger value="resolved" className="text-[10px] px-1 py-3 h-auto">OK ({countByTab.resolved})</TabsTrigger>
         </TabsList>
       </Tabs>
 
       <div className="flex-1 overflow-y-auto">
         {filteredConversations.length === 0 ? (
           <div className="p-4 text-center text-muted-foreground text-sm">
-            Nenhuma conversa nesta aba
+            Nenhuma conversa encontrada
           </div>
         ) : (
           filteredConversations.map((conv) => (
