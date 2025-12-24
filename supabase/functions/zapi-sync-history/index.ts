@@ -230,22 +230,28 @@ Deno.serve(async (req) => {
 
         if (!existingConversation) {
           // Create conversation
-          const lastMessageAt = chat.lastMessageTime
-            ? new Date(parseInt(chat.lastMessageTime) * 1000).toISOString()
+          // Z-API returns lastMessageTime in milliseconds, not seconds
+          const timestamp = parseInt(chat.lastMessageTime);
+          const lastMessageAt = chat.lastMessageTime && timestamp > 0
+            ? new Date(timestamp > 9999999999 ? timestamp : timestamp * 1000).toISOString()
             : new Date().toISOString();
+
+          // Generate thread_key based on phone (required field)
+          const threadKey = `zapi_${phone.replace(/[^a-zA-Z0-9]/g, '_')}`;
 
           const { error: convError } = await supabase
             .from('conversations')
             .insert({
               contact_id: contactId,
               chat_id: isGroup ? groupKey : null,
+              thread_key: threadKey,
               status: 'open',
               unread_count: parseInt(chat.unread) || 0,
               last_message_at: lastMessageAt,
             });
 
           if (convError) {
-            // Unique chat_id race: fetch the existing one and move on
+            // Unique chat_id race or thread_key conflict: fetch the existing one and move on
             if (convError.code === '23505' && isGroup && groupKey) {
               console.log('Conversation already exists for group chat_id, skipping create:', groupKey);
             } else {
@@ -255,8 +261,10 @@ Deno.serve(async (req) => {
           }
         } else {
           // Update conversation with unread count
-          const lastMessageAt = chat.lastMessageTime
-            ? new Date(parseInt(chat.lastMessageTime) * 1000).toISOString()
+          // Z-API returns lastMessageTime in milliseconds, not seconds
+          const timestamp = parseInt(chat.lastMessageTime);
+          const lastMessageAt = chat.lastMessageTime && timestamp > 0
+            ? new Date(timestamp > 9999999999 ? timestamp : timestamp * 1000).toISOString()
             : null;
 
           const updateData: Record<string, unknown> = {
