@@ -838,7 +838,8 @@ serve(async (req) => {
     }
 
     // Check for protocol resolution in group messages
-    if (isGroupChat && !isFromMe && content) {
+    // Allow both incoming and outgoing messages (fromMe=true) to trigger resolution
+    if (isGroupChat && content) {
       const resolutionPatterns = [
         // G7-20251223-0005 - Resolvido (with various dash types and spaces)
         /(G7-\d{8}-\d{4,})\s*[-–—]?\s*resolvido/i,
@@ -852,8 +853,10 @@ serve(async (req) => {
       
       const isResolutionMessage = resolutionPatterns.some(pattern => pattern.test(content));
       
+      console.log('[Resolution Detection] Group:', isGroupChat, 'FromMe:', isFromMe, 'Content preview:', content?.substring(0, 100), 'IsResolution:', isResolutionMessage);
+      
       if (isResolutionMessage) {
-        console.log('Detected resolution message, triggering handler');
+        console.log('✅ Detected resolution message, triggering handler. FromMe:', isFromMe, 'Sender:', msgSenderPhone, 'Content:', content);
          try {
            const { data: resolutionResult, error: resolutionError } = await supabase.functions.invoke(
              'group-resolution-handler',
