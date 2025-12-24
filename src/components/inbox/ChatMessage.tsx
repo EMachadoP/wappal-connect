@@ -1,8 +1,13 @@
+import { useState } from 'react';
 import { format } from 'date-fns';
 import { Check, CheckCheck, FileText, Camera, Video, Mic, File } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MessageFeedback } from './MessageFeedback';
+import { MessageActionsMenu } from './MessageActionsMenu';
+import { EditMessageModal } from './EditMessageModal';
 import { Badge } from '@/components/ui/badge';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
 
 interface ChatMessageProps {
   messageId: string;
@@ -18,6 +23,8 @@ interface ChatMessageProps {
   senderName?: string | null;
   isAIGenerated?: boolean;
   transcript?: string | null;
+  onMessageDeleted?: (messageId: string) => void;
+  onMessageUpdated?: (messageId: string, newContent: string) => void;
 }
 
 export function ChatMessage({
@@ -34,15 +41,49 @@ export function ChatMessage({
   senderName,
   isAIGenerated,
   transcript,
+  onMessageDeleted,
+  onMessageUpdated,
 }: ChatMessageProps) {
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [localContent, setLocalContent] = useState(content);
+  const [isDeleted, setIsDeleted] = useState(false);
+  
   const time = format(new Date(sentAt), 'HH:mm');
+
+  const handleDelete = async () => {
+    try {
+      const { error } = await supabase
+        .from('messages')
+        .delete()
+        .eq('id', messageId);
+
+      if (error) throw error;
+
+      setIsDeleted(true);
+      onMessageDeleted?.(messageId);
+      toast.success('Mensagem excluída');
+    } catch (error) {
+      console.error('Error deleting message:', error);
+      toast.error('Erro ao excluir mensagem');
+    }
+  };
+
+  const handleEditSaved = (newContent: string) => {
+    setLocalContent(newContent);
+    onMessageUpdated?.(messageId, newContent);
+  };
+
+  // Don't render if deleted
+  if (isDeleted) {
+    return null;
+  }
 
   // Render system messages as centered badge
   if (isSystem || messageType === 'system') {
     return (
       <div className="flex justify-center my-3">
         <Badge variant="secondary" className="text-xs px-3 py-1 bg-muted text-muted-foreground font-normal">
-          {content} • {time}
+          {localContent} • {time}
         </Badge>
       </div>
     );
@@ -159,13 +200,26 @@ export function ChatMessage({
     return <Check className="w-4 h-4" />;
   };
 
+  // Only show edit/delete for outgoing text messages
+  const canEditDelete = isOutgoing && messageType === 'text';
+
   return (
     <div
       className={cn(
-        'flex mb-2',
+        'flex mb-2 group',
         isOutgoing ? 'justify-end' : 'justify-start'
       )}
     >
+      {/* Actions menu for outgoing messages - appears on left */}
+      {canEditDelete && isOutgoing && (
+        <div className="flex items-center mr-1">
+          <MessageActionsMenu
+            onEdit={() => setEditModalOpen(true)}
+            onDelete={handleDelete}
+          />
+        </div>
+      )}
+
       <div
         className={cn(
           'max-w-[70%] rounded-lg px-3 py-2',
@@ -183,8 +237,8 @@ export function ChatMessage({
         
         {messageType !== 'text' && messageType !== 'system' && renderMedia()}
         
-        {content && (
-          <p className="text-sm whitespace-pre-wrap break-words">{content}</p>
+        {localContent && (
+          <p className="text-sm whitespace-pre-wrap break-words">{localContent}</p>
         )}
         
         <div className={cn(
@@ -201,14 +255,33 @@ export function ChatMessage({
         </div>
 
         {/* Feedback buttons for AI-generated messages */}
-        {isOutgoing && isAIGenerated && content && conversationId && (
+        {isOutgoing && isAIGenerated && localContent && conversationId && (
           <MessageFeedback
             messageId={messageId}
             conversationId={conversationId}
-            messageContent={content}
+            messageContent={localContent}
           />
         )}
       </div>
+
+      {/* Actions menu for incoming messages - appears on right */}
+      {canEditDelete && !isOutgoing && (
+        <div className="flex items-center ml-1">
+          <MessageActionsMenu
+            onEdit={() => setEditModalOpen(true)}
+            onDelete={handleDelete}
+          />
+        </div>
+      )}
+
+      {/* Edit Modal */}
+      <EditMessageModal
+        open={editModalOpen}
+        onOpenChange={setEditModalOpen}
+        messageId={messageId}
+        currentContent={localContent || ''}
+        onSaved={handleEditSaved}
+      />
     </div>
   );
 }

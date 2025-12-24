@@ -381,6 +381,14 @@ export function ChatArea({
                 senderName={msg.agent_name || (msg.sender_type === 'agent' ? getSenderName(msg.sender_id || msg.agent_id) : null)}
                 isAIGenerated={msg.sender_type === 'agent' && !msg.sender_id && !msg.agent_id}
                 transcript={msg.transcript}
+                onMessageDeleted={(id) => {
+                  // Messages will be refreshed via realtime subscription
+                  console.log('Message deleted:', id);
+                }}
+                onMessageUpdated={(id, newContent) => {
+                  // Messages will be refreshed via realtime subscription
+                  console.log('Message updated:', id, newContent);
+                }}
               />
             ))}
             <div ref={bottomRef} className="h-1" />
