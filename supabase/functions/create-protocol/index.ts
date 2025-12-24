@@ -204,12 +204,24 @@ serve(async (req: Request) => {
       // Trigger notification if requested
       if (notify_group) {
         try {
+          // Fetch condominium name if we have an ID
+          let condominiumName: string | null = null;
+          if (condominium_id) {
+            const { data: condo } = await supabase
+              .from('condominiums')
+              .select('name')
+              .eq('id', condominium_id)
+              .single();
+            condominiumName = condo?.name || null;
+          }
+          
           await supabase.functions.invoke('protocol-opened', {
             body: {
               protocol_id: insertedProtocol.id,
               protocol_code: insertedProtocol.protocol_code,
               conversation_id,
               condominium_id,
+              condominium_name: condominiumName,
               category,
               priority,
               summary,
@@ -275,12 +287,24 @@ serve(async (req: Request) => {
     // Trigger notification if requested
     if (notify_group) {
       try {
+        // Fetch condominium name if we have an ID
+        let condominiumName: string | null = null;
+        if (condominium_id) {
+          const { data: condo } = await supabase
+            .from('condominiums')
+            .select('name')
+            .eq('id', condominium_id)
+            .single();
+          condominiumName = condo?.name || null;
+        }
+        
         await supabase.functions.invoke('protocol-opened', {
           body: {
             protocol_id: insertedProtocol.id,
             protocol_code: insertedProtocol.protocol_code,
             conversation_id,
             condominium_id,
+            condominium_name: condominiumName,
             category,
             priority,
             summary,
