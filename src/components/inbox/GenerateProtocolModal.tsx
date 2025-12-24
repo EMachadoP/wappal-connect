@@ -190,6 +190,19 @@ export function GenerateProtocolModal({
 
     setLoading(true);
     try {
+      // Check if conversation already has a protocol
+      const { data: existingConversation } = await supabase
+        .from('conversations')
+        .select('protocol')
+        .eq('id', conversationId)
+        .single();
+      
+      if (existingConversation?.protocol) {
+        toast.error(`Esta conversa já possui o protocolo ${existingConversation.protocol}`);
+        setLoading(false);
+        return;
+      }
+
       // Generate protocol code
       const yearMonth = new Date().toISOString().slice(0, 7).replace('-', '');
       const { data: existingProtocols } = await supabase
