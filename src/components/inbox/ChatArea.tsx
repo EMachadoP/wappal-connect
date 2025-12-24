@@ -196,8 +196,8 @@ export function ChatArea({
     scrollToBottom(false);
     setShouldAutoScroll(true);
     
-    // Multiple attempts to ensure scroll after async content loads
-    const timers = [50, 150, 300].map(delay => 
+    // Multiple attempts to ensure scroll after async content loads (images, media)
+    const timers = [50, 150, 300, 500, 800, 1200].map(delay => 
       setTimeout(() => scrollToBottom(false), delay)
     );
     
@@ -208,6 +208,11 @@ export function ChatArea({
   useEffect(() => {
     if (!loading && messages.length > 0) {
       scrollToBottom(false);
+      // Extra scroll attempts for media content that may load later
+      const timers = [100, 300, 600].map(delay => 
+        setTimeout(() => scrollToBottom(false), delay)
+      );
+      return () => timers.forEach(clearTimeout);
     }
   }, [loading, messages.length, scrollToBottom]);
 

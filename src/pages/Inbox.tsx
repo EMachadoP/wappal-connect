@@ -216,8 +216,10 @@ export default function InboxPage() {
         const formatted: Conversation[] = Array.from(threadMap.values()).map((conv: any) => {
           const lastMsg = lastMessagesMap.get(conv.id);
           const contact = conv.contacts;
-          // Use whatsapp_display_name if available, otherwise fall back to name
-          const displayName = contact?.whatsapp_display_name || contact?.name || 'Desconhecido';
+          // For groups, use group_name. For contacts, use whatsapp_display_name or name
+          const displayName = contact?.is_group 
+            ? (contact?.group_name || contact?.name || 'Grupo') 
+            : (contact?.whatsapp_display_name || contact?.name || 'Desconhecido');
           return {
             id: conv.id,
             contact: {
