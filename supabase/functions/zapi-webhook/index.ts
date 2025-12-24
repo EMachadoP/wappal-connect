@@ -519,7 +519,15 @@ serve(async (req) => {
         }
         if (contactPhone && !contactRecord.phone) updates.phone = contactPhone;
         if (chatId && !contactRecord.chat_lid) updates.chat_lid = chatId;
-        if (contactName && contactRecord.name === 'Contato Desconhecido') updates.name = contactName;
+        
+        // Update name if current name is just the phone number or unknown
+        const currentNameIsPhone = contactRecord.name && /^\d+$/.test(contactRecord.name.replace(/\D/g, ''));
+        const currentNameIsUnknown = contactRecord.name === 'Contato Desconhecido';
+        if (senderName && (currentNameIsPhone || currentNameIsUnknown)) {
+          updates.name = senderName;
+          console.log('Updating contact name from pushName:', senderName);
+        }
+        
         if (contactPhoto && !contactRecord.profile_picture_url) updates.profile_picture_url = contactPhoto;
         if (senderName && senderName !== contactRecord.whatsapp_display_name) {
           updates.whatsapp_display_name = senderName;
