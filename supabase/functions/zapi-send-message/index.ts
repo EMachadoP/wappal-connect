@@ -6,45 +6,69 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
-  try {
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-    const { conversation_id, content, message_type, media_url, sender_id, sender_name: providedName } = await req.json();
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+  const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
 
-    const { data: conv } = await supabase.from('conversations').select('*, contacts(*)').eq('id', conversation_id).single();
+  try {
+    // 1. Identificar o usuário através do JWT
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) throw new Error('Não autorizado: Cabeçalho ausente');
+
+    const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } }
+    });
+    
+    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
+    if (authError || !user) throw new Error('Token inválido ou expirado');
+
+    // 2. Verificar se o usuário tem permissão (Agente ou Admin)
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+    const { data: roleData } = await supabaseAdmin
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (!roleData || !['admin', 'agent'].includes(roleData.role)) {
+      throw new Error('Acesso negado: Requer privilégios de agente');
+    }
+
+    // 3. Obter dados seguros do perfil (não confiamos no nome enviado pelo cliente)
+    const { data: profile } = await supabaseAdmin
+      .from('profiles')
+      .select('name, display_name')
+      .eq('id', user.id)
+      .single();
+
+    const senderName = profile?.display_name || profile?.name || 'G7';
+
+    // 4. Processar o envio
+    const { conversation_id, content, message_type, media_url } = await req.json();
+    
+    const { data: conv } = await supabaseAdmin
+      .from('conversations')
+      .select('*, contacts(*)')
+      .eq('id', conversation_id)
+      .single();
+
     if (!conv) throw new Error('Conversa não encontrada');
 
-    // 1. Obter credenciais (Prioridade: Env > DB)
-    let instanceId = Deno.env.get('ZAPI_INSTANCE_ID');
-    let token = Deno.env.get('ZAPI_TOKEN');
-    let clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN');
-
-    if (!instanceId || !token) {
-      const { data: settings } = await supabase.from('zapi_settings').select('*').limit(1).single();
-      instanceId = settings?.zapi_instance_id || instanceId;
-      token = settings?.zapi_token || token;
-      clientToken = settings?.zapi_security_token || clientToken;
-    }
+    // Buscar credenciais Z-API
+    const { data: settings } = await supabaseAdmin.from('zapi_settings').select('*').limit(1).single();
+    const instanceId = Deno.env.get('ZAPI_INSTANCE_ID') || settings?.zapi_instance_id;
+    const token = Deno.env.get('ZAPI_TOKEN') || settings?.zapi_token;
+    const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN') || settings?.zapi_security_token;
 
     if (!instanceId || !token) throw new Error('Credenciais Z-API não configuradas');
 
-    const contact = conv.contacts;
-    let recipient = contact.lid || conv.chat_id || contact.chat_lid || contact.phone;
+    const recipient = conv.contacts?.lid || conv.chat_id || conv.contacts?.phone;
+    if (!recipient) throw new Error('Destinatário inválido');
 
-    if (!recipient) throw new Error('Destinatário não identificado');
-    if (!recipient.includes('@')) recipient = recipient.replace(/\D/g, '');
-
-    let senderName = providedName || 'G7';
-    if (!providedName && sender_id) {
-      const { data: profile } = await supabase.from('profiles').select('name').eq('id', sender_id).single();
-      if (profile?.name) senderName = profile.name;
-    }
-
+    // Prefixo com o nome do atendente para clareza no WhatsApp
     const prefixedContent = `*${senderName}:*\n${content}`;
     const zapiBaseUrl = `https://api.z-api.io/instances/${instanceId}/token/${token}`;
     
@@ -66,12 +90,13 @@ serve(async (req) => {
     });
 
     const result = await response.json();
-    if (!response.ok) throw new Error(result.message || 'Erro no Z-API');
+    if (!response.ok) throw new Error(result.message || 'Erro no provedor WhatsApp');
 
-    await supabase.from('messages').insert({
+    // 5. Salvar log com o ID do usuário real (extraído do JWT)
+    await supabaseAdmin.from('messages').insert({
       conversation_id,
       sender_type: 'agent',
-      sender_id: sender_id || null,
+      sender_id: user.id, // ID VALIDADO
       agent_name: senderName,
       content,
       message_type: message_type || 'text',
@@ -82,12 +107,20 @@ serve(async (req) => {
       status: 'sent'
     });
 
-    await supabase.from('conversations').update({ last_message_at: new Date().toISOString(), unread_count: 0 }).eq('id', conversation_id);
+    await supabaseAdmin.from('conversations').update({ 
+      last_message_at: new Date().toISOString(), 
+      unread_count: 0 
+    }).eq('id', conversation_id);
 
-    return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ success: true }), { 
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+    });
 
   } catch (error) {
-    console.error('[Send Message Error]', error.message);
-    return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    console.error('[Send Message Security Error]', error.message);
+    return new Response(JSON.stringify({ error: error.message }), { 
+      status: error.message.includes('Acesso negado') ? 403 : 500, 
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+    });
   }
 });
