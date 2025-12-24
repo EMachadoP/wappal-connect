@@ -3,147 +3,92 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-internal-secret',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// --- TYPES ---
-type Contact = {
-  id: string;
-  name: string;
-  tags?: string[] | null;
-};
-
-type Conversation = {
-  id: string;
-  ai_mode: 'AUTO' | 'COPILOT' | 'OFF';
-  human_control: boolean;
-  typing_lock_until?: string | null;
-};
-
-type Context = {
-  conversationId: string;
-  conversation?: Conversation;
-  contact?: Contact;
-  supabaseUrl: string;
-  supabaseServiceKey: string;
-};
-
-type Middleware = (ctx: Context, next: () => Promise<void>) => Promise<void>;
-
-class PipelineAbortError extends Error {
-  constructor(public reason: string) {
-    super(reason);
-    this.name = 'PipelineAbortError';
-  }
-}
-
-// --- MIDDLEWARES ---
-
-const loadInitialData: Middleware = async (ctx, next) => {
-  const supabase = createClient(ctx.supabaseUrl, ctx.supabaseServiceKey);
-  
-  const { data: conv, error: convError } = await supabase
-    .from('conversations')
-    .select('*, contacts(*)')
-    .eq('id', ctx.conversationId)
-    .single();
-
-  if (convError || !conv) throw new Error(`Conversa não encontrada: ${ctx.conversationId}`);
-
-  ctx.conversation = conv;
-  ctx.contact = conv.contacts;
-
-  await next();
-};
-
-const checkFilters: Middleware = async (ctx, next) => {
-  const { conversation, contact } = ctx;
-  if (!conversation) return;
-
-  if (conversation.ai_mode === 'OFF') throw new PipelineAbortError('IA desativada');
-
-  if (conversation.human_control && conversation.typing_lock_until) {
-    if (new Date(conversation.typing_lock_until) > new Date()) {
-      throw new PipelineAbortError('Humano ativo no momento');
-    }
-  }
-
-  const tags = contact?.tags || [];
-  if (tags.includes('fornecedor')) throw new PipelineAbortError('Remetente identificado como fornecedor');
-
-  await next();
-};
-
-const processResponse: Middleware = async (ctx, next) => {
-  const supabase = createClient(ctx.supabaseUrl, ctx.supabaseServiceKey);
-  
-  console.log(`[Pipeline] Gerando resposta para: ${ctx.conversationId}`);
-  
-  const { data: aiResult, error: aiError } = await supabase.functions.invoke('ai-generate-reply', {
-    body: { conversation_id: ctx.conversationId }
-  });
-
-  if (aiError || !aiResult?.text) {
-    console.error('Falha na geração IA', aiError);
-    return;
-  }
-
-  await supabase.functions.invoke('zapi-send-message', {
-    body: {
-      conversation_id: ctx.conversationId,
-      content: aiResult.text,
-      message_type: 'text',
-      sender_name: 'Ana Mônica'
-    }
-  });
-
-  await next();
-};
-
-// --- ENGINE ---
-async function executePipeline(ctx: Context, middlewares: Middleware[]) {
-  let index = 0;
-  const next = async (): Promise<void> => {
-    if (index < middlewares.length) {
-      const middleware = middlewares[index++];
-      await middleware(ctx, next);
-    }
-  };
-  await next();
-}
-
-// --- SERVER ---
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   try {
     const { conversation_id } = await req.json();
-    if (!conversation_id) throw new Error('ID da conversa é obrigatório');
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const ctx: Context = {
-      conversationId: conversation_id,
-      supabaseUrl: Deno.env.get('SUPABASE_URL')!,
-      supabaseServiceKey: Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+    console.log('[ai-maybe-reply] Processando:', conversation_id);
+
+    // 1. Carregar dados da conversa e configurações
+    const { data: conv } = await supabase
+      .from('conversations')
+      .select('*, contacts(*)')
+      .eq('id', conversation_id)
+      .single();
+
+    if (!conv || conv.ai_mode === 'OFF') return new Response(JSON.stringify({ success: false, reason: 'IA OFF' }));
+
+    // 2. Buscar histórico de mensagens
+    const { data: msgs } = await supabase
+      .from('messages')
+      .select('content, sender_type')
+      .eq('conversation_id', conversation_id)
+      .order('sent_at', { ascending: false })
+      .limit(10);
+
+    const messages = (msgs || []).reverse().map(m => ({
+      role: m.sender_type === 'contact' ? 'user' : 'assistant',
+      content: m.content || '',
+    }));
+
+    // 3. Buscar prompt e configurações globais
+    const { data: settings } = await supabase.from('ai_settings').select('*').single();
+    
+    let systemPrompt = settings?.base_system_prompt || "Você é um assistente virtual.";
+    const variables: Record<string, string> = {
+      '{{customer_name}}': conv.contacts?.name || 'Cliente',
+      '{{timezone}}': settings?.timezone || 'America/Recife',
     };
 
-    await executePipeline(ctx, [loadInitialData, checkFilters, processResponse]);
-
-    return new Response(JSON.stringify({ success: true }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
-
-  } catch (error) {
-    if (error instanceof PipelineAbortError) {
-      console.log(`[Pipeline Abortado] ${error.reason}`);
-      return new Response(JSON.stringify({ success: false, reason: error.reason }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+    for (const [key, value] of Object.entries(variables)) {
+      systemPrompt = systemPrompt.replace(new RegExp(key, 'g'), value);
     }
 
-    console.error('[Pipeline Erro]', error);
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    // 4. Chamar geração da resposta
+    console.log('[ai-maybe-reply] Chamando geração...');
+    const aiResponse = await fetch(`${supabaseUrl}/functions/v1/ai-generate-reply`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${supabaseServiceKey}`,
+      },
+      body: JSON.stringify({
+        messages: messages,
+        systemPrompt: systemPrompt,
+      }),
     });
+
+    const aiData = await aiResponse.json();
+    if (!aiData.text) throw new Error('IA não gerou texto');
+
+    // 5. Enviar via Z-API
+    console.log('[ai-maybe-reply] Enviando resposta via Z-API');
+    await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${supabaseServiceKey}`,
+      },
+      body: JSON.stringify({
+        conversation_id,
+        content: aiData.text,
+        message_type: 'text',
+        sender_name: 'Ana Mônica'
+      }),
+    });
+
+    return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
+  } catch (error) {
+    console.error('[ai-maybe-reply] Erro:', error);
+    return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });
