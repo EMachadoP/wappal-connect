@@ -263,17 +263,31 @@ serve(async (req) => {
     let generatedText: string;
     let tokensIn = 0;
     let tokensOut = 0;
+    let finishReason: string | null = null;
 
     if (provider.provider === 'gemini' && !provider.model.includes('/')) {
       // Native Gemini API response
       generatedText = responseData.candidates?.[0]?.content?.parts?.[0]?.text || '';
       tokensIn = responseData.usageMetadata?.promptTokenCount || 0;
       tokensOut = responseData.usageMetadata?.candidatesTokenCount || 0;
+      finishReason = responseData.candidates?.[0]?.finishReason || null;
+      
+      // Log if response was cut due to max tokens
+      if (finishReason === 'MAX_TOKENS') {
+        console.warn('Response truncated due to MAX_TOKENS limit. Consider increasing max_tokens.');
+      }
+      console.log('Gemini response - finishReason:', finishReason, 'tokensOut:', tokensOut);
     } else {
       // OpenAI-compatible response (Lovable AI, OpenAI, Gemini via gateway)
       generatedText = responseData.choices?.[0]?.message?.content || '';
       tokensIn = responseData.usage?.prompt_tokens || 0;
       tokensOut = responseData.usage?.completion_tokens || 0;
+      finishReason = responseData.choices?.[0]?.finish_reason || null;
+      
+      if (finishReason === 'length') {
+        console.warn('Response truncated due to length limit. Consider increasing max_tokens.');
+      }
+      console.log('AI response - finishReason:', finishReason, 'tokensOut:', tokensOut);
     }
 
     const latencyMs = Date.now() - startTime;
