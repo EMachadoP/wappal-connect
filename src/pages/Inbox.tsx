@@ -167,25 +167,19 @@ export default function InboxPage() {
         const threadMap = new Map<string, any>();
 
         for (const conv of data) {
-          const contact = (conv as any).contacts;
-          // Usar thread_key do banco para evitar divergências com o webhook
-          const threadKey = (conv as any).thread_key || contact?.chat_lid || contact?.phone || contact?.lid || conv.contact_id;
+          // Usar thread_key que o Webhook já salvou no banco (evita divergências)
+          const threadKey = (conv as any).thread_key || conv.contact_id;
           const existing = threadMap.get(threadKey);
 
           if (!existing) {
             threadMap.set(threadKey, conv);
           } else {
-            // Priorizar conversas OPEN e mesclar contagem de não lidas
+            // Manter a conversa mais recente, somando unread_count
+            const existingTime = existing.last_message_at ? new Date(existing.last_message_at).getTime() : 0;
+            const convTime = conv.last_message_at ? new Date(conv.last_message_at).getTime() : 0;
             const unreadTotal = (existing.unread_count || 0) + (conv.unread_count || 0);
             
-            if (conv.status === 'open' && existing.status !== 'open') {
-              // Conversa OPEN tem prioridade sobre RESOLVED
-              threadMap.set(threadKey, { ...conv, unread_count: unreadTotal });
-            } else if (existing.status === 'open' && conv.status !== 'open') {
-              // Manter a OPEN existente, só somar unread
-              existing.unread_count = unreadTotal;
-            } else if (conv.last_message_at && (!existing.last_message_at || conv.last_message_at > existing.last_message_at)) {
-              // Ambas mesmo status: usar a mais recente
+            if (convTime > existingTime) {
               threadMap.set(threadKey, { ...conv, unread_count: unreadTotal });
             } else {
               existing.unread_count = unreadTotal;
