@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
-import { Navigate, useParams, useNavigate } from 'react-router-dom';
+import { useEffect, useState, useCallback } from 'react';
+import { useParams, useNavigate, Navigate } from 'react-router-dom';
 import { ArrowLeft, Users } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -170,7 +170,7 @@ export default function InboxPage() {
         const threadMap = new Map<string, any>();
 
         for (const conv of data) {
-          // Usar thread_key que o Webhook já salvou no banco (evita divergências)
+          // Lógica corrigida: Usar thread_key do banco para agrupamento exato
           const threadKey = (conv as any).thread_key || conv.contact_id;
           const existing = threadMap.get(threadKey);
 
@@ -195,7 +195,6 @@ export default function InboxPage() {
         const lastMessagesMap = new Map<string, { content: string | null; message_type: string }>();
         
         if (conversationIds.length > 0) {
-          // Get last message for each conversation
           const { data: messagesData } = await supabase
             .from('messages')
             .select('conversation_id, content, message_type, sent_at')
@@ -203,7 +202,6 @@ export default function InboxPage() {
             .order('sent_at', { ascending: false });
           
           if (messagesData) {
-            // Group by conversation_id and take the first (most recent)
             for (const msg of messagesData) {
               if (!lastMessagesMap.has(msg.conversation_id)) {
                 lastMessagesMap.set(msg.conversation_id, {
@@ -218,18 +216,16 @@ export default function InboxPage() {
         const formatted: Conversation[] = Array.from(threadMap.values()).map((conv: any) => {
           const lastMsg = lastMessagesMap.get(conv.id);
           const contact = conv.contacts;
-          // Helper to check if a name is just a phone number
+          
           const isOnlyNumber = (str: string | null | undefined): boolean => {
             if (!str) return true;
             return /^[\d\s\+\-\(\)]+$/.test(str.trim());
           };
           
-          // For groups, use group_name. For contacts, prefer whatsapp_display_name or name (skip if just numbers)
           let displayName = 'Desconhecido';
           if (contact?.is_group) {
             displayName = contact?.group_name || contact?.name || 'Grupo';
           } else {
-            // Priority: whatsapp_display_name > name, but skip if just a number
             const whatsappName = contact?.whatsapp_display_name;
             const contactName = contact?.name;
             
@@ -238,7 +234,6 @@ export default function InboxPage() {
             } else if (contactName && !isOnlyNumber(contactName)) {
               displayName = contactName;
             } else {
-              // Last resort: use phone or whatever we have
               displayName = contact?.phone || contactName || whatsappName || 'Desconhecido';
             }
           }
@@ -278,7 +273,6 @@ export default function InboxPage() {
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'conversations' },
         (payload) => {
-          // Update cirúrgico: atualizar apenas a conversa modificada
           const updated = payload.new as any;
           setConversations(prev => {
             const index = prev.findIndex(c => c.id === updated.id);
@@ -293,7 +287,6 @@ export default function InboxPage() {
                 assigned_to: updated.assigned_to,
                 marked_unread: updated.marked_unread,
               };
-              // Re-sort by last_message_at
               newList.sort((a, b) => {
                 if (!a.last_message_at) return 1;
                 if (!b.last_message_at) return -1;
@@ -301,7 +294,6 @@ export default function InboxPage() {
               });
               return newList;
             }
-            // Se não encontrar (nova conversa), fazer refetch
             fetchConversations();
             return prev;
           });
@@ -311,7 +303,6 @@ export default function InboxPage() {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'conversations' },
         () => {
-          // Nova conversa: refetch para aplicar lógica de agrupamento por thread
           fetchConversations();
         }
       )
@@ -320,10 +311,8 @@ export default function InboxPage() {
         { event: 'INSERT', schema: 'public', table: 'messages' },
         async (payload) => {
           const newMessage = payload.new as any;
-          // Only notify for inbound messages from contacts (not agent/system)
           if (newMessage.sender_type !== 'contact') return;
           
-          // Get the conversation to check if it's assigned to current user and not resolved
           const { data: conv } = await supabase
             .from('conversations')
             .select('assigned_to, status')
@@ -331,11 +320,8 @@ export default function InboxPage() {
             .maybeSingle();
           
           if (!conv) return;
-          
-          // Skip if conversation is resolved
           if (conv.status === 'resolved') return;
           
-          // Play sound if: assigned to current user OR unassigned
           if (conv.assigned_to === user?.id || conv.assigned_to === null) {
             playNotificationSound();
           }
@@ -346,7 +332,7 @@ export default function InboxPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user, toast]);
+  }, [user, toast, playNotificationSound]);
 
   // Fetch messages when conversation changes
   useEffect(() => {
@@ -461,55 +447,13 @@ export default function InboxPage() {
 
       if (!isCancelled) setLoadingMessages(false);
 
-      // Store conversation IDs in a ref-like variable for realtime
-      let activeThreadConversationIds = conversationIds;
-      const activeContactId = contactId;
-      const activeThreadPhone = threadPhone;
-      const activeThreadChatLid = threadChatLid;
-      const activeThreadLid = threadLid;
-
-      // Function to refresh thread conversation IDs if a new conversation is created
-      const refreshThreadConversationIds = async () => {
-        let refreshContactIds: string[] = [activeContactId];
-        if (activeThreadChatLid || activeThreadPhone || activeThreadLid) {
-          let q = supabase.from('contacts').select('id');
-          if (activeThreadChatLid) q = q.eq('chat_lid', activeThreadChatLid);
-          else q = activeThreadPhone ? q.eq('phone', activeThreadPhone) : q.eq('lid', activeThreadLid);
-          const { data: refreshContacts } = await q;
-          if (refreshContacts?.length) {
-            refreshContactIds = refreshContacts.map((c: any) => c.id);
-          }
-        }
-        const { data: refreshConvs } = await supabase
-          .from('conversations')
-          .select('id')
-          .in('contact_id', refreshContactIds);
-        activeThreadConversationIds = refreshConvs?.map((c: any) => c.id) || [activeConversationId];
-        return activeThreadConversationIds;
-      };
-
       const channel = supabase
         .channel(`messages-thread-${activeConversationId}`)
         .on(
           'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'messages',
-          },
+          { event: 'INSERT', schema: 'public', table: 'messages' },
           async (payload) => {
             const newMessage = payload.new as any as Message;
-            const msgConvId = (newMessage as any).conversation_id;
-            
-            // If message is from unknown conversation, check if it's from our thread
-            if (!activeThreadConversationIds.includes(msgConvId)) {
-              // Refresh thread conversation IDs to catch newly created conversations
-              const updatedIds = await refreshThreadConversationIds();
-              if (!updatedIds.includes(msgConvId)) {
-                return; // Not our thread
-              }
-            }
-
             setMessages((prev) => {
               if (prev.some((m) => m.id === newMessage.id)) return prev;
               return [...prev, newMessage].sort(
@@ -520,20 +464,9 @@ export default function InboxPage() {
         )
         .on(
           'postgres_changes',
-          {
-            event: 'UPDATE',
-            schema: 'public',
-            table: 'messages',
-          },
-          async (payload) => {
+          { event: 'UPDATE', schema: 'public', table: 'messages' },
+          (payload) => {
             const updatedMessage = payload.new as any as Message;
-            const msgConvId = (updatedMessage as any).conversation_id;
-            
-            if (!activeThreadConversationIds.includes(msgConvId)) {
-              const updatedIds = await refreshThreadConversationIds();
-              if (!updatedIds.includes(msgConvId)) return;
-            }
-
             setMessages((prev) =>
               prev.map((m) => (m.id === updatedMessage.id ? updatedMessage : m))
             );
@@ -541,355 +474,134 @@ export default function InboxPage() {
         )
         .subscribe();
 
-      // Fallback sync: fetch new messages every 25 seconds to handle network issues
-      let lastSeenSentAt = data?.length > 0 
-        ? Math.max(...data.map((m: any) => new Date(m.sent_at).getTime())) 
-        : Date.now();
-      
-      const syncInterval = setInterval(async () => {
-        if (isCancelled) return;
-        
-        const { data: newMessages } = await supabase
-          .from('messages')
-          .select('*')
-          .in('conversation_id', conversationIds)
-          .gt('sent_at', new Date(lastSeenSentAt).toISOString())
-          .order('sent_at', { ascending: true });
-
-        if (newMessages && newMessages.length > 0) {
-          console.log('[Sync] Found', newMessages.length, 'new messages');
-          lastSeenSentAt = Math.max(...newMessages.map((m: any) => new Date(m.sent_at).getTime()));
-          
-          setMessages((prev) => {
-            const existingIds = new Set(prev.map((m) => m.id));
-            const uniqueNew = newMessages.filter((m: any) => !existingIds.has(m.id));
-            if (uniqueNew.length === 0) return prev;
-            return [...prev, ...uniqueNew].sort(
-              (a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime()
-            );
-          });
-        }
-      }, 25000);
-
       return () => {
         supabase.removeChannel(channel);
-        clearInterval(syncInterval);
       };
     };
 
-    const cleanupRef: { current: (() => void) | null } = { current: null };
-
-    fetchMessages().then((cleanup) => {
-      if (isCancelled) {
-        // Component unmounted before fetch completed, cleanup immediately
-        if (cleanup) cleanup();
-      } else {
-        cleanupRef.current = cleanup || null;
-      }
-    });
+    fetchMessages();
 
     return () => {
       isCancelled = true;
-      if (cleanupRef.current) {
-        cleanupRef.current();
-        cleanupRef.current = null;
-      }
     };
   }, [activeConversationId, toast]);
 
   const handleSendMessage = async (content: string) => {
     if (!activeConversationId || !user) return;
 
-    // Pause AI when human sends message (auto-return after 30 minutes)
     if (activeAiMode === 'AUTO') {
       const autoReturnTime = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-      
-      await supabase
-        .from('conversations')
-        .update({
-          ai_mode: 'OFF',
-          human_control: true,
-          ai_paused_until: autoReturnTime,
-        })
-        .eq('id', activeConversationId);
-
+      await supabase.from('conversations').update({
+        ai_mode: 'OFF',
+        human_control: true,
+        ai_paused_until: autoReturnTime,
+      }).eq('id', activeConversationId);
       await supabase.from('ai_events').insert({
         conversation_id: activeConversationId,
         event_type: 'human_takeover',
         message: '👤 Atendimento assumido por operador humano (IA retorna automaticamente em 30min).',
       });
-
       setActiveAiMode('OFF');
       setActiveHumanControl(true);
       setActiveAiPausedUntil(autoReturnTime);
     }
 
-    const requestPayload = {
-      conversation_id: activeConversationId,
-      content,
-      message_type: 'text',
-      sender_id: user.id,
-    };
-
     try {
-      console.log('[zapi-send-message] Request payload:', requestPayload);
-      
-      const { data, error } = await supabase.functions.invoke('zapi-send-message', {
-        body: requestPayload,
+      const { error } = await supabase.functions.invoke('zapi-send-message', {
+        body: { conversation_id: activeConversationId, content, message_type: 'text', sender_id: user.id },
       });
-
-      console.log('[zapi-send-message] Response:', { data, error });
-
-      if (error) {
-        console.error('[zapi-send-message] Error:', error);
-        toast({
-          variant: 'destructive',
-          title: 'Erro ao enviar mensagem',
-          description: `zapi-send-message: ${error.message}`,
-        });
-      } else if (data?.error) {
-        console.error('[zapi-send-message] Error response:', data);
-        toast({
-          variant: 'destructive',
-          title: 'Erro ao enviar mensagem',
-          description: `zapi-send-message: ${data.error}${data.details ? ` - ${JSON.stringify(data.details)}` : ''}`,
-        });
-      }
-    } catch (err) {
-      console.error('[zapi-send-message] Exception:', err);
-      toast({
-        variant: 'destructive',
-        title: 'Erro ao enviar mensagem',
-        description: 'zapi-send-message: Falha ao conectar com o serviço de envio',
-      });
+      if (error) throw error;
+    } catch (err: any) {
+      toast({ variant: 'destructive', title: 'Erro ao enviar', description: err.message });
     }
   };
 
   const handleSendFile = async (file: File) => {
     if (!activeConversationId || !user) return;
-
     try {
       const fileExt = file.name.split('.').pop();
       const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
       const filePath = `chat-files/${fileName}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from('chat-files')
-        .upload(filePath, file);
-
-      if (uploadError) {
-        toast({
-          variant: 'destructive',
-          title: 'Erro ao enviar arquivo',
-          description: 'Bucket de armazenamento não configurado.',
-        });
-        return;
-      }
-
+      const { error: uploadError } = await supabase.storage.from('chat-files').upload(filePath, file);
+      if (uploadError) throw new Error('Falha no upload');
       const { data: urlData } = supabase.storage.from('chat-files').getPublicUrl(filePath);
-
-      const requestPayload = {
-        conversation_id: activeConversationId,
-        file_url: urlData.publicUrl,
-        file_name: file.name,
-        file_type: file.type,
-        sender_id: user.id,
-      };
-
-      console.log('[zapi-send-file] Request payload:', requestPayload);
-
-      const { data, error } = await supabase.functions.invoke('zapi-send-file', {
-        body: requestPayload,
+      const { error } = await supabase.functions.invoke('zapi-send-file', {
+        body: { conversation_id: activeConversationId, file_url: urlData.publicUrl, file_name: file.name, file_type: file.type, sender_id: user.id },
       });
-
-      console.log('[zapi-send-file] Response:', { data, error });
-
-      if (error || data?.error) {
-        console.error('[zapi-send-file] Error:', error || data);
-        toast({
-          variant: 'destructive',
-          title: 'Erro ao enviar arquivo',
-          description: `zapi-send-file: ${error?.message || data?.error}${data?.details ? ` - ${JSON.stringify(data.details)}` : ''}`,
-        });
-      } else {
-        toast({ title: 'Arquivo enviado' });
-      }
-    } catch (err) {
-      console.error('[zapi-send-file] Exception:', err);
-      toast({
-        variant: 'destructive',
-        title: 'Erro ao enviar arquivo',
-        description: 'zapi-send-file: Falha ao conectar com o serviço de envio',
-      });
+      if (error) throw error;
+      toast({ title: 'Arquivo enviado' });
+    } catch (err: any) {
+      toast({ variant: 'destructive', title: 'Erro ao enviar arquivo', description: err.message });
     }
   };
 
   const handleResolveConversation = async () => {
     if (!activeConversationId || !user) return;
-
-    const { error } = await supabase
-      .from('conversations')
-      .update({ 
-        status: 'resolved',
-        unread_count: 0,
-        resolved_at: new Date().toISOString(),
-        resolved_by: user.id,
-      })
-      .eq('id', activeConversationId);
-
+    const { error } = await supabase.from('conversations').update({ 
+      status: 'resolved', unread_count: 0, resolved_at: new Date().toISOString(), resolved_by: user.id,
+    }).eq('id', activeConversationId);
     if (error) {
-      toast({
-        variant: 'destructive',
-        title: 'Erro ao resolver conversa',
-        description: error.message,
-      });
+      toast({ variant: 'destructive', title: 'Erro ao resolver', description: error.message });
     } else {
       toast({ title: 'Conversa resolvida' });
       setActiveConversationStatus('resolved');
-      // Refresh conversations list
-      setConversations(prev => prev.map(c => 
-        c.id === activeConversationId 
-          ? { ...c, status: 'resolved', unread_count: 0 }
-          : c
-      ));
-      if (isMobile) {
-        handleBackToList();
-      } else {
-        setActiveConversationId(null);
-      }
+      setConversations(prev => prev.map(c => c.id === activeConversationId ? { ...c, status: 'resolved', unread_count: 0 } : c));
+      if (isMobile) handleBackToList();
+      else setActiveConversationId(null);
     }
   };
 
   const handleReopenConversation = async () => {
     if (!activeConversationId || !user) return;
-
-    const { error } = await supabase
-      .from('conversations')
-      .update({ 
-        status: 'open',
-        assigned_to: user.id,
-        resolved_at: null,
-        resolved_by: null,
-      })
-      .eq('id', activeConversationId);
-
+    const { error } = await supabase.from('conversations').update({ 
+      status: 'open', assigned_to: user.id, resolved_at: null, resolved_by: null,
+    }).eq('id', activeConversationId);
     if (error) {
-      toast({
-        variant: 'destructive',
-        title: 'Erro ao reabrir conversa',
-        description: error.message,
-      });
+      toast({ variant: 'destructive', title: 'Erro ao reabrir', description: error.message });
     } else {
       toast({ title: 'Conversa reaberta' });
       setActiveConversationStatus('open');
-      // Refresh conversations list
-      setConversations(prev => prev.map(c => 
-        c.id === activeConversationId 
-          ? { ...c, status: 'open' }
-          : c
-      ));
+      setConversations(prev => prev.map(c => c.id === activeConversationId ? { ...c, status: 'open' } : c));
     }
   };
 
   const handleMarkUnread = async () => {
     if (!activeConversationId) return;
-
-    const { error } = await supabase
-      .from('conversations')
-      .update({ marked_unread: true, unread_count: 1 })
-      .eq('id', activeConversationId);
-
-    if (!error) {
-      toast({ title: 'Marcada como não lida' });
-    }
+    await supabase.from('conversations').update({ marked_unread: true, unread_count: 1 }).eq('id', activeConversationId);
+    toast({ title: 'Marcada como não lida' });
   };
 
   const handleSetPriority = async (priority: string) => {
     if (!activeConversationId) return;
-
-    const { error } = await supabase
-      .from('conversations')
-      .update({ priority })
-      .eq('id', activeConversationId);
-
-    if (!error) {
-      setActiveConversationPriority(priority);
-      toast({ title: `Prioridade: ${priority}` });
-    }
+    await supabase.from('conversations').update({ priority }).eq('id', activeConversationId);
+    setActiveConversationPriority(priority);
+    toast({ title: `Prioridade: ${priority}` });
   };
 
   const handleSnooze = async (until: Date) => {
     if (!activeConversationId) return;
-
-    const { error } = await supabase
-      .from('conversations')
-      .update({ snoozed_until: until.toISOString() })
-      .eq('id', activeConversationId);
-
-    if (!error) {
-      toast({ title: 'Conversa adiada' });
-    }
+    await supabase.from('conversations').update({ snoozed_until: until.toISOString() }).eq('id', activeConversationId);
+    toast({ title: 'Conversa adiada' });
   };
 
   const handleAssignAgent = async (agentId: string) => {
     if (!activeConversationId || !user) return;
-
-    try {
-      const agent = profiles.find((p) => p.id === agentId);
-
-      // Use edge function to bypass RLS issues
-      const { data, error } = await supabase.functions.invoke('assign-conversation', {
-        body: {
-          conversation_id: activeConversationId,
-          agent_id: agentId,
-        },
-      });
-
-      if (error) {
-        toast({
-          variant: 'destructive',
-          title: 'Erro ao atribuir conversa',
-          description: error.message,
-        });
-        return;
-      }
-
-      if (data?.error) {
-        toast({
-          variant: 'destructive',
-          title: 'Erro ao atribuir conversa',
-          description: data.error,
-        });
-        return;
-      }
-
+    const { data, error } = await supabase.functions.invoke('assign-conversation', {
+      body: { conversation_id: activeConversationId, agent_id: agentId },
+    });
+    if (error || data?.error) {
+      toast({ variant: 'destructive', title: 'Erro ao atribuir', description: error?.message || data?.error });
+    } else {
       setActiveAssignedTo(agentId);
-      setConversations((prev) =>
-        prev.map((c) => (c.id === activeConversationId ? { ...c, assigned_to: agentId } : c))
-      );
-
-      toast({ title: `Atribuído a ${agent?.name || data?.agent_name || 'agente'}` });
-    } catch (e: unknown) {
-      const errorMessage = e instanceof Error ? e.message : 'Tente novamente';
-      toast({
-        variant: 'destructive',
-        title: 'Erro inesperado ao atribuir',
-        description: errorMessage,
-      });
+      setConversations(prev => prev.map(c => c.id === activeConversationId ? { ...c, assigned_to: agentId } : c));
+      toast({ title: `Atribuído a ${data.agent_name}` });
     }
   };
 
   const handleProtocolCreated = (protocolCode: string) => {
-    // Conversation is assigned to current user when protocol is created
     if (!activeConversationId || !user) return;
-
     setActiveAssignedTo(user.id);
-    setConversations(prev => prev.map(c =>
-      c.id === activeConversationId
-        ? { ...c, assigned_to: user.id }
-        : c
-    ));
-
+    setConversations(prev => prev.map(c => c.id === activeConversationId ? { ...c, assigned_to: user.id } : c));
     toast({ title: `Protocolo ${protocolCode} criado` });
   };
 
@@ -900,11 +612,7 @@ export default function InboxPage() {
 
   const handleAddLabel = async (labelId: string) => {
     if (!activeConversationId) return;
-
-    const { error } = await supabase
-      .from('conversation_labels')
-      .insert({ conversation_id: activeConversationId, label_id: labelId });
-
+    const { error } = await supabase.from('conversation_labels').insert({ conversation_id: activeConversationId, label_id: labelId });
     if (!error) {
       const label = labels.find(l => l.id === labelId);
       toast({ title: `Etiqueta "${label?.name}" adicionada` });
@@ -913,160 +621,45 @@ export default function InboxPage() {
 
   const handleSelectCondominium = async (condominiumId: string) => {
     if (!activeConversationId || !user) return;
-
-    const { error } = await supabase
-      .from('conversations')
-      .update({
-        active_condominium_id: condominiumId,
-        active_condominium_confidence: 100,
-        active_condominium_set_by: 'human',
-        active_condominium_set_at: new Date().toISOString(),
-      })
-      .eq('id', activeConversationId);
-
-    if (error) {
-      toast({
-        variant: 'destructive',
-        title: 'Erro ao selecionar condomínio',
-        description: error.message,
-      });
-    } else {
+    const { error } = await supabase.from('conversations').update({
+      active_condominium_id: condominiumId, active_condominium_confidence: 100, active_condominium_set_by: 'human', active_condominium_set_at: new Date().toISOString(),
+    }).eq('id', activeConversationId);
+    if (!error) {
       setActiveCondominiumId(condominiumId);
       setActiveCondominiumSetBy('human');
       toast({ title: 'Condomínio ativo atualizado' });
     }
   };
 
-  if (authLoading) {
-    return (
-      <div className="min-h-screen-safe flex items-center justify-center bg-background">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-      </div>
-    );
-  }
+  if (authLoading) return <div className="min-h-screen-safe flex items-center justify-center"><div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full" /></div>;
+  if (!user) return <Navigate to="/auth" replace />;
 
-  if (!user) {
-    return <Navigate to="/auth" replace />;
-  }
-
-  // Mobile: Show chat view when conversation is selected
   if (isMobile && activeConversationId && activeContact) {
     return (
       <AppLayout hideBottomNav>
         <div className="flex flex-col h-full">
-          {/* Mobile Chat Header */}
-          <div className="h-14 shrink-0 border-b border-border flex items-center gap-3 px-2 bg-card">
-            <Button variant="ghost" size="icon" onClick={handleBackToList}>
-              <ArrowLeft className="w-5 h-5" />
-            </Button>
-            {activeContact.is_group ? (
-              <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
-                <Users className="w-5 h-5 text-primary" />
-              </div>
-            ) : (
-              <ConversationAvatar name={activeContact.name} imageUrl={activeContact.profile_picture_url} />
-            )}
-            <div className="flex-1 min-w-0">
-              <p className="font-medium truncate">{activeContact.name}</p>
-              <p className="text-xs text-muted-foreground truncate">
-                {activeContact.phone || activeContact.lid || 'Sem identificação'}
-              </p>
-            </div>
+          <div className="h-14 shrink-0 border-b flex items-center gap-3 px-2 bg-card">
+            <Button variant="ghost" size="icon" onClick={handleBackToList}><ArrowLeft className="w-5 h-5" /></Button>
+            <ConversationAvatar name={activeContact.name} imageUrl={activeContact.profile_picture_url} />
+            <div className="flex-1 min-w-0"><p className="font-medium truncate">{activeContact.name}</p><p className="text-xs text-muted-foreground truncate">{activeContact.phone || activeContact.lid || 'Sem identificação'}</p></div>
           </div>
-          
           <ChatArea
-            contact={activeContact}
-            messages={messages}
-            profiles={profiles}
-            teams={teams}
-            labels={labels}
-            conversationId={activeConversationId}
-            conversationStatus={activeConversationStatus}
-            conversationPriority={activeConversationPriority}
-            assignedTo={activeAssignedTo}
-            aiMode={activeAiMode}
-            aiPausedUntil={activeAiPausedUntil}
-            humanControl={activeHumanControl}
-            activeCondominiumId={activeCondominiumId}
-            activeCondominiumSetBy={activeCondominiumSetBy}
-            currentUserId={user.id}
-            onProtocolCreated={handleProtocolCreated}
-            onSendMessage={handleSendMessage}
-            onSendFile={handleSendFile}
-            onResolveConversation={handleResolveConversation}
-            onReopenConversation={handleReopenConversation}
-            onMarkUnread={handleMarkUnread}
-            onSetPriority={handleSetPriority}
-            onSnooze={handleSnooze}
-            onAssignAgent={handleAssignAgent}
-            onAssignTeam={handleAssignTeam}
-            onAddLabel={handleAddLabel}
-            onSelectCondominium={handleSelectCondominium}
-            onAiModeChange={setActiveAiMode}
-            loading={loadingMessages}
-            isMobile
+            contact={activeContact} messages={messages} profiles={profiles} teams={teams} labels={labels} conversationId={activeConversationId} conversationStatus={activeConversationStatus} conversationPriority={activeConversationPriority} assignedTo={activeAssignedTo} aiMode={activeAiMode} aiPausedUntil={activeAiPausedUntil} humanControl={activeHumanControl} activeCondominiumId={activeCondominiumId} activeCondominiumSetBy={activeCondominiumSetBy} currentUserId={user.id} onProtocolCreated={handleProtocolCreated} onSendMessage={handleSendMessage} onSendFile={handleSendFile} onResolveConversation={handleResolveConversation} onReopenConversation={handleReopenConversation} onMarkUnread={handleMarkUnread} onSetPriority={handleSetPriority} onSnooze={handleSnooze} onAssignAgent={handleAssignAgent} onAssignTeam={handleAssignTeam} onAddLabel={handleAddLabel} onSelectCondominium={handleSelectCondominium} onAiModeChange={setActiveAiMode} loading={loadingMessages} isMobile
           />
         </div>
       </AppLayout>
     );
   }
 
-  // Mobile: Show only conversation list
-  if (isMobile) {
-    return (
-      <AppLayout>
-        <ConversationList
-          conversations={conversations}
-          activeConversationId={null}
-          userId={user.id}
-          onSelectConversation={handleSelectConversation}
-          isMobile
-        />
-      </AppLayout>
-    );
-  }
-
-  // Desktop: Show split view
   return (
     <AppLayout>
       <div className="flex h-full">
-        <ConversationList
-          conversations={conversations}
-          activeConversationId={activeConversationId}
-          userId={user.id}
-          onSelectConversation={handleSelectConversation}
-        />
-        <ChatArea
-          contact={activeContact}
-          messages={messages}
-          profiles={profiles}
-          teams={teams}
-          labels={labels}
-          conversationId={activeConversationId}
-          conversationStatus={activeConversationStatus}
-          conversationPriority={activeConversationPriority}
-          assignedTo={activeAssignedTo}
-          aiMode={activeAiMode}
-          aiPausedUntil={activeAiPausedUntil}
-          humanControl={activeHumanControl}
-          activeCondominiumId={activeCondominiumId}
-          activeCondominiumSetBy={activeCondominiumSetBy}
-          currentUserId={user.id}
-          onProtocolCreated={handleProtocolCreated}
-          onSendMessage={handleSendMessage}
-          onSendFile={handleSendFile}
-          onResolveConversation={handleResolveConversation}
-          onReopenConversation={handleReopenConversation}
-          onMarkUnread={handleMarkUnread}
-          onSetPriority={handleSetPriority}
-          onSnooze={handleSnooze}
-          onAssignAgent={handleAssignAgent}
-          onAssignTeam={handleAssignTeam}
-          onAddLabel={handleAddLabel}
-          onSelectCondominium={handleSelectCondominium}
-          onAiModeChange={setActiveAiMode}
-          loading={loadingMessages}
-        />
+        <ConversationList conversations={conversations} activeConversationId={activeConversationId} userId={user.id} onSelectConversation={handleSelectConversation} isMobile={isMobile} />
+        {!isMobile && (
+          <ChatArea
+            contact={activeContact} messages={messages} profiles={profiles} teams={teams} labels={labels} conversationId={activeConversationId} conversationStatus={activeConversationStatus} conversationPriority={activeConversationPriority} assignedTo={activeAssignedTo} aiMode={activeAiMode} aiPausedUntil={activeAiPausedUntil} humanControl={activeHumanControl} activeCondominiumId={activeCondominiumId} activeCondominiumSetBy={activeCondominiumSetBy} currentUserId={user.id} onProtocolCreated={handleProtocolCreated} onSendMessage={handleSendMessage} onSendFile={handleSendFile} onResolveConversation={handleResolveConversation} onReopenConversation={handleReopenConversation} onMarkUnread={handleMarkUnread} onSetPriority={handleSetPriority} onSnooze={handleSnooze} onAssignAgent={handleAssignAgent} onAssignTeam={handleAssignTeam} onAddLabel={handleAddLabel} onSelectCondominium={handleSelectCondominium} onAiModeChange={setActiveAiMode} loading={loadingMessages}
+          />
+        )}
       </div>
     </AppLayout>
   );

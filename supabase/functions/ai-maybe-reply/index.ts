@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-internal-secret',
 };
 
-// --- TIPOS ---
+// --- TYPES ---
 type Contact = {
   id: string;
   name: string;
@@ -30,7 +30,6 @@ type Context = {
 
 type Middleware = (ctx: Context, next: () => Promise<void>) => Promise<void>;
 
-// --- ERROS ---
 class PipelineAbortError extends Error {
   constructor(public reason: string) {
     super(reason);
@@ -113,7 +112,7 @@ async function executePipeline(ctx: Context, middlewares: Middleware[]) {
   await next();
 }
 
-// --- SERVIDOR ---
+// --- SERVER ---
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
