@@ -546,31 +546,43 @@ serve(async (req) => {
       const threadKeyChatLid = contactRecord.chat_lid;
       const threadKey = threadKeyPhone || threadKeyLid || threadKeyChatLid || contactRecord.id;
       
-      // FIRST: Try to find existing OPEN conversation by thread_key
+      // FIRST: Try to find existing OPEN conversation by thread_key OR chat_id
       const { data: existingOpenConv } = await supabase
         .from('conversations')
         .select('*')
-        .eq('thread_key', threadKey)
+        .or(`thread_key.eq.${threadKey},chat_id.eq.${chatId}`)
         .eq('status', 'open')
+        .limit(1)
         .maybeSingle();
 
       if (existingOpenConv) {
         conversation = existingOpenConv;
-        console.log('Found existing OPEN private conversation:', conversation.id, 'for thread_key:', threadKey);
+        console.log('Found existing OPEN private conversation:', conversation.id, 'for thread_key:', threadKey, 'or chat_id:', chatId);
         
-        // Update chat_id and contact_id if needed
+        // Update chat_id, contact_id and thread_key if needed
+        const convUpdates: Record<string, any> = {};
         if (!conversation.chat_id || conversation.chat_id !== chatId) {
+          convUpdates.chat_id = chatId;
+        }
+        if (conversation.contact_id !== contactRecord.id) {
+          convUpdates.contact_id = contactRecord.id;
+        }
+        if (conversation.thread_key !== threadKey) {
+          convUpdates.thread_key = threadKey;
+        }
+        if (Object.keys(convUpdates).length > 0) {
           await supabase
             .from('conversations')
-            .update({ chat_id: chatId, contact_id: contactRecord.id })
+            .update(convUpdates)
             .eq('id', conversation.id);
+          console.log('Updated conversation with:', convUpdates);
         }
       } else {
-        // Check if there's a resolved conversation we can reopen
+        // Check if there's a resolved conversation we can reopen (by thread_key OR chat_id)
         const { data: existingResolvedConv } = await supabase
           .from('conversations')
           .select('*')
-          .eq('thread_key', threadKey)
+          .or(`thread_key.eq.${threadKey},chat_id.eq.${chatId}`)
           .eq('status', 'resolved')
           .order('resolved_at', { ascending: false })
           .limit(1)
@@ -586,6 +598,7 @@ serve(async (req) => {
               resolved_by: null,
               chat_id: chatId,
               contact_id: contactRecord.id,
+              thread_key: threadKey,
             })
             .eq('id', existingResolvedConv.id)
             .select()
@@ -607,14 +620,18 @@ serve(async (req) => {
 
           if (convError) {
             console.error('Error creating private conversation:', convError);
-            // Race condition - another request might have created it
+            // Race condition - another request might have created it, search by both thread_key and chat_id
             const { data: raceConv } = await supabase
               .from('conversations')
               .select('*')
-              .eq('thread_key', threadKey)
+              .or(`thread_key.eq.${threadKey},chat_id.eq.${chatId}`)
               .eq('status', 'open')
+              .limit(1)
               .maybeSingle();
             conversation = raceConv;
+            if (conversation) {
+              console.log('Found conversation after race condition:', conversation.id);
+            }
           } else {
             conversation = newConv;
             console.log('Created new private conversation:', conversation.id, 'with thread_key:', threadKey);
