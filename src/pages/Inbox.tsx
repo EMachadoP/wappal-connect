@@ -143,6 +143,7 @@ export default function InboxPage() {
           priority,
           marked_unread,
           contact_id,
+          thread_key,
           contacts (
             id,
             name,
@@ -162,28 +163,32 @@ export default function InboxPage() {
           title: 'Erro ao carregar conversas',
           description: error.message,
         });
-        } else if (data) {
-          const threadMap = new Map<string, any>();
+      } else if (data) {
+        const threadMap = new Map<string, any>();
 
-          for (const conv of data) {
-            const contact = (conv as any).contacts;
-            const threadKey = contact?.chat_lid || contact?.phone || contact?.lid || conv.contact_id;
+        for (const conv of data) {
+          const contact = (conv as any).contacts;
+          // Usar thread_key do banco para evitar divergências com o webhook
+          const threadKey = (conv as any).thread_key || contact?.chat_lid || contact?.phone || contact?.lid || conv.contact_id;
           const existing = threadMap.get(threadKey);
 
           if (!existing) {
             threadMap.set(threadKey, conv);
           } else {
-            existing.unread_count += conv.unread_count;
-            if (conv.last_message_at && (!existing.last_message_at || conv.last_message_at > existing.last_message_at)) {
-              existing.last_message_at = conv.last_message_at;
-              existing.id = conv.id;
-              existing.status = conv.status;
-              existing.assigned_to = conv.assigned_to;
-              existing.priority = conv.priority;
-              existing.contacts = contact;
-            }
-            if (conv.status === 'open') {
-              existing.status = 'open';
+            // Priorizar conversas OPEN e mesclar contagem de não lidas
+            const unreadTotal = (existing.unread_count || 0) + (conv.unread_count || 0);
+            
+            if (conv.status === 'open' && existing.status !== 'open') {
+              // Conversa OPEN tem prioridade sobre RESOLVED
+              threadMap.set(threadKey, { ...conv, unread_count: unreadTotal });
+            } else if (existing.status === 'open' && conv.status !== 'open') {
+              // Manter a OPEN existente, só somar unread
+              existing.unread_count = unreadTotal;
+            } else if (conv.last_message_at && (!existing.last_message_at || conv.last_message_at > existing.last_message_at)) {
+              // Ambas mesmo status: usar a mais recente
+              threadMap.set(threadKey, { ...conv, unread_count: unreadTotal });
+            } else {
+              existing.unread_count = unreadTotal;
             }
           }
         }
@@ -246,8 +251,42 @@ export default function InboxPage() {
       .channel('conversations-changes')
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'conversations' },
+        { event: 'UPDATE', schema: 'public', table: 'conversations' },
+        (payload) => {
+          // Update cirúrgico: atualizar apenas a conversa modificada
+          const updated = payload.new as any;
+          setConversations(prev => {
+            const index = prev.findIndex(c => c.id === updated.id);
+            if (index !== -1) {
+              const newList = [...prev];
+              newList[index] = {
+                ...newList[index],
+                last_message_at: updated.last_message_at,
+                unread_count: updated.unread_count,
+                status: updated.status,
+                priority: updated.priority,
+                assigned_to: updated.assigned_to,
+                marked_unread: updated.marked_unread,
+              };
+              // Re-sort by last_message_at
+              newList.sort((a, b) => {
+                if (!a.last_message_at) return 1;
+                if (!b.last_message_at) return -1;
+                return new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime();
+              });
+              return newList;
+            }
+            // Se não encontrar (nova conversa), fazer refetch
+            fetchConversations();
+            return prev;
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'conversations' },
         () => {
+          // Nova conversa: refetch para aplicar lógica de agrupamento por thread
           fetchConversations();
         }
       )
