@@ -40,7 +40,8 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const pageSize = body.pageSize || 50;
-    const maxPages = body.maxPages || 10;
+    // Default to 30 pages (50 chats each = ~1500 contacts, covers 30+ days typically)
+    const maxPages = body.maxPages || 30;
 
     let allChats: ZAPIChat[] = [];
     let currentPage = 1;

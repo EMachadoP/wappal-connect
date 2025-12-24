@@ -191,13 +191,24 @@ export function ChatArea({
 
   // Scroll to bottom on initial load or conversation change
   useEffect(() => {
-    // Small delay to ensure DOM is updated
-    const timer = setTimeout(() => {
-      scrollToBottom(false);
-      setShouldAutoScroll(true);
-    }, 50);
-    return () => clearTimeout(timer);
+    // Immediate scroll without animation, then verify after content loads
+    scrollToBottom(false);
+    setShouldAutoScroll(true);
+    
+    // Multiple attempts to ensure scroll after async content loads
+    const timers = [50, 150, 300].map(delay => 
+      setTimeout(() => scrollToBottom(false), delay)
+    );
+    
+    return () => timers.forEach(clearTimeout);
   }, [conversationId, scrollToBottom]);
+
+  // Also scroll when messages finish loading
+  useEffect(() => {
+    if (!loading && messages.length > 0) {
+      scrollToBottom(false);
+    }
+  }, [loading, messages.length, scrollToBottom]);
 
   const handleSend = useCallback(() => {
     if (message.trim()) {
