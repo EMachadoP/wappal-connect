@@ -3,7 +3,6 @@ import { Navigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { MessageSquare } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
+import logo from '@/assets/logo.png';
 
 const passwordSchema = z.string()
   .min(8, 'Senha deve ter pelo menos 8 caracteres')
@@ -104,8 +104,8 @@ export default function AuthPage() {
     <div className="min-h-screen flex items-center justify-center bg-muted/30 p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <div className="mx-auto w-12 h-12 bg-primary rounded-xl flex items-center justify-center mb-4">
-            <MessageSquare className="w-7 h-7 text-primary-foreground" />
+          <div className="mx-auto mb-4">
+            <img src={logo} alt="G7 Client Connector" className="h-20 w-auto" />
           </div>
           <CardTitle className="text-2xl">G7 Client Connector</CardTitle>
           <CardDescription>

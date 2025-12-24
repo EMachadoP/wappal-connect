@@ -7,6 +7,7 @@ import { useProfile } from '@/hooks/useProfile';
 import { useUserRole } from '@/hooks/useUserRole';
 import { cn } from '@/lib/utils';
 import { EditProfileModal } from '@/components/profile/EditProfileModal';
+import logo from '@/assets/logo.png';
 
 const navItems = [
   { path: '/inbox', label: 'Conversas', icon: MessageSquare },
@@ -31,9 +32,7 @@ export function Header() {
       <header className="h-14 border-b border-border bg-card flex items-center justify-between px-4">
         <div className="flex items-center gap-6">
           <Link to="/inbox" className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-              <MessageSquare className="w-5 h-5 text-primary-foreground" />
-            </div>
+            <img src={logo} alt="G7 Client Connector" className="h-8 w-auto" />
             <span className="font-semibold text-foreground">G7 Client Connector</span>
           </Link>
 
