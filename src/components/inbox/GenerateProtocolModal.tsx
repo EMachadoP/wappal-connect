@@ -49,6 +49,7 @@ interface GenerateProtocolModalProps {
   condominiums: Condominium[];
   activeCondominiumId?: string | null;
   participant?: Participant | null;
+  currentUserId?: string;
   onProtocolCreated?: (protocolCode: string) => void;
 }
 
@@ -60,6 +61,7 @@ export function GenerateProtocolModal({
   condominiums: contactCondominiums,
   activeCondominiumId,
   participant,
+  currentUserId,
   onProtocolCreated,
 }: GenerateProtocolModalProps) {
   const [loading, setLoading] = useState(false);
@@ -226,21 +228,29 @@ export function GenerateProtocolModal({
 
       if (error) throw error;
 
-      // Get current user for assignment
-      const { data: { user } } = await supabase.auth.getUser();
+      const nowIso = new Date().toISOString();
+
+      // Prefer user id passed from parent (more reliable than reading session here)
+      const resolvedUserId = currentUserId ?? (await supabase.auth.getUser()).data.user?.id ?? null;
+      if (!resolvedUserId) {
+        throw new Error('Usuário não autenticado');
+      }
 
       // Update conversation with protocol, condominium, and assign to current user
-      await supabase
+      const { error: conversationUpdateError } = await supabase
         .from('conversations')
         .update({ 
           protocol: protocolCode,
           active_condominium_id: condominiumId,
           active_condominium_set_by: 'human',
-          active_condominium_set_at: new Date().toISOString(),
-          assigned_to: user?.id || null,
-          assigned_at: new Date().toISOString(),
+          active_condominium_set_at: nowIso,
+          assigned_to: resolvedUserId,
+          assigned_at: nowIso,
+          assigned_by: resolvedUserId,
         })
         .eq('id', conversationId);
+
+      if (conversationUpdateError) throw conversationUpdateError;
 
       // Log event
       await supabase.from('ai_events').insert({

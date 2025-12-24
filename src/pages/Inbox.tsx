@@ -713,6 +713,11 @@ export default function InboxPage() {
 
     if (!error) {
       setActiveAssignedTo(agentId);
+      setConversations(prev => prev.map(c =>
+        c.id === activeConversationId
+          ? { ...c, assigned_to: agentId }
+          : c
+      ));
       
       // Insert system message for assignment
       const systemMessageContent = `✅ Atribuída para ${agent?.name || 'agente'} por ${currentUser?.name || 'usuário'}`;
@@ -726,6 +731,20 @@ export default function InboxPage() {
 
       toast({ title: `Atribuído a ${agent?.name || 'agente'}` });
     }
+  };
+
+  const handleProtocolCreated = (protocolCode: string) => {
+    // Conversation is assigned to current user when protocol is created
+    if (!activeConversationId || !user) return;
+
+    setActiveAssignedTo(user.id);
+    setConversations(prev => prev.map(c =>
+      c.id === activeConversationId
+        ? { ...c, assigned_to: user.id }
+        : c
+    ));
+
+    toast({ title: `Protocolo ${protocolCode} criado` });
   };
 
   const handleAssignTeam = async (teamId: string) => {
@@ -824,6 +843,8 @@ export default function InboxPage() {
             humanControl={activeHumanControl}
             activeCondominiumId={activeCondominiumId}
             activeCondominiumSetBy={activeCondominiumSetBy}
+            currentUserId={user.id}
+            onProtocolCreated={handleProtocolCreated}
             onSendMessage={handleSendMessage}
             onSendFile={handleSendFile}
             onResolveConversation={handleResolveConversation}
@@ -884,6 +905,8 @@ export default function InboxPage() {
           humanControl={activeHumanControl}
           activeCondominiumId={activeCondominiumId}
           activeCondominiumSetBy={activeCondominiumSetBy}
+          currentUserId={user.id}
+          onProtocolCreated={handleProtocolCreated}
           onSendMessage={handleSendMessage}
           onSendFile={handleSendFile}
           onResolveConversation={handleResolveConversation}

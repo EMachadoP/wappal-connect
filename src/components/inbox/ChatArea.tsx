@@ -77,6 +77,8 @@ interface ChatAreaProps {
   humanControl?: boolean;
   activeCondominiumId?: string | null;
   activeCondominiumSetBy?: string | null;
+  currentUserId?: string;
+  onProtocolCreated?: (protocolCode: string) => void;
   onSendMessage: (content: string) => void;
   onSendFile?: (file: File) => void;
   onResolveConversation?: () => void;
@@ -124,6 +126,8 @@ export function ChatArea({
   onAddLabel,
   onAiModeChange,
   onSelectCondominium,
+  currentUserId,
+  onProtocolCreated,
   loading,
   isMobile = false,
 }: ChatAreaProps) {
@@ -440,7 +444,11 @@ export function ChatArea({
           condominiums={condominiums}
           activeCondominiumId={activeCondominiumId}
           participant={participant}
-          onProtocolCreated={(code) => toast.success(`Protocolo ${code} criado`)}
+          currentUserId={currentUserId}
+          onProtocolCreated={(code) => {
+            onProtocolCreated?.(code);
+            toast.success(`Protocolo ${code} criado`);
+          }}
         />
       )}
     </div>
