@@ -32,7 +32,9 @@ export function Header() {
       <header className="h-14 border-b border-border bg-card flex items-center justify-between px-4">
         <div className="flex items-center gap-6">
           <Link to="/inbox" className="flex items-center gap-2">
-            <img src={logo} alt="G7 Client Connector" className="h-8 w-auto" />
+            <div className="w-8 h-8 overflow-hidden">
+              <img src={logo} alt="G7" className="h-8 w-auto object-contain object-left" style={{ maxWidth: '200%' }} />
+            </div>
             <span className="font-semibold text-foreground">G7 Client Connector</span>
           </Link>
 
