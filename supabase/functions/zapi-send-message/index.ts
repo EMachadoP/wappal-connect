@@ -23,12 +23,15 @@ serve(async (req) => {
     if (!conv) throw new Error('Conversa não encontrada');
 
     const contact = conv.contacts;
-    let recipient = conv.chat_id || contact.chat_lid || contact.lid || contact.phone;
+    
+    // Lógica de destinatário: Preferimos LID se disponível
+    let recipient = contact.lid || conv.chat_id || contact.chat_lid || contact.phone;
 
     if (!recipient) throw new Error('Destinatário não identificado');
 
-    // NORMALIZAÇÃO: Se for número de telefone (não grupo), remover tudo que não for dígito
-    if (!recipient.includes('@g.us') && !recipient.includes('-')) {
+    // IMPORTANTE: Se for um número de telefone puro, limpamos. 
+    // Se contiver @lid ou @g.us, enviamos EXATAMENTE como está.
+    if (!recipient.includes('@')) {
       recipient = recipient.replace(/\D/g, '');
     }
 

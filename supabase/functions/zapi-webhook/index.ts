@@ -16,46 +16,39 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const payload = await req.json();
     
-    console.log('[Z-API Webhook] Payload recebido');
+    console.log('[Z-API Webhook] Payload:', JSON.stringify(payload, null, 2));
 
     const messageId = payload.messageId;
     const fromMe = Boolean(payload.fromMe);
     const isGroup = Boolean(payload.isGroup);
     
-    // Normalização do ID: removemos @c.us mas mantemos @g.us para grupos
-    const rawId = (payload.chatLid || payload.phone || "").trim().toLowerCase();
-    if (!rawId) return new Response(JSON.stringify({ error: 'No identifier found' }), { status: 400 });
+    // Extração de identificadores conforme as recomendações de LID
+    const lid = payload.contact?.lid || (payload.phone?.includes('@lid') ? payload.phone : null);
+    const phone = payload.phone?.includes('@c.us') || /^\d+$/.test(payload.phone) ? payload.phone : null;
+    const chatLid = payload.chatLid || payload.phone; // chatLid é a chave da conversa
     
-    const chatId = isGroup ? rawId : rawId.replace('@c.us', '');
-    const phoneOnly = chatId.replace(/\D/g, '');
-
-    // Extração de conteúdo
-    let content = "";
-    if (typeof payload.text === 'string') content = payload.text;
-    else if (payload.text?.message) content = payload.text.message;
-    else if (payload.message?.text) content = payload.message.text;
-    else if (payload.body) content = payload.body;
-    else if (payload.image?.caption) content = payload.image.caption;
-    else if (payload.video?.caption) content = payload.video.caption;
-    if (!content && payload.type) content = `[${payload.type}]`;
+    if (!chatLid) return new Response(JSON.stringify({ error: 'No identifier found' }), { status: 400 });
 
     // 1. Localizar ou criar Contato
-    let contactId;
-    const { data: existingContact } = await supabase
-      .from('contacts')
-      .select('id')
-      .or(`chat_lid.eq."${chatId}",phone.eq."${phoneOnly}"`)
-      .maybeSingle();
-
-    if (existingContact) {
-      contactId = existingContact.id;
+    // Prioridade de busca: LID > Phone
+    let contactQuery = supabase.from('contacts').select('id');
+    if (lid) {
+      contactQuery = contactQuery.or(`lid.eq."${lid}",chat_lid.eq."${chatLid}"`);
     } else {
+      contactQuery = contactQuery.eq('chat_lid', chatLid);
+    }
+    
+    const { data: contact } = await contactQuery.maybeSingle();
+    let contactId = contact?.id;
+
+    if (!contactId) {
       const { data: newContact, error: contactError } = await supabase
         .from('contacts')
         .insert({
-          name: payload.senderName || payload.chatName || chatId,
-          phone: isGroup ? null : phoneOnly,
-          chat_lid: chatId,
+          name: payload.senderName || payload.chatName || "Contato",
+          phone: isGroup ? null : (phone ? phone.replace('@c.us', '') : null),
+          lid: lid,
+          chat_lid: chatLid,
           is_group: isGroup,
         })
         .select('id')
@@ -63,10 +56,15 @@ serve(async (req) => {
       
       if (contactError) throw contactError;
       contactId = newContact.id;
+    } else {
+      // Atualiza o contato com o LID se ele ainda não tiver
+      if (lid) {
+        await supabase.from('contacts').update({ lid }).eq('id', contactId).is('lid', null);
+      }
     }
 
-    // 2. Localizar ou criar Conversa (Usando o chatId normalizado como thread_key)
-    const threadKey = chatId;
+    // 2. Localizar ou criar Conversa (Usando chatLid como thread_key única)
+    const threadKey = chatLid;
     const { data: conv } = await supabase
       .from('conversations')
       .select('id, unread_count')
@@ -82,6 +80,7 @@ serve(async (req) => {
           status: 'open',
           last_message_at: new Date().toISOString(),
           unread_count: fromMe ? 0 : (conv.unread_count || 0) + 1,
+          chat_id: chatLid, // Garante que o chat_id esteja atualizado com o LID/chatLid
         })
         .eq('id', conversationId);
     } else {
@@ -89,7 +88,7 @@ serve(async (req) => {
         .from('conversations')
         .insert({
           contact_id: contactId,
-          chat_id: chatId,
+          chat_id: chatLid,
           thread_key: threadKey,
           status: 'open',
           unread_count: fromMe ? 0 : 1,
@@ -101,7 +100,16 @@ serve(async (req) => {
       conversationId = newConv.id;
     }
 
-    // 3. Salvar Mensagem
+    // 3. Extração de conteúdo
+    let content = "";
+    if (typeof payload.text === 'string') content = payload.text;
+    else if (payload.text?.message) content = payload.text.message;
+    else if (payload.message?.text) content = payload.message.text;
+    else if (payload.body) content = payload.body;
+    else if (payload.image?.caption) content = payload.image.caption;
+    if (!content && payload.type) content = `[${payload.type}]`;
+
+    // 4. Salvar Mensagem
     await supabase.from('messages').insert({
       conversation_id: conversationId,
       sender_type: fromMe ? 'agent' : 'contact',
@@ -109,13 +117,13 @@ serve(async (req) => {
       content: content,
       provider: 'zapi',
       provider_message_id: messageId,
-      chat_id: chatId,
+      chat_id: chatLid,
       direction: fromMe ? 'outbound' : 'inbound',
       sent_at: new Date().toISOString(),
-      media_url: payload.image?.url || payload.audio?.url || payload.video?.url || null,
+      media_url: payload.image?.url || payload.audio?.url || null,
     });
 
-    // 4. IA - Resposta automática
+    // 5. IA - Resposta automática (apenas para mensagens recebidas e não grupos)
     if (!fromMe && !isGroup) {
       fetch(`${supabaseUrl}/functions/v1/ai-maybe-reply`, {
         method: 'POST',
@@ -124,12 +132,10 @@ serve(async (req) => {
           'Authorization': `Bearer ${supabaseServiceKey}`,
         },
         body: JSON.stringify({ conversation_id: conversationId }),
-      }).catch(err => console.error('Erro assíncrono IA:', err));
+      }).catch(err => console.error('Erro disparando IA:', err));
     }
 
-    return new Response(JSON.stringify({ success: true, conversationId }), { 
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-    });
+    return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
     console.error('[Webhook Error]', error.message);
