@@ -700,17 +700,14 @@ export default function InboxPage() {
 
     try {
       const agent = profiles.find((p) => p.id === agentId);
-      const currentUser = profiles.find((p) => p.id === user.id);
 
-      // Update conversation with assignment details
-      const { error } = await supabase
-        .from('conversations')
-        .update({
-          assigned_to: agentId,
-          assigned_at: new Date().toISOString(),
-          assigned_by: user.id,
-        })
-        .eq('id', activeConversationId);
+      // Use edge function to bypass RLS issues
+      const { data, error } = await supabase.functions.invoke('assign-conversation', {
+        body: {
+          conversation_id: activeConversationId,
+          agent_id: agentId,
+        },
+      });
 
       if (error) {
         toast({
@@ -721,35 +718,27 @@ export default function InboxPage() {
         return;
       }
 
+      if (data?.error) {
+        toast({
+          variant: 'destructive',
+          title: 'Erro ao atribuir conversa',
+          description: data.error,
+        });
+        return;
+      }
+
       setActiveAssignedTo(agentId);
       setConversations((prev) =>
         prev.map((c) => (c.id === activeConversationId ? { ...c, assigned_to: agentId } : c))
       );
 
-      // Insert system message for assignment (non-blocking)
-      const systemMessageContent = `✅ Atribuída para ${agent?.name || 'agente'} por ${currentUser?.name || 'usuário'}`;
-      const { error: msgError } = await supabase.from('messages').insert({
-        conversation_id: activeConversationId,
-        sender_type: 'system',
-        message_type: 'system',
-        content: systemMessageContent,
-        sent_at: new Date().toISOString(),
-      });
-
-      if (msgError) {
-        toast({
-          variant: 'destructive',
-          title: 'Atribuída, mas sem registrar mensagem',
-          description: msgError.message,
-        });
-      }
-
-      toast({ title: `Atribuído a ${agent?.name || 'agente'}` });
-    } catch (e: any) {
+      toast({ title: `Atribuído a ${agent?.name || data?.agent_name || 'agente'}` });
+    } catch (e: unknown) {
+      const errorMessage = e instanceof Error ? e.message : 'Tente novamente';
       toast({
         variant: 'destructive',
         title: 'Erro inesperado ao atribuir',
-        description: e?.message || 'Tente novamente',
+        description: errorMessage,
       });
     }
   };
