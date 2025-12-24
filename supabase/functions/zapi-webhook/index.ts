@@ -115,7 +115,7 @@ serve(async (req) => {
     // 4. Disparar IA se for mensagem recebida e não for grupo
     if (!fromMe && !isGroup && conversationId) {
       console.log('[Webhook] Chamando ai-maybe-reply para:', conversationId);
-      // Chamada assíncrona (não esperamos para responder o webhook)
+      // Chamada assíncrona
       fetch(`${supabaseUrl}/functions/v1/ai-maybe-reply`, {
         method: 'POST',
         headers: {
