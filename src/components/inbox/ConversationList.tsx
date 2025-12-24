@@ -52,8 +52,9 @@ export function ConversationList({
           // Não atribuída: status='open' AND assigned_to IS NULL
           return matchesSearch && conv.status === 'open' && !conv.assigned_to;
         case 'all':
-          // Todos: status='open'
-          return matchesSearch && conv.status === 'open';
+          // Todos: status='open' AND NOT assigned to anyone (same as unassigned, for visibility)
+          // Once assigned, conversation only appears in the assignee's "Minha" tab
+          return matchesSearch && conv.status === 'open' && !conv.assigned_to;
         case 'resolved':
           // Resolvidas: status='resolved'
           return matchesSearch && conv.status === 'resolved';
@@ -70,7 +71,7 @@ export function ConversationList({
   const countByTab = {
     mine: conversations.filter(c => c.status === 'open' && c.assigned_to === userId).length,
     unassigned: conversations.filter(c => c.status === 'open' && !c.assigned_to).length,
-    all: conversations.filter(c => c.status === 'open').length,
+    all: conversations.filter(c => c.status === 'open' && !c.assigned_to).length,
     resolved: conversations.filter(c => c.status === 'resolved').length,
   };
 
