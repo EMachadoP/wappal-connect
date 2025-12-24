@@ -368,36 +368,83 @@ serve(async (req) => {
         console.log('Created new group contact:', contactRecord.id, 'for group_key:', groupKey);
       }
 
-      // For groups: use thread_key = groupKey for upsert
+      // For groups: use thread_key = groupKey
       const threadKey = groupKey;
       
-      // Upsert conversation by thread_key
-      const { data: upsertedConv, error: convError } = await supabase
+      // FIRST: Try to find existing OPEN conversation by thread_key
+      const { data: existingOpenConv } = await supabase
         .from('conversations')
-        .upsert({
-          thread_key: threadKey,
-          contact_id: contactRecord.id,
-          chat_id: groupKey,
-          status: 'open',
-        }, {
-          onConflict: 'thread_key',
-          ignoreDuplicates: false,
-        })
-        .select()
-        .single();
+        .select('*')
+        .eq('thread_key', threadKey)
+        .eq('status', 'open')
+        .maybeSingle();
 
-      if (convError) {
-        console.error('Error upserting group conversation:', convError);
-        // Fallback: try to find by thread_key
-        const { data: existingConv } = await supabase
+      if (existingOpenConv) {
+        conversation = existingOpenConv;
+        console.log('Found existing OPEN group conversation:', conversation.id, 'for thread_key:', threadKey);
+        
+        // Update chat_id and contact_id if needed
+        if (!conversation.chat_id || conversation.chat_id !== groupKey) {
+          await supabase
+            .from('conversations')
+            .update({ chat_id: groupKey, contact_id: contactRecord.id })
+            .eq('id', conversation.id);
+        }
+      } else {
+        // Check if there's a resolved conversation we can reopen
+        const { data: existingResolvedConv } = await supabase
           .from('conversations')
           .select('*')
           .eq('thread_key', threadKey)
-          .single();
-        conversation = existingConv;
-      } else {
-        conversation = upsertedConv;
-        console.log('Upserted group conversation:', conversation.id, 'with thread_key:', threadKey);
+          .eq('status', 'resolved')
+          .order('resolved_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (existingResolvedConv) {
+          // Reopen the existing conversation
+          const { data: reopenedConv } = await supabase
+            .from('conversations')
+            .update({ 
+              status: 'open', 
+              resolved_at: null, 
+              resolved_by: null,
+              chat_id: groupKey,
+              contact_id: contactRecord.id,
+            })
+            .eq('id', existingResolvedConv.id)
+            .select()
+            .single();
+          conversation = reopenedConv || existingResolvedConv;
+          console.log('Reopened resolved group conversation:', conversation.id);
+        } else {
+          // Create new conversation
+          const { data: newConv, error: convError } = await supabase
+            .from('conversations')
+            .insert({
+              thread_key: threadKey,
+              contact_id: contactRecord.id,
+              chat_id: groupKey,
+              status: 'open',
+            })
+            .select()
+            .single();
+
+          if (convError) {
+            console.error('Error creating group conversation:', convError);
+            // Race condition - another request might have created it
+            const { data: raceConv } = await supabase
+              .from('conversations')
+              .select('*')
+              .eq('thread_key', threadKey)
+              .eq('status', 'open')
+              .maybeSingle();
+            conversation = raceConv;
+          } else {
+            conversation = newConv;
+            console.log('Created new group conversation:', conversation.id, 'with thread_key:', threadKey);
+          }
+        }
       }
 
     // ========== PRIVATE CHAT HANDLING ==========
@@ -491,46 +538,80 @@ serve(async (req) => {
       const threadKeyChatLid = contactRecord.chat_lid;
       const threadKey = threadKeyPhone || threadKeyLid || threadKeyChatLid || contactRecord.id;
       
-      // Upsert conversation by thread_key
-      const { data: upsertedConv, error: convError } = await supabase
+      // FIRST: Try to find existing OPEN conversation by thread_key
+      const { data: existingOpenConv } = await supabase
         .from('conversations')
-        .upsert({
-          thread_key: threadKey,
-          contact_id: contactRecord.id,
-          chat_id: chatId,
-          status: 'open',
-        }, {
-          onConflict: 'thread_key',
-          ignoreDuplicates: false,
-        })
-        .select()
-        .single();
+        .select('*')
+        .eq('thread_key', threadKey)
+        .eq('status', 'open')
+        .maybeSingle();
 
-      if (convError) {
-        console.error('Error upserting private conversation:', convError);
-        // Fallback: try to find by thread_key
-        const { data: existingConv } = await supabase
+      if (existingOpenConv) {
+        conversation = existingOpenConv;
+        console.log('Found existing OPEN private conversation:', conversation.id, 'for thread_key:', threadKey);
+        
+        // Update chat_id and contact_id if needed
+        if (!conversation.chat_id || conversation.chat_id !== chatId) {
+          await supabase
+            .from('conversations')
+            .update({ chat_id: chatId, contact_id: contactRecord.id })
+            .eq('id', conversation.id);
+        }
+      } else {
+        // Check if there's a resolved conversation we can reopen
+        const { data: existingResolvedConv } = await supabase
           .from('conversations')
           .select('*')
           .eq('thread_key', threadKey)
+          .eq('status', 'resolved')
+          .order('resolved_at', { ascending: false })
+          .limit(1)
           .maybeSingle();
-        
-        if (existingConv) {
-          conversation = existingConv;
-        } else {
-          // Last resort: find by contact_id
-          const { data: convByContact } = await supabase
+
+        if (existingResolvedConv) {
+          // Reopen the existing conversation
+          const { data: reopenedConv } = await supabase
             .from('conversations')
-            .select('*')
-            .eq('contact_id', contactRecord.id)
-            .order('created_at', { ascending: true })
-            .limit(1)
-            .maybeSingle();
-          conversation = convByContact;
+            .update({ 
+              status: 'open', 
+              resolved_at: null, 
+              resolved_by: null,
+              chat_id: chatId,
+              contact_id: contactRecord.id,
+            })
+            .eq('id', existingResolvedConv.id)
+            .select()
+            .single();
+          conversation = reopenedConv || existingResolvedConv;
+          console.log('Reopened resolved private conversation:', conversation.id);
+        } else {
+          // Create new conversation
+          const { data: newConv, error: convError } = await supabase
+            .from('conversations')
+            .insert({
+              thread_key: threadKey,
+              contact_id: contactRecord.id,
+              chat_id: chatId,
+              status: 'open',
+            })
+            .select()
+            .single();
+
+          if (convError) {
+            console.error('Error creating private conversation:', convError);
+            // Race condition - another request might have created it
+            const { data: raceConv } = await supabase
+              .from('conversations')
+              .select('*')
+              .eq('thread_key', threadKey)
+              .eq('status', 'open')
+              .maybeSingle();
+            conversation = raceConv;
+          } else {
+            conversation = newConv;
+            console.log('Created new private conversation:', conversation.id, 'with thread_key:', threadKey);
+          }
         }
-      } else {
-        conversation = upsertedConv;
-        console.log('Upserted private conversation:', conversation.id, 'with thread_key:', threadKey);
       }
     }
 
