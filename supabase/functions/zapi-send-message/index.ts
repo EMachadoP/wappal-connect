@@ -8,9 +8,6 @@ const corsHeaders = {
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const zapiInstanceId = Deno.env.get('ZAPI_INSTANCE_ID')!;
-const zapiToken = Deno.env.get('ZAPI_TOKEN')!;
-const zapiClientToken = Deno.env.get('ZAPI_CLIENT_TOKEN')!;
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
@@ -22,18 +19,25 @@ serve(async (req) => {
     const { data: conv } = await supabase.from('conversations').select('*, contacts(*)').eq('id', conversation_id).single();
     if (!conv) throw new Error('Conversa não encontrada');
 
+    // 1. Obter credenciais (Prioridade: Env > DB)
+    let instanceId = Deno.env.get('ZAPI_INSTANCE_ID');
+    let token = Deno.env.get('ZAPI_TOKEN');
+    let clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN');
+
+    if (!instanceId || !token) {
+      const { data: settings } = await supabase.from('zapi_settings').select('*').limit(1).single();
+      instanceId = settings?.zapi_instance_id || instanceId;
+      token = settings?.zapi_token || token;
+      clientToken = settings?.zapi_security_token || clientToken;
+    }
+
+    if (!instanceId || !token) throw new Error('Credenciais Z-API não configuradas');
+
     const contact = conv.contacts;
-    
-    // Lógica de destinatário: Preferimos LID se disponível
     let recipient = contact.lid || conv.chat_id || contact.chat_lid || contact.phone;
 
     if (!recipient) throw new Error('Destinatário não identificado');
-
-    // IMPORTANTE: Se for um número de telefone puro, limpamos. 
-    // Se contiver @lid ou @g.us, enviamos EXATAMENTE como está.
-    if (!recipient.includes('@')) {
-      recipient = recipient.replace(/\D/g, '');
-    }
+    if (!recipient.includes('@')) recipient = recipient.replace(/\D/g, '');
 
     let senderName = providedName || 'G7';
     if (!providedName && sender_id) {
@@ -42,7 +46,7 @@ serve(async (req) => {
     }
 
     const prefixedContent = `*${senderName}:*\n${content}`;
-    const zapiBaseUrl = `https://api.z-api.io/instances/${zapiInstanceId}/token/${zapiToken}`;
+    const zapiBaseUrl = `https://api.z-api.io/instances/${instanceId}/token/${token}`;
     
     let endpoint = '/send-text';
     let body: any = { phone: recipient, message: prefixedContent };
@@ -52,9 +56,12 @@ serve(async (req) => {
     else if (message_type === 'video') { endpoint = '/send-video'; body = { phone: recipient, video: media_url, caption: prefixedContent }; }
     else if (message_type === 'document') { endpoint = '/send-document'; body = { phone: recipient, document: media_url, fileName: content }; }
 
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (clientToken) headers['Client-Token'] = clientToken;
+
     const response = await fetch(`${zapiBaseUrl}${endpoint}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Client-Token': zapiClientToken },
+      headers,
       body: JSON.stringify(body),
     });
 
@@ -80,7 +87,7 @@ serve(async (req) => {
     return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
-    console.error('Send error:', error);
+    console.error('[Send Message Error]', error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });

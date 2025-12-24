@@ -16,7 +16,7 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const payload = await req.json();
     
-    console.log('[Webhook] Payload recebido:', payload.messageId);
+    console.log('[Z-API Webhook] Recebido:', payload.messageId);
 
     const fromMe = Boolean(payload.fromMe);
     const isGroup = Boolean(payload.isGroup);
@@ -26,31 +26,44 @@ serve(async (req) => {
     const lid = payload.contact?.lid || (payload.phone?.includes('@lid') ? payload.phone : null);
     const phone = payload.phone?.includes('@c.us') ? payload.phone.replace('@c.us', '') : (isGroup ? null : payload.phone);
     
-    if (!chatLid) {
-      return new Response(JSON.stringify({ error: 'No ID' }), { status: 400 });
-    }
+    if (!chatLid) return new Response(JSON.stringify({ error: 'No ID' }), { status: 400 });
 
-    // 1. Localizar ou criar Contato (Busca multi-critério)
+    // 1. Localizar Contato (Busca robusta)
     let contactId;
-    const { data: contact } = await supabase
+    
+    // Tenta por chat_lid primeiro (o mais estável no Z-API)
+    const { data: existingByChatLid } = await supabase
       .from('contacts')
       .select('id')
-      .or(`chat_lid.eq."${chatLid}",lid.eq."${lid || 'null'}",phone.eq."${phone || 'null'}"`)
+      .eq('chat_lid', chatLid)
       .maybeSingle();
 
-    if (contact) {
-      contactId = contact.id;
-      // Atualizar metadados se necessário
-      await supabase.from('contacts').update({ 
-        chat_lid: chatLid,
-        lid: lid || undefined,
-        phone: isGroup ? null : (phone || undefined)
-      }).eq('id', contactId);
-    } else {
+    if (existingByChatLid) {
+      contactId = existingByChatLid.id;
+    } else if (lid) {
+      const { data: existingByLid } = await supabase
+        .from('contacts')
+        .select('id')
+        .eq('lid', lid)
+        .maybeSingle();
+      contactId = existingByLid?.id;
+    }
+
+    if (!contactId && phone && !isGroup) {
+      const { data: existingByPhone } = await supabase
+        .from('contacts')
+        .select('id')
+        .eq('phone', phone)
+        .maybeSingle();
+      contactId = existingByPhone?.id;
+    }
+
+    // Se não encontrou, cria
+    if (!contactId) {
       const { data: newContact, error: cErr } = await supabase
         .from('contacts')
         .insert({
-          name: payload.senderName || payload.chatName || phone || "Contato WhatsApp",
+          name: payload.senderName || payload.chatName || phone || "Contato",
           phone: isGroup ? null : phone,
           lid: lid,
           chat_lid: chatLid,
@@ -60,14 +73,19 @@ serve(async (req) => {
         .single();
       if (cErr) throw cErr;
       contactId = newContact.id;
+    } else {
+      // Atualiza identificadores se necessário
+      await supabase.from('contacts').update({ 
+        chat_lid: chatLid,
+        lid: lid || undefined
+      }).eq('id', contactId);
     }
 
-    // 2. Localizar ou criar Conversa (Usando chatLid como thread_key)
-    const threadKey = chatLid;
+    // 2. Localizar ou criar Conversa (thread_key = chatLid)
     const { data: conv } = await supabase
       .from('conversations')
       .select('id, unread_count')
-      .eq('thread_key', threadKey)
+      .eq('thread_key', chatLid)
       .maybeSingle();
 
     let conversationId;
@@ -85,7 +103,7 @@ serve(async (req) => {
         .insert({
           contact_id: contactId,
           chat_id: chatLid,
-          thread_key: threadKey,
+          thread_key: chatLid,
           status: 'open',
           unread_count: fromMe ? 0 : 1,
         })
@@ -95,7 +113,7 @@ serve(async (req) => {
       conversationId = newConv.id;
     }
 
-    // 3. Processar Conteúdo
+    // 3. Conteúdo
     let content = "";
     if (typeof payload.text === 'string') content = payload.text;
     else if (payload.text?.message) content = payload.text.message;
@@ -104,8 +122,8 @@ serve(async (req) => {
     else if (payload.image?.caption) content = payload.image.caption;
     if (!content && payload.type) content = `[${payload.type}]`;
 
-    // 4. Salvar Mensagem (Ponto Crítico)
-    const { error: msgErr } = await supabase.from('messages').insert({
+    // 4. Salvar Mensagem
+    await supabase.from('messages').insert({
       conversation_id: conversationId,
       sender_type: fromMe ? 'agent' : 'contact',
       message_type: payload.type === 'image' ? 'image' : (payload.type === 'audio' ? 'audio' : 'text'),
@@ -118,27 +136,19 @@ serve(async (req) => {
       media_url: payload.image?.url || payload.audio?.url || null,
     });
 
-    if (msgErr) console.error('[Webhook] Erro ao salvar msg:', msgErr);
-
-    // 5. IA (Disparo assíncrono para não travar o webhook)
+    // 5. Resposta IA (async)
     if (!fromMe && !isGroup) {
-      // Usamos edge computing para disparar a IA sem esperar a resposta
-      edgeRetryAI(supabaseUrl, supabaseServiceKey, conversationId);
+      fetch(`${supabaseUrl}/functions/v1/ai-maybe-reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
+        body: JSON.stringify({ conversation_id: conversationId }),
+      }).catch(() => {});
     }
 
     return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
-    console.error('[Webhook Fatal Error]', error.message);
+    console.error('[Webhook Error]', error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });
-
-// Função auxiliar para disparar a IA sem bloquear o Webhook
-function edgeRetryAI(url: string, key: string, conversationId: string) {
-  fetch(`${url}/functions/v1/ai-maybe-reply`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-    body: JSON.stringify({ conversation_id: conversationId }),
-  }).catch(err => console.error('[IA Trigger Error]', err));
-}
