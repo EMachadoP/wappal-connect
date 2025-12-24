@@ -14,39 +14,27 @@ serve(async (req) => {
   const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
 
   try {
-    // 1. Identificar o usuário através do JWT
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader) throw new Error('Não autorizado: Cabeçalho ausente');
+    if (!authHeader) throw new Error('Não autorizado: Sessão ausente');
 
     const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } }
     });
     
     const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
-    if (authError || !user) throw new Error('Token inválido ou expirado');
+    if (authError || !user) throw new Error('Sessão expirada ou inválida');
 
-    // 2. Verificar se o usuário tem permissão (Agente ou Admin)
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-    const { data: roleData } = await supabaseAdmin
-      .from('user_roles')
-      .select('role')
-      .eq('user_id', user.id)
-      .maybeSingle();
-
-    if (!roleData || !['admin', 'agent'].includes(roleData.role)) {
-      throw new Error('Acesso negado: Requer privilégios de agente');
-    }
-
-    // 3. Obter dados seguros do perfil (não confiamos no nome enviado pelo cliente)
+    
+    // Obter nome do atendente
     const { data: profile } = await supabaseAdmin
       .from('profiles')
       .select('name, display_name')
       .eq('id', user.id)
       .single();
 
-    const senderName = profile?.display_name || profile?.name || 'G7';
+    const senderName = profile?.display_name || profile?.name || 'Atendente G7';
 
-    // 4. Processar o envio
     const { conversation_id, content, message_type, media_url } = await req.json();
     
     const { data: conv } = await supabaseAdmin
@@ -55,30 +43,37 @@ serve(async (req) => {
       .eq('id', conversation_id)
       .single();
 
-    if (!conv) throw new Error('Conversa não encontrada');
+    if (!conv) throw new Error('Conversa não localizada no banco');
 
-    // Buscar credenciais Z-API
+    // Credenciais
     const { data: settings } = await supabaseAdmin.from('zapi_settings').select('*').limit(1).single();
     const instanceId = Deno.env.get('ZAPI_INSTANCE_ID') || settings?.zapi_instance_id;
     const token = Deno.env.get('ZAPI_TOKEN') || settings?.zapi_token;
     const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN') || settings?.zapi_security_token;
 
-    if (!instanceId || !token) throw new Error('Credenciais Z-API não configuradas');
+    if (!instanceId || !token) {
+      console.error('[Send Message] Erro: Faltam credenciais ZAPI (Instance ou Token)');
+      throw new Error('Configurações de WhatsApp incompletas no servidor');
+    }
 
     const recipient = conv.contacts?.lid || conv.chat_id || conv.contacts?.phone;
-    if (!recipient) throw new Error('Destinatário inválido');
+    if (!recipient) throw new Error('O destinatário não possui um identificador válido (Phone/LID)');
 
-    // Prefixo com o nome do atendente para clareza no WhatsApp
+    console.log(`[Send Message] Enviando para ${recipient} via instância ${instanceId}`);
+
     const prefixedContent = `*${senderName}:*\n${content}`;
     const zapiBaseUrl = `https://api.z-api.io/instances/${instanceId}/token/${token}`;
     
     let endpoint = '/send-text';
     let body: any = { phone: recipient, message: prefixedContent };
 
-    if (message_type === 'image') { endpoint = '/send-image'; body = { phone: recipient, image: media_url, caption: prefixedContent }; }
-    else if (message_type === 'audio') { endpoint = '/send-audio'; body = { phone: recipient, audio: media_url }; }
-    else if (message_type === 'video') { endpoint = '/send-video'; body = { phone: recipient, video: media_url, caption: prefixedContent }; }
-    else if (message_type === 'document') { endpoint = '/send-document'; body = { phone: recipient, document: media_url, fileName: content }; }
+    if (message_type === 'image') { 
+      endpoint = '/send-image'; 
+      body = { phone: recipient, image: media_url, caption: prefixedContent }; 
+    } else if (message_type === 'audio') { 
+      endpoint = '/send-audio'; 
+      body = { phone: recipient, audio: media_url }; 
+    }
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (clientToken) headers['Client-Token'] = clientToken;
@@ -90,13 +85,16 @@ serve(async (req) => {
     });
 
     const result = await response.json();
-    if (!response.ok) throw new Error(result.message || 'Erro no provedor WhatsApp');
+    if (!response.ok) {
+      console.error('[Z-API Error]', result);
+      throw new Error(result.message || 'Falha na API do WhatsApp');
+    }
 
-    // 5. Salvar log com o ID do usuário real (extraído do JWT)
+    // Salvar registro
     await supabaseAdmin.from('messages').insert({
       conversation_id,
       sender_type: 'agent',
-      sender_id: user.id, // ID VALIDADO
+      sender_id: user.id,
       agent_name: senderName,
       content,
       message_type: message_type || 'text',
@@ -104,22 +102,18 @@ serve(async (req) => {
       sent_at: new Date().toISOString(),
       provider: 'zapi',
       provider_message_id: result.messageId || result.zapiMessageId,
-      status: 'sent'
+      status: 'sent',
+      direction: 'outbound'
     });
-
-    await supabaseAdmin.from('conversations').update({ 
-      last_message_at: new Date().toISOString(), 
-      unread_count: 0 
-    }).eq('id', conversation_id);
 
     return new Response(JSON.stringify({ success: true }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
 
   } catch (error) {
-    console.error('[Send Message Security Error]', error.message);
+    console.error('[Send Message Error]', error.message);
     return new Response(JSON.stringify({ error: error.message }), { 
-      status: error.message.includes('Acesso negado') ? 403 : 500, 
+      status: 500, 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   }
