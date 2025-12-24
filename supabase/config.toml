@@ -47,3 +47,6 @@ verify_jwt = false
 
 [functions.assign-conversation]
 verify_jwt = false
+
+[functions.ai-auto-reactivate]
+verify_jwt = false
