@@ -17,6 +17,7 @@ interface ChatMessageProps {
   readAt?: string | null;
   senderName?: string | null;
   isAIGenerated?: boolean;
+  transcript?: string | null;
 }
 
 export function ChatMessage({
@@ -32,6 +33,7 @@ export function ChatMessage({
   readAt,
   senderName,
   isAIGenerated,
+  transcript,
 }: ChatMessageProps) {
   const time = format(new Date(sentAt), 'HH:mm');
 
@@ -113,7 +115,20 @@ export function ChatMessage({
         );
       case 'audio':
         return (
-          <audio src={mediaUrl} controls className="max-w-xs" />
+          <div className="flex flex-col gap-2">
+            <audio src={mediaUrl} controls className="max-w-xs" />
+            {transcript && (
+              <div className={cn(
+                "text-xs p-2 rounded-md max-w-xs",
+                isOutgoing 
+                  ? "bg-primary-foreground/10 text-primary-foreground/90" 
+                  : "bg-muted text-muted-foreground"
+              )}>
+                <span className="font-medium">📝 Transcrição:</span>
+                <p className="mt-1 whitespace-pre-wrap">{transcript}</p>
+              </div>
+            )}
+          </div>
         );
       case 'document':
         return (

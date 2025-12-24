@@ -47,6 +47,7 @@ interface Message {
   read_at: string | null;
   agent_id?: string | null;
   agent_name?: string | null;
+  transcript?: string | null;
 }
 
 interface Profile {
