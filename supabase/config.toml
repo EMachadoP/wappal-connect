@@ -13,7 +13,7 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.zapi-sync-history]
-verify_jwt = true
+verify_jwt = false
 
 [functions.create-agent]
 verify_jwt = true
