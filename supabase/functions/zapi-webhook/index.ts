@@ -16,43 +16,38 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const payload = await req.json();
     
-    // Log detalhado para depuração no painel do Supabase
-    console.log('[Z-API Webhook] Novo evento:', payload.messageId, 'Tipo:', payload.type);
+    console.log('[Webhook] Payload recebido:', payload.messageId);
 
     const fromMe = Boolean(payload.fromMe);
     const isGroup = Boolean(payload.isGroup);
     
-    // Identificadores (Prioridade total para o LID)
+    // Identificadores estáveis
     const chatLid = payload.chatLid || payload.phone;
     const lid = payload.contact?.lid || (payload.phone?.includes('@lid') ? payload.phone : null);
     const phone = payload.phone?.includes('@c.us') ? payload.phone.replace('@c.us', '') : (isGroup ? null : payload.phone);
     
     if (!chatLid) {
-      console.error('[Webhook] Erro: Nenhum chatLid ou phone encontrado no payload');
-      return new Response(JSON.stringify({ error: 'No identifier' }), { status: 400 });
+      return new Response(JSON.stringify({ error: 'No ID' }), { status: 400 });
     }
 
-    // 1. Localizar ou criar Contato
-    // Buscamos por LID ou por chatLid (que é o ID estável do Z-API)
-    let { data: contact } = await supabase
+    // 1. Localizar ou criar Contato (Busca multi-critério)
+    let contactId;
+    const { data: contact } = await supabase
       .from('contacts')
-      .select('id, name')
-      .or(`chat_lid.eq.${chatLid}${lid ? `,lid.eq.${lid}` : ''}${phone ? `,phone.eq.${phone}` : ''}`)
+      .select('id')
+      .or(`chat_lid.eq."${chatLid}",lid.eq."${lid || 'null'}",phone.eq."${phone || 'null'}"`)
       .maybeSingle();
 
-    let contactId;
     if (contact) {
       contactId = contact.id;
-      // Atualizar LID se o contato foi criado antes dessa tecnologia existir no sistema
-      if (lid || chatLid) {
-        await supabase.from('contacts').update({ 
-          lid: lid || null, 
-          chat_lid: chatLid 
-        }).eq('id', contactId);
-      }
+      // Atualizar metadados se necessário
+      await supabase.from('contacts').update({ 
+        chat_lid: chatLid,
+        lid: lid || undefined,
+        phone: isGroup ? null : (phone || undefined)
+      }).eq('id', contactId);
     } else {
-      console.log('[Webhook] Criando novo contato para:', chatLid);
-      const { data: newContact, error: contactError } = await supabase
+      const { data: newContact, error: cErr } = await supabase
         .from('contacts')
         .insert({
           name: payload.senderName || payload.chatName || phone || "Contato WhatsApp",
@@ -63,12 +58,11 @@ serve(async (req) => {
         })
         .select('id')
         .single();
-      
-      if (contactError) throw contactError;
+      if (cErr) throw cErr;
       contactId = newContact.id;
     }
 
-    // 2. Localizar ou criar Conversa (thread_key = chatLid)
+    // 2. Localizar ou criar Conversa (Usando chatLid como thread_key)
     const threadKey = chatLid;
     const { data: conv } = await supabase
       .from('conversations')
@@ -79,17 +73,14 @@ serve(async (req) => {
     let conversationId;
     if (conv) {
       conversationId = conv.id;
-      await supabase
-        .from('conversations')
-        .update({
-          status: 'open',
-          last_message_at: new Date().toISOString(),
-          unread_count: fromMe ? 0 : (conv.unread_count || 0) + 1,
-          chat_id: chatLid,
-        })
-        .eq('id', conversationId);
+      await supabase.from('conversations').update({
+        status: 'open',
+        last_message_at: new Date().toISOString(),
+        unread_count: fromMe ? 0 : (conv.unread_count || 0) + 1,
+        chat_id: chatLid
+      }).eq('id', conversationId);
     } else {
-      const { data: newConv, error: convError } = await supabase
+      const { data: newConv, error: convErr } = await supabase
         .from('conversations')
         .insert({
           contact_id: contactId,
@@ -100,12 +91,11 @@ serve(async (req) => {
         })
         .select('id')
         .single();
-      
-      if (convError) throw convError;
+      if (convErr) throw convErr;
       conversationId = newConv.id;
     }
 
-    // 3. Extração de conteúdo (Suporte a múltiplos formatos do Z-API)
+    // 3. Processar Conteúdo
     let content = "";
     if (typeof payload.text === 'string') content = payload.text;
     else if (payload.text?.message) content = payload.text.message;
@@ -114,8 +104,8 @@ serve(async (req) => {
     else if (payload.image?.caption) content = payload.image.caption;
     if (!content && payload.type) content = `[${payload.type}]`;
 
-    // 4. Salvar Mensagem
-    const { error: msgError } = await supabase.from('messages').insert({
+    // 4. Salvar Mensagem (Ponto Crítico)
+    const { error: msgErr } = await supabase.from('messages').insert({
       conversation_id: conversationId,
       sender_type: fromMe ? 'agent' : 'contact',
       message_type: payload.type === 'image' ? 'image' : (payload.type === 'audio' ? 'audio' : 'text'),
@@ -128,24 +118,27 @@ serve(async (req) => {
       media_url: payload.image?.url || payload.audio?.url || null,
     });
 
-    if (msgError) console.error('[Webhook] Erro ao salvar mensagem:', msgError);
+    if (msgErr) console.error('[Webhook] Erro ao salvar msg:', msgErr);
 
-    // 5. IA - Resposta automática
+    // 5. IA (Disparo assíncrono para não travar o webhook)
     if (!fromMe && !isGroup) {
-      fetch(`${supabaseUrl}/functions/v1/ai-maybe-reply`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${supabaseServiceKey}`,
-        },
-        body: JSON.stringify({ conversation_id: conversationId }),
-      }).catch(err => console.error('[Webhook] Erro disparando IA:', err));
+      // Usamos edge computing para disparar a IA sem esperar a resposta
+      edgeRetryAI(supabaseUrl, supabaseServiceKey, conversationId);
     }
 
     return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
-    console.error('[Webhook Error]', error.message);
+    console.error('[Webhook Fatal Error]', error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });
+
+// Função auxiliar para disparar a IA sem bloquear o Webhook
+function edgeRetryAI(url: string, key: string, conversationId: string) {
+  fetch(`${url}/functions/v1/ai-maybe-reply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+    body: JSON.stringify({ conversation_id: conversationId }),
+  }).catch(err => console.error('[IA Trigger Error]', err));
+}
