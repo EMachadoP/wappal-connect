@@ -190,76 +190,60 @@ export function GenerateProtocolModal({
 
     setLoading(true);
     try {
-      // Check if conversation already has a protocol
-      const { data: existingConversation } = await supabase
-        .from('conversations')
-        .select('protocol')
-        .eq('id', conversationId)
-        .single();
-      
-      if (existingConversation?.protocol) {
-        toast.error(`Esta conversa já possui o protocolo ${existingConversation.protocol}`);
-        setLoading(false);
-        return;
-      }
-
-      // Generate protocol code
-      const yearMonth = new Date().toISOString().slice(0, 7).replace('-', '');
-      const { data: existingProtocols } = await supabase
-        .from('protocols')
-        .select('protocol_code')
-        .like('protocol_code', `${yearMonth}-%`)
-        .order('protocol_code', { ascending: false })
-        .limit(1);
-
-      let sequence = 1;
-      if (existingProtocols && existingProtocols.length > 0) {
-        const lastCode = existingProtocols[0].protocol_code;
-        const lastSequence = parseInt(lastCode.split('-')[1] || '0');
-        sequence = lastSequence + 1;
-      }
-      const protocolCode = `${yearMonth}-${sequence.toString().padStart(4, '0')}`;
-
-      // Create protocol
-      const { data: protocol, error } = await supabase
-        .from('protocols')
-        .insert({
-          protocol_code: protocolCode,
-          conversation_id: conversationId,
-          contact_id: contactId,
-          condominium_id: condominiumId,
-          category,
-          priority,
-          summary: summary || null,
-          status: 'open',
-          created_by_type: 'human',
-          requester_name: participant?.name || null,
-          requester_role: participant?.role_type || null,
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      const nowIso = new Date().toISOString();
-
-      // Prefer user id passed from parent (more reliable than reading session here)
+      // Get current user id
       const resolvedUserId = currentUserId ?? (await supabase.auth.getUser()).data.user?.id ?? null;
       if (!resolvedUserId) {
         throw new Error('Usuário não autenticado');
       }
 
-      // Update conversation with protocol, condominium, assign to current user, and reactivate AI
+      // Get condominium name for notification
+      const selectedCondo = availableCondominiums.find(c => c.id === condominiumId);
+
+      // Call backend to create protocol with idempotency
+      const { data, error } = await supabase.functions.invoke('create-protocol', {
+        body: {
+          conversation_id: conversationId,
+          condominium_id: condominiumId,
+          category,
+          priority,
+          summary: summary || null,
+          notify_group: notifyGroup,
+          participant_id: participant?.id || null,
+          requester_name: participant?.name || null,
+          requester_role: participant?.role_type || null,
+          contact_id: contactId,
+          created_by_agent_id: resolvedUserId,
+        },
+      });
+
+      if (error) {
+        console.error('Error invoking create-protocol:', error);
+        throw new Error(error.message || 'Erro ao criar protocolo');
+      }
+
+      if (!data?.success) {
+        throw new Error(data?.error || 'Erro desconhecido ao criar protocolo');
+      }
+
+      const protocolCode = data.protocol.protocol_code;
+
+      // If protocol already existed, just notify and close
+      if (data.already_existed) {
+        toast.info(`Esta conversa já possui o protocolo ${protocolCode}`);
+        onOpenChange(false);
+        return;
+      }
+
+      // Update conversation to assign to current user and reactivate AI
+      const nowIso = new Date().toISOString();
       const { error: conversationUpdateError } = await supabase
         .from('conversations')
         .update({ 
-          protocol: protocolCode,
-          active_condominium_id: condominiumId,
-          active_condominium_set_by: 'human',
-          active_condominium_set_at: nowIso,
           assigned_to: resolvedUserId,
           assigned_at: nowIso,
           assigned_by: resolvedUserId,
+          active_condominium_set_by: 'human',
+          active_condominium_set_at: nowIso,
           // Reactivate AI after protocol creation (service is complete)
           ai_mode: 'AUTO',
           human_control: false,
@@ -267,7 +251,10 @@ export function GenerateProtocolModal({
         })
         .eq('id', conversationId);
 
-      if (conversationUpdateError) throw conversationUpdateError;
+      if (conversationUpdateError) {
+        console.error('Error updating conversation:', conversationUpdateError);
+        // Don't throw - protocol was created successfully
+      }
 
       // Log AI reactivation event
       await supabase.from('ai_events').insert({
@@ -277,44 +264,21 @@ export function GenerateProtocolModal({
         metadata: { reason: 'protocol_created', protocol_code: protocolCode },
       });
 
-      // Log event
+      // Log protocol creation event
       await supabase.from('ai_events').insert({
         conversation_id: conversationId,
         event_type: 'protocol_created',
         message: `📋 Protocolo ${protocolCode} criado manualmente.`,
-        metadata: { protocol_id: protocol.id, notify_group: notifyGroup },
+        metadata: { protocol_id: data.protocol.id, notify_group: notifyGroup },
       });
-
-      // Call protocol-opened function if notify is enabled
-      if (notifyGroup) {
-        // Get condominium name
-        const selectedCondo = availableCondominiums.find(c => c.id === condominiumId);
-        
-        await supabase.functions.invoke('protocol-opened', {
-          body: {
-            protocol_id: protocol.id,
-            protocol_code: protocolCode,
-            priority,
-            category,
-            summary: summary || 'Sem descrição',
-            condominium_name: selectedCondo?.name || 'Não identificado',
-            requester_name: participant?.name || 'Não identificado',
-            requester_role: participant?.role_type || null,
-            conversation_id: conversationId,
-            contact_id: contactId,
-            condominium_id: condominiumId,
-            created_by_type: 'human',
-            participant_id: participant?.id || null,
-          },
-        });
-      }
 
       toast.success(`Protocolo ${protocolCode} criado!`);
       onProtocolCreated?.(protocolCode);
       onOpenChange(false);
     } catch (error) {
       console.error('Error creating protocol:', error);
-      toast.error('Erro ao criar protocolo');
+      const errorMessage = error instanceof Error ? error.message : 'Erro ao criar protocolo';
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }
