@@ -199,11 +199,13 @@ serve(async (req) => {
     console.log('Z-API Webhook received:', JSON.stringify(payload, null, 2));
 
     // Extract and sanitize webhook payload fields
+    const phoneRaw = sanitizeString(payload.phone, MAX_CHAT_LID_LENGTH);
     const phone = sanitizePhone(payload.phone);
     const chatLid = sanitizeString(payload.chatLid, MAX_CHAT_LID_LENGTH);
     const isGroup = Boolean(payload.isGroup);
     const messageId = sanitizeString(payload.messageId, 100);
     const fromMe = Boolean(payload.fromMe);
+    const connectedPhone = sanitizePhone(payload.connectedPhone);
     const type = sanitizeString(payload.type, 50);
     const text = payload.text;
     const image = payload.image;
@@ -263,7 +265,8 @@ serve(async (req) => {
     const direction = isFromMe ? 'outbound' : 'inbound';
     
     // Normalize chat_id - this is the KEY for conversation lookup
-    const rawChatId = chatLid || phone || null;
+    // For groups, keep the raw group id (often contains '-')
+    const rawChatId = chatLid || (isGroup ? phoneRaw : phone) || null;
     const chatId = normalizeChatId(rawChatId);
 
     // Detect group: chatId ends with @g.us OR payload indicates group
@@ -273,8 +276,8 @@ serve(async (req) => {
     // We only accept `phone` as group id when it clearly looks like a group key (has '-' or '@g.us').
     const groupChatIdRaw = isGroupChat
       ? (chatLid ||
-          (typeof phone === 'string' && (phone.includes('-') || phone.toLowerCase().includes('@g.us'))
-            ? phone
+          (typeof phoneRaw === 'string' && (phoneRaw.includes('-') || phoneRaw.toLowerCase().includes('@g.us'))
+            ? phoneRaw
             : null) ||
           payload?.reaction?.referencedMessage?.phone ||
           null)
@@ -313,8 +316,15 @@ serve(async (req) => {
     let msgSenderName: string | null = null;
     
     if (isGroupChat) {
-      msgSenderPhone = participantPhone?.replace(/\D/g, '') || null;
-      msgSenderName = participantName || senderName || null;
+      if (isFromMe) {
+        // Message sent by the connected WhatsApp account inside the group
+        msgSenderPhone = connectedPhone?.replace(/\D/g, '') || null;
+        msgSenderName = senderName || chatName || null;
+      } else {
+        // Message sent by a participant in the group
+        msgSenderPhone = participantPhone?.replace(/\D/g, '') || null;
+        msgSenderName = participantName || senderName || null;
+      }
     }
 
     let contactRecord;
@@ -844,28 +854,29 @@ serve(async (req) => {
       
       if (isResolutionMessage) {
         console.log('Detected resolution message, triggering handler');
-        try {
-          const resolutionUrl = `${supabaseUrl}/functions/v1/group-resolution-handler`;
-          fetch(resolutionUrl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              message_content: content,
-              participant_phone: msgSenderPhone,
-              participant_name: msgSenderName,
-              group_id: conversationKey,
-              message_id: messageId,
-            }),
-          }).then(res => res.json()).then(resolutionResult => {
-            console.log('Resolution handler result:', resolutionResult);
-          }).catch(resErr => {
-            console.error('Resolution handler error:', resErr);
-          });
-        } catch (resError) {
-          console.error('Failed to trigger resolution handler:', resError);
-        }
+         try {
+           const { data: resolutionResult, error: resolutionError } = await supabase.functions.invoke(
+             'group-resolution-handler',
+             {
+               body: {
+                 message_content: content,
+                 participant_phone: msgSenderPhone,
+                 participant_name: msgSenderName,
+                 group_id: conversationKey,
+                 message_id: messageId,
+                 from_me: isFromMe,
+               },
+             }
+           );
+
+           if (resolutionError) {
+             console.error('Resolution handler error:', resolutionError);
+           } else {
+             console.log('Resolution handler result:', resolutionResult);
+           }
+         } catch (resError) {
+           console.error('Failed to trigger resolution handler:', resError);
+         }
       }
     }
 
