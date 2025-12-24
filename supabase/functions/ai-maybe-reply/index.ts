@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-internal-secret',
 };
 
-// --- TYPES ---
+// --- Tipos Locais ---
 type Contact = {
   id: string;
   name: string;
@@ -37,7 +37,7 @@ class PipelineAbortError extends Error {
   }
 }
 
-// --- MIDDLEWARES ---
+// --- Middlewares Consolidados ---
 
 const loadInitialData: Middleware = async (ctx, next) => {
   const supabase = createClient(ctx.supabaseUrl, ctx.supabaseServiceKey);
@@ -48,7 +48,7 @@ const loadInitialData: Middleware = async (ctx, next) => {
     .eq('id', ctx.conversationId)
     .single();
 
-  if (convError || !conv) throw new Error(`Conversa não encontrada: ${ctx.conversationId}`);
+  if (convError || !conv) throw new Error(`Conversa ${ctx.conversationId} não encontrada`);
 
   ctx.conversation = conv;
   ctx.contact = conv.contacts;
@@ -60,14 +60,17 @@ const checkFilters: Middleware = async (ctx, next) => {
   const { conversation, contact } = ctx;
   if (!conversation) return;
 
+  // Filtro de Modo
   if (conversation.ai_mode === 'OFF') throw new PipelineAbortError('IA desativada para esta conversa');
 
+  // Filtro de Controle Humano
   if (conversation.human_control && conversation.typing_lock_until) {
     if (new Date(conversation.typing_lock_until) > new Date()) {
-      throw new PipelineAbortError('Humano no controle temporário');
+      throw new PipelineAbortError('Atendimento humano ativo ou pausado');
     }
   }
 
+  // Filtro de Tags
   const tags = contact?.tags || [];
   if (tags.includes('fornecedor')) throw new PipelineAbortError('Remetente identificado como fornecedor');
 
@@ -79,17 +82,17 @@ const processResponse: Middleware = async (ctx, next) => {
   
   console.log(`[Pipeline] Gerando resposta para: ${ctx.conversationId}`);
   
-  // Chamada para a geração da resposta
+  // 1. Gera a resposta usando a outra Edge Function
   const { data: aiResult, error: aiError } = await supabase.functions.invoke('ai-generate-reply', {
     body: { conversation_id: ctx.conversationId }
   });
 
   if (aiError || !aiResult?.text) {
-    console.error('Falha ao gerar resposta IA ou resposta vazia', aiError);
+    console.error('Falha na geração ou resposta vazia', aiError);
     return;
   }
 
-  // Envio da mensagem final via Z-API
+  // 2. Envia a mensagem via Z-API
   await supabase.functions.invoke('zapi-send-message', {
     body: {
       conversation_id: ctx.conversationId,
@@ -102,7 +105,7 @@ const processResponse: Middleware = async (ctx, next) => {
   await next();
 };
 
-// --- ENGINE ---
+// --- Pipeline Engine ---
 async function executePipeline(ctx: Context, middlewares: Middleware[]) {
   let index = 0;
   const next = async (): Promise<void> => {
@@ -114,14 +117,13 @@ async function executePipeline(ctx: Context, middlewares: Middleware[]) {
   await next();
 }
 
-// --- SERVER ---
+// --- Servidor HTTP ---
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   try {
     const { conversation_id } = await req.json();
-    
-    if (!conversation_id) throw new Error('Missing conversation_id');
+    if (!conversation_id) throw new Error('ID da conversa é obrigatório');
 
     const ctx: Context = {
       conversationId: conversation_id,
@@ -137,13 +139,13 @@ serve(async (req) => {
 
   } catch (error) {
     if (error instanceof PipelineAbortError) {
-      console.log(`[Pipeline Aborted] ${error.reason}`);
+      console.log(`[Pipeline Abortado] ${error.reason}`);
       return new Response(JSON.stringify({ success: false, reason: error.reason }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    console.error('[Pipeline Error]', error);
+    console.error('[Pipeline Erro]', error);
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
