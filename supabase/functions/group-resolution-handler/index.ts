@@ -11,14 +11,14 @@ const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
 // Regex patterns to detect resolution messages
 const RESOLUTION_PATTERNS = [
-  // G7-20251223-0005 - Resolvido
-  /(G7-\d{8}-\d{4,})\s*[-–—]\s*resolvido/i,
+  // G7-20251223-0005 - Resolvido (with various dash types and spaces)
+  /(G7-\d{8}-\d{4,})\s*[-–—]?\s*resolvido/i,
   // Protocolo G7-20251223-0005 Resolvido
   /protocolo[:\s]*(G7-\d{8}-\d{4,}).*resolvido/i,
-  // G7-20251223-0005 resolvido
-  /(G7-\d{8}-\d{4,})\s+resolvido/i,
-  // Generic pattern for any protocol format
-  /(\d{6,}-\d{4,})\s*[-–—]\s*resolvido/i,
+  // 202512-0007 - Resolvido (YYYYMM-NNNN format with spaces and dashes)
+  /(\d{6}-\d{4,})\s*[-–—]?\s*resolvido/i,
+  // Protocolo 202512-0007 Resolvido
+  /protocolo[:\s]*(\d{6}-\d{4,}).*resolvido/i,
 ];
 
 serve(async (req) => {

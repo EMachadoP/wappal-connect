@@ -249,7 +249,7 @@ export function GenerateProtocolModal({
         throw new Error('Usuário não autenticado');
       }
 
-      // Update conversation with protocol, condominium, and assign to current user
+      // Update conversation with protocol, condominium, assign to current user, and reactivate AI
       const { error: conversationUpdateError } = await supabase
         .from('conversations')
         .update({ 
@@ -260,10 +260,22 @@ export function GenerateProtocolModal({
           assigned_to: resolvedUserId,
           assigned_at: nowIso,
           assigned_by: resolvedUserId,
+          // Reactivate AI after protocol creation (service is complete)
+          ai_mode: 'AUTO',
+          human_control: false,
+          ai_paused_until: null,
         })
         .eq('id', conversationId);
 
       if (conversationUpdateError) throw conversationUpdateError;
+
+      // Log AI reactivation event
+      await supabase.from('ai_events').insert({
+        conversation_id: conversationId,
+        event_type: 'ai_reactivated',
+        message: '🤖 IA reativada após criação de protocolo.',
+        metadata: { reason: 'protocol_created', protocol_code: protocolCode },
+      });
 
       // Log event
       await supabase.from('ai_events').insert({

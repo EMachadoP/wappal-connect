@@ -788,10 +788,14 @@ serve(async (req) => {
     // Check for protocol resolution in group messages
     if (isGroupChat && !isFromMe && content) {
       const resolutionPatterns = [
-        /(G7-\d{8}-\d{4,})\s*[-–—]\s*resolvido/i,
+        // G7-20251223-0005 - Resolvido (with various dash types and spaces)
+        /(G7-\d{8}-\d{4,})\s*[-–—]?\s*resolvido/i,
+        // Protocolo G7-20251223-0005 Resolvido
         /protocolo[:\s]*(G7-\d{8}-\d{4,}).*resolvido/i,
-        /(G7-\d{8}-\d{4,})\s+resolvido/i,
-        /(\d{6,}-\d{4,})\s*[-–—]\s*resolvido/i,
+        // 202512-0007 - Resolvido (YYYYMM-NNNN format with spaces and dashes)
+        /(\d{6}-\d{4,})\s*[-–—]?\s*resolvido/i,
+        // Protocolo 202512-0007 Resolvido
+        /protocolo[:\s]*(\d{6}-\d{4,}).*resolvido/i,
       ];
       
       const isResolutionMessage = resolutionPatterns.some(pattern => pattern.test(content));
