@@ -23,6 +23,7 @@ type Contact = {
   phone: string | null;
   chat_lid: string | null;
   tags?: string[] | null;
+  is_bot?: boolean;
 };
 
 type Conversation = {
@@ -57,6 +58,10 @@ class PipelineAbortError extends Error {
 }
 
 // --- MIDDLEWARES ---
+
+/**
+ * Carrega os dados necessários para o processamento
+ */
 const loadInitialData: Middleware = async (ctx, next) => {
   const supabase = createClient(ctx.supabaseUrl, ctx.supabaseServiceKey);
   
@@ -66,7 +71,7 @@ const loadInitialData: Middleware = async (ctx, next) => {
     .eq('id', ctx.conversationId)
     .single();
 
-  if (convError || !conv) throw new Error(`Conversa não encontrada`);
+  if (convError || !conv) throw new Error(`Conversa ${ctx.conversationId} não encontrada`);
 
   ctx.conversation = conv;
   ctx.contact = conv.contacts;
@@ -78,7 +83,7 @@ const loadInitialData: Middleware = async (ctx, next) => {
     .eq('sender_type', 'contact')
     .order('sent_at', { ascending: false })
     .limit(1)
-    .single();
+    .maybeSingle();
 
   ctx.lastMessage = lastMsg;
 
@@ -92,50 +97,79 @@ const loadInitialData: Middleware = async (ctx, next) => {
   await next();
 };
 
+/**
+ * Aplica filtros de negócio para decidir se a IA deve responder
+ */
 const checkFilters: Middleware = async (ctx, next) => {
-  const { conversation, contact } = ctx;
+  const { conversation, contact, lastMessage } = ctx;
   if (!conversation) return;
 
-  if (conversation.ai_mode === 'OFF') throw new PipelineAbortError('IA desativada para esta conversa');
+  // 1. IA desativada
+  if (conversation.ai_mode === 'OFF') throw new PipelineAbortError('IA desativada');
 
+  // 2. Controle humano ativo (Lock por tempo)
   if (conversation.human_control && conversation.typing_lock_until) {
     if (new Date(conversation.typing_lock_until) > new Date()) {
-      throw new PipelineAbortError('Controle humano ativo (lock)');
+      throw new PipelineAbortError('Humano no controle');
     }
   }
 
+  // 3. Fornecedor detectado por tag
   const tags = contact?.tags || [];
-  if (tags.includes('fornecedor')) throw new PipelineAbortError('Mensagem de fornecedor detectada');
+  if (tags.includes('fornecedor')) throw new PipelineAbortError('Remetente é fornecedor');
+
+  // 4. Bot detectado (campo is_bot no contato)
+  if (contact?.is_bot) throw new PipelineAbortError('Remetente é um bot');
+
+  // 5. Horário Comercial (Verificação simples)
+  const hour = new Date().getUTCHours() - 3; // Brasil UTC-3
+  if (hour < 8 || hour >= 18) {
+    throw new PipelineAbortError('Fora do horário comercial');
+  }
 
   await next();
 };
 
+/**
+ * Gera a resposta e envia via Z-API
+ */
 const processResponse: Middleware = async (ctx, next) => {
   const supabase = createClient(ctx.supabaseUrl, ctx.supabaseServiceKey);
   
   console.log(`[Pipeline] Gerando resposta para: ${ctx.conversationId}`);
   
-  const { data: aiResult, error: aiError } = await supabase.functions.invoke('ai-generate-reply', {
-    body: { conversation_id: ctx.conversationId }
-  });
+  // Timeout interno para a IA (30s) para não estourar o limite da Edge Function
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
 
-  if (aiError || !aiResult?.text) {
-    console.error('Falha ao gerar resposta IA', aiError);
-    return;
-  }
+  try {
+    const { data: aiResult, error: aiError } = await supabase.functions.invoke('ai-generate-reply', {
+      body: { conversation_id: ctx.conversationId }
+    });
 
-  ctx.aiResponseText = aiResult.text;
+    clearTimeout(timeoutId);
 
-  await supabase.functions.invoke('zapi-send-message', {
-    body: {
-      conversation_id: ctx.conversationId,
-      content: aiResult.text,
-      message_type: 'text',
-      sender_name: 'Ana Mônica'
+    if (aiError || !aiResult?.text) {
+      console.error('Falha ao gerar resposta IA', aiError);
+      return;
     }
-  });
 
-  await next();
+    ctx.aiResponseText = aiResult.text;
+
+    // Envio para o Z-API
+    await supabase.functions.invoke('zapi-send-message', {
+      body: {
+        conversation_id: ctx.conversationId,
+        content: aiResult.text,
+        message_type: 'text',
+        sender_name: 'Ana Mônica'
+      }
+    });
+
+    await next();
+  } catch (err) {
+    console.error('[Pipeline Response Error]', err);
+  }
 };
 
 // --- PIPELINE ENGINE ---
@@ -157,12 +191,15 @@ serve(async (req) => {
   try {
     const { conversation_id } = await req.json();
     
+    if (!conversation_id) throw new Error('Missing conversation_id');
+
     const ctx: Context = {
       conversationId: conversation_id,
       supabaseUrl: Deno.env.get('SUPABASE_URL')!,
       supabaseServiceKey: Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     };
 
+    // Executa pipeline em ordem
     await executePipeline(ctx, [loadInitialData, checkFilters, processResponse]);
 
     return new Response(JSON.stringify({ success: true }), {
@@ -171,12 +208,13 @@ serve(async (req) => {
 
   } catch (error) {
     if (error instanceof PipelineAbortError) {
+      console.log(`[Pipeline Aborted] Reason: ${error.reason}`);
       return new Response(JSON.stringify({ success: false, reason: error.reason }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    console.error('[Pipeline Error]', error);
+    console.error('[Pipeline Critical Error]', error);
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
