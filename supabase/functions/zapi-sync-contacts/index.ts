@@ -54,7 +54,9 @@ serve(async (req) => {
         // Extract data from Z-API contact
         const phone = zapiContact.phone?.replace(/\D/g, '') || null;
         const lid = zapiContact.lid || null;
-        const name = zapiContact.name || zapiContact.pushname || phone || lid || 'Contato Desconhecido';
+        // Priority: saved name (agenda) > pushname > fallback
+        const savedName = zapiContact.name; // Name saved in phone agenda
+        const pushName = zapiContact.pushname; // WhatsApp profile name
         const profilePicture = zapiContact.profilePicture || zapiContact.imgUrl || null;
 
         // Skip if no identifier
@@ -62,6 +64,24 @@ serve(async (req) => {
           skipped++;
           continue;
         }
+
+        // Helper to check if a name is just a phone number
+        const isOnlyNumber = (str: string | null | undefined): boolean => {
+          if (!str) return true;
+          return /^[\d\s\+\-\(\)]+$/.test(str.trim());
+        };
+
+        // Determine best name: prefer saved name, then pushname, avoid phone numbers
+        const getBestName = (): string => {
+          if (savedName && !isOnlyNumber(savedName)) return savedName;
+          if (pushName && !isOnlyNumber(pushName)) return pushName;
+          if (savedName) return savedName;
+          if (pushName) return pushName;
+          return phone || lid || 'Contato Desconhecido';
+        };
+
+        const bestName = getBestName();
+        const whatsappDisplayName = pushName || null;
 
         // Check if contact exists (by LID first, then phone)
         let existingContact = null;
@@ -96,9 +116,20 @@ serve(async (req) => {
           if (phone && !existingContact.phone) {
             updates.phone = phone;
           }
-          if (name && existingContact.name === 'Contato Desconhecido') {
-            updates.name = name;
+          
+          // Update name if current name is just a number or is "Contato Desconhecido"
+          const currentNameIsNumber = isOnlyNumber(existingContact.name);
+          const currentNameIsDefault = existingContact.name === 'Contato Desconhecido';
+          if ((currentNameIsNumber || currentNameIsDefault) && !isOnlyNumber(bestName)) {
+            updates.name = bestName;
+            console.log(`Updating contact name from "${existingContact.name}" to "${bestName}"`);
           }
+          
+          // Always update whatsapp_display_name if we have a pushname
+          if (whatsappDisplayName && existingContact.whatsapp_display_name !== whatsappDisplayName) {
+            updates.whatsapp_display_name = whatsappDisplayName;
+          }
+          
           if (profilePicture && !existingContact.profile_picture_url) {
             updates.profile_picture_url = profilePicture;
           }
@@ -119,7 +150,8 @@ serve(async (req) => {
             .insert({
               lid: lid,
               phone: phone,
-              name: name,
+              name: bestName,
+              whatsapp_display_name: whatsappDisplayName,
               profile_picture_url: profilePicture,
               lid_source: lid ? 'zapi_sync' : null,
               lid_collected_at: lid ? new Date().toISOString() : null,

@@ -216,10 +216,30 @@ export default function InboxPage() {
         const formatted: Conversation[] = Array.from(threadMap.values()).map((conv: any) => {
           const lastMsg = lastMessagesMap.get(conv.id);
           const contact = conv.contacts;
-          // For groups, use group_name. For contacts, use whatsapp_display_name or name
-          const displayName = contact?.is_group 
-            ? (contact?.group_name || contact?.name || 'Grupo') 
-            : (contact?.whatsapp_display_name || contact?.name || 'Desconhecido');
+          // Helper to check if a name is just a phone number
+          const isOnlyNumber = (str: string | null | undefined): boolean => {
+            if (!str) return true;
+            return /^[\d\s\+\-\(\)]+$/.test(str.trim());
+          };
+          
+          // For groups, use group_name. For contacts, prefer whatsapp_display_name or name (skip if just numbers)
+          let displayName = 'Desconhecido';
+          if (contact?.is_group) {
+            displayName = contact?.group_name || contact?.name || 'Grupo';
+          } else {
+            // Priority: whatsapp_display_name > name, but skip if just a number
+            const whatsappName = contact?.whatsapp_display_name;
+            const contactName = contact?.name;
+            
+            if (whatsappName && !isOnlyNumber(whatsappName)) {
+              displayName = whatsappName;
+            } else if (contactName && !isOnlyNumber(contactName)) {
+              displayName = contactName;
+            } else {
+              // Last resort: use phone or whatever we have
+              displayName = contact?.phone || contactName || whatsappName || 'Desconhecido';
+            }
+          }
           return {
             id: conv.id,
             contact: {
