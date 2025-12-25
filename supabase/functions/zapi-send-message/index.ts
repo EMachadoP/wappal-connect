@@ -14,7 +14,6 @@ serve(async (req) => {
   const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
 
   try {
-    // 1. Validar Autenticação (auth.uid)
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) throw new Error('Não autorizado: Token ausente');
 
@@ -25,7 +24,6 @@ serve(async (req) => {
     const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
     if (authError || !user) throw new Error('Sessão expirada ou inválida');
 
-    // 2. Validar Role e Status via Service Client (Admin)
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
     
     const { data: profile, error: profileErr } = await supabaseAdmin
@@ -38,17 +36,6 @@ serve(async (req) => {
       throw new Error('Agente inativo ou não autorizado');
     }
 
-    const { data: roleData } = await supabaseAdmin
-      .from('user_roles')
-      .select('role')
-      .eq('user_id', user.id)
-      .maybeSingle();
-
-    if (!roleData || !['admin', 'agent'].includes(roleData.role)) {
-      throw new Error('Permissão insuficiente');
-    }
-
-    // 3. Payload e Destinatário (Validar existência da conversa no DB)
     const { conversation_id, content, message_type, media_url } = await req.json();
     
     const { data: conv, error: convErr } = await supabaseAdmin
@@ -57,27 +44,32 @@ serve(async (req) => {
       .eq('id', conversation_id)
       .single();
 
-    if (convErr || !conv) throw new Error('Conversa não encontrada');
+    if (convErr || !conv) throw new Error('Conversa não encontrada no banco de dados');
 
-    // 4. Credenciais Z-API
     const { data: settings } = await supabaseAdmin.from('zapi_settings').select('*').limit(1).single();
+    
+    // Prioridade: Env Vars > Configurações do Banco
     const instanceId = Deno.env.get('ZAPI_INSTANCE_ID') || settings?.zapi_instance_id;
     const token = Deno.env.get('ZAPI_TOKEN') || settings?.zapi_token;
     const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN') || settings?.zapi_security_token;
 
-    if (!instanceId || !token) throw new Error('Integração WhatsApp não configurada');
+    if (!instanceId || !token) {
+      throw new Error('Credenciais da Z-API não configuradas. Verifique o Painel Admin.');
+    }
 
-    // deno-lint-ignore no-explicit-any
+    // Identificar destinatário
     const contact = conv.contacts as any;
     const recipient = contact?.lid || conv.chat_id || contact?.phone;
-    if (!recipient) throw new Error('Destinatário inválido');
+    
+    if (!recipient) {
+      throw new Error('Não foi possível encontrar um identificador de destinatário válido (Phone/LID)');
+    }
 
     const senderName = profile.display_name || profile.name || 'Atendente';
     const prefixedContent = `*${senderName}:*\n${content}`;
     const zapiBaseUrl = `https://api.z-api.io/instances/${instanceId}/token/${token}`;
     
     let endpoint = '/send-text';
-    // deno-lint-ignore no-explicit-any
     let zapiBody: any = { phone: recipient, message: prefixedContent };
 
     if (message_type === 'image') { 
@@ -88,7 +80,8 @@ serve(async (req) => {
       zapiBody = { phone: recipient, audio: media_url }; 
     }
 
-    // 5. Envio Real
+    console.log(`[Z-API] Enviando para ${recipient} via instância ${instanceId}`);
+
     const response = await fetch(`${zapiBaseUrl}${endpoint}`, {
       method: 'POST',
       headers: { 
@@ -99,13 +92,17 @@ serve(async (req) => {
     });
 
     const result = await response.json();
-    if (!response.ok) throw new Error(result.message || 'Erro no envio WhatsApp');
+    
+    if (!response.ok) {
+      console.error('[Z-API Error]', result);
+      throw new Error(result.message || result.error || 'Erro na resposta da Z-API');
+    }
 
-    // 6. Registro Seguro (sempre usa user.id da sessão)
+    // Registrar no histórico
     await supabaseAdmin.from('messages').insert({
       conversation_id,
       sender_type: 'agent',
-      sender_id: user.id, // Forçado
+      sender_id: user.id,
       agent_name: senderName,
       content,
       message_type: message_type || 'text',
@@ -117,9 +114,15 @@ serve(async (req) => {
       sent_at: new Date().toISOString(),
     });
 
-    return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ success: true, messageId: result.messageId }), { 
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+    });
 
-  } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  } catch (error: any) {
+    console.error('[Send Message Error]', error.message);
+    return new Response(JSON.stringify({ error: error.message }), { 
+      status: 400, 
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+    });
   }
 });
