@@ -14,20 +14,22 @@ serve(async (req: Request) => {
   const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
 
   try {
-    // 1. Validar Sessão
     const authHeader = req.headers.get('Authorization');
+    if (!authHeader) throw new Error('Não autorizado: Header ausente');
+
     const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader || '' } }
+      global: { headers: { Authorization: authHeader } }
     });
-    const { data: { user } } = await supabaseAuth.auth.getUser();
-    if (!user) throw new Error('Não autorizado');
+    
+    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
+    if (authError || !user) throw new Error('Sessão inválida ou expirada');
 
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
     const body = await req.json();
     const { conversation_id, condominium_id, category, priority, summary, notify_group, participant_id, contact_id } = body;
 
-    // 2. Verificar se já existe protocolo aberto (Idempotência)
+    // Check for existing open protocol
     const { data: existing } = await supabaseAdmin
       .from('protocols')
       .select('id, protocol_code')
@@ -36,13 +38,24 @@ serve(async (req: Request) => {
       .maybeSingle();
 
     if (existing) {
-      return new Response(JSON.stringify({ success: true, protocol: existing, already_existed: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ 
+        success: true, 
+        protocol: existing, 
+        already_existed: true 
+      }), { 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      });
     }
 
-    // 3. Gerar código e Inserir (Forçando identity do agente)
+    // Generate code via RPC
     const yearMonth = new Date().toISOString().slice(0, 7).replace('-', '');
-    const { data: protocolCode } = await supabaseAdmin.rpc('generate_protocol_code', { p_year_month: yearMonth });
+    const { data: protocolCode, error: rpcError } = await supabaseAdmin.rpc('generate_protocol_code', { 
+      p_year_month: yearMonth 
+    });
 
+    if (rpcError) throw rpcError;
+
+    // Insert protocol enforcing identity
     const { data: protocol, error: insError } = await supabaseAdmin
       .from('protocols')
       .insert({
@@ -56,26 +69,39 @@ serve(async (req: Request) => {
         summary,
         status: 'open',
         created_by_type: 'agent',
-        created_by_agent_id: user.id // Sempre usa o ID do usuário autenticado
+        created_by_agent_id: user.id
       })
       .select()
       .single();
 
     if (insError) throw insError;
 
-    // 4. Update Conversa e Gatilho de Notificação
-    await supabaseAdmin.from('conversations').update({ protocol: protocolCode }).eq('id', conversation_id);
+    // Update conversation record
+    await supabaseAdmin
+      .from('conversations')
+      .update({ protocol: protocolCode })
+      .eq('id', conversation_id);
 
+    // Trigger async notification
     if (notify_group) {
       fetch(`${supabaseUrl}/functions/v1/protocol-opened`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
+        headers: { 
+          'Content-Type': 'application/json', 
+          'Authorization': `Bearer ${supabaseServiceKey}` 
+        },
         body: JSON.stringify({ protocol_id: protocol.id, ...body }),
-      }).catch(console.error);
+      }).catch(err => console.error('Notification error:', err));
     }
 
-    return new Response(JSON.stringify({ success: true, protocol }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ success: true, protocol }), { 
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+    });
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    console.error('Create protocol error:', error);
+    return new Response(JSON.stringify({ error: error.message }), { 
+      status: 400, 
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+    });
   }
 });
