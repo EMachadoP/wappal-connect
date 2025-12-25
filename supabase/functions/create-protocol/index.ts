@@ -14,7 +14,6 @@ serve(async (req: Request) => {
   const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
 
   try {
-    // 1. Validar Sessão (Garante que quem chama é um usuário logado no App)
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) throw new Error('Não autorizado: Header ausente');
 
@@ -26,11 +25,9 @@ serve(async (req: Request) => {
     if (authError || !user) throw new Error('Sessão inválida ou expirada');
 
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-
     const body = await req.json();
     const { conversation_id, condominium_id, category, priority, summary, notify_group, participant_id, contact_id } = body;
 
-    // 2. Verificar se já existe protocolo aberto (Idempotência)
     const { data: existing } = await supabaseAdmin
       .from('protocols')
       .select('id, protocol_code')
@@ -48,7 +45,6 @@ serve(async (req: Request) => {
       });
     }
 
-    // 3. Gerar código sequencial via RPC
     const yearMonth = new Date().toISOString().slice(0, 7).replace('-', '');
     const { data: protocolCode, error: rpcError } = await supabaseAdmin.rpc('generate_protocol_code', { 
       p_year_month: yearMonth 
@@ -56,7 +52,6 @@ serve(async (req: Request) => {
 
     if (rpcError) throw rpcError;
 
-    // 4. Inserir protocolo forçando o ID do agente autenticado
     const { data: protocol, error: insError } = await supabaseAdmin
       .from('protocols')
       .insert({
@@ -70,20 +65,18 @@ serve(async (req: Request) => {
         summary,
         status: 'open',
         created_by_type: 'agent',
-        created_by_agent_id: user.id // Identidade garantida pela sessão
+        created_by_agent_id: user.id
       })
       .select()
       .single();
 
     if (insError) throw insError;
 
-    // 5. Atualizar registro na conversa
     await supabaseAdmin
       .from('conversations')
       .update({ protocol: protocolCode })
       .eq('id', conversation_id);
 
-    // 6. Disparar notificações assíncronas (Asana/WhatsApp)
     if (notify_group) {
       fetch(`${supabaseUrl}/functions/v1/protocol-opened`, {
         method: 'POST',
