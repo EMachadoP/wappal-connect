@@ -1,10 +1,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// Version: 1.0.1 - Security refactoring trigger
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, client-token',
 };
 
 serve(async (req) => {
@@ -15,7 +14,7 @@ serve(async (req) => {
   const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
 
   try {
-    // 1. Validar Autenticação do Usuário (auth.uid)
+    // 1. Validar Autenticação (auth.uid)
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) throw new Error('Não autorizado: Token ausente');
 
@@ -26,7 +25,7 @@ serve(async (req) => {
     const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
     if (authError || !user) throw new Error('Sessão expirada ou inválida');
 
-    // 2. Validar Role e Status do Agente usando Service Role (Admin)
+    // 2. Validar Role e Status via Service Client (Admin)
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
     
     const { data: profile, error: profileErr } = await supabaseAdmin
@@ -36,7 +35,7 @@ serve(async (req) => {
       .single();
 
     if (profileErr || !profile || !profile.is_active) {
-      throw new Error('Agente inativo ou não autorizado para enviar mensagens');
+      throw new Error('Agente inativo ou não autorizado');
     }
 
     const { data: roleData } = await supabaseAdmin
@@ -46,10 +45,10 @@ serve(async (req) => {
       .maybeSingle();
 
     if (!roleData || !['admin', 'agent'].includes(roleData.role)) {
-      throw new Error('Permissão insuficiente: Requer role de agente ou admin');
+      throw new Error('Permissão insuficiente');
     }
 
-    // 3. Processar Payload e Validar Destinatário
+    // 3. Payload e Destinatário (Validar existência da conversa no DB)
     const { conversation_id, content, message_type, media_url } = await req.json();
     
     const { data: conv, error: convErr } = await supabaseAdmin
@@ -58,20 +57,20 @@ serve(async (req) => {
       .eq('id', conversation_id)
       .single();
 
-    if (convErr || !conv) throw new Error('Conversa inválida ou não encontrada');
+    if (convErr || !conv) throw new Error('Conversa não encontrada');
 
-    // 4. Obter Credenciais Z-API
+    // 4. Credenciais Z-API
     const { data: settings } = await supabaseAdmin.from('zapi_settings').select('*').limit(1).single();
     const instanceId = Deno.env.get('ZAPI_INSTANCE_ID') || settings?.zapi_instance_id;
     const token = Deno.env.get('ZAPI_TOKEN') || settings?.zapi_token;
     const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN') || settings?.zapi_security_token;
 
-    if (!instanceId || !token) throw new Error('Configurações de integração WhatsApp pendentes');
+    if (!instanceId || !token) throw new Error('Integração WhatsApp não configurada');
 
     // deno-lint-ignore no-explicit-any
     const contact = conv.contacts as any;
     const recipient = contact?.lid || conv.chat_id || contact?.phone;
-    if (!recipient) throw new Error('Identificador do contato ausente');
+    if (!recipient) throw new Error('Destinatário inválido');
 
     const senderName = profile.display_name || profile.name || 'Atendente';
     const prefixedContent = `*${senderName}:*\n${content}`;
@@ -79,34 +78,34 @@ serve(async (req) => {
     
     let endpoint = '/send-text';
     // deno-lint-ignore no-explicit-any
-    let body: any = { phone: recipient, message: prefixedContent };
+    let zapiBody: any = { phone: recipient, message: prefixedContent };
 
     if (message_type === 'image') { 
       endpoint = '/send-image'; 
-      body = { phone: recipient, image: media_url, caption: prefixedContent }; 
+      zapiBody = { phone: recipient, image: media_url, caption: prefixedContent }; 
     } else if (message_type === 'audio') { 
       endpoint = '/send-audio'; 
-      body = { phone: recipient, audio: media_url }; 
+      zapiBody = { phone: recipient, audio: media_url }; 
     }
 
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (clientToken) headers['Client-Token'] = clientToken;
-
-    // 5. Enviar Mensagem
+    // 5. Envio Real
     const response = await fetch(`${zapiBaseUrl}${endpoint}`, {
       method: 'POST',
-      headers,
-      body: JSON.stringify(body),
+      headers: { 
+        'Content-Type': 'application/json',
+        ...(clientToken ? { 'Client-Token': clientToken } : {})
+      },
+      body: JSON.stringify(zapiBody),
     });
 
     const result = await response.json();
-    if (!response.ok) throw new Error(result.message || 'Erro no envio via WhatsApp');
+    if (!response.ok) throw new Error(result.message || 'Erro no envio WhatsApp');
 
-    // 6. Registrar Mensagem no DB
+    // 6. Registro Seguro (sempre usa user.id da sessão)
     await supabaseAdmin.from('messages').insert({
       conversation_id,
       sender_type: 'agent',
-      sender_id: user.id,
+      sender_id: user.id, // Forçado
       agent_name: senderName,
       content,
       message_type: message_type || 'text',
@@ -118,15 +117,9 @@ serve(async (req) => {
       sent_at: new Date().toISOString(),
     });
 
-    return new Response(JSON.stringify({ success: true }), { 
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-    });
+    return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
-    console.error('[Send Message Security Error]', error.message);
-    return new Response(JSON.stringify({ error: error.message }), { 
-      status: 401, 
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-    });
+    return new Response(JSON.stringify({ error: error.message }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });

@@ -14,9 +14,9 @@ serve(async (req) => {
   const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
 
   try {
-    // 1. Validar Sessão do Usuário
+    // 1. Validar Quem está Operando
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) throw new Error("Não autorizado: Token ausente");
+    if (!authHeader) throw new Error("Não autorizado");
 
     const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
@@ -27,77 +27,40 @@ serve(async (req) => {
 
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
-    // 2. Validar Role do Atuante (quem está atribuindo)
-    const { data: actorProfile } = await supabaseAdmin
-      .from("profiles")
-      .select("name, is_active")
-      .eq("id", user.id)
-      .single();
+    // Validar status do autor
+    const { data: actor } = await supabaseAdmin.from("profiles").select("name, is_active").eq("id", user.id).single();
+    if (!actor?.is_active) throw new Error("Agente inativo");
 
-    if (!actorProfile || !actorProfile.is_active) throw new Error("Agente inativo");
-
-    const { data: roleData } = await supabaseAdmin
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", user.id)
-      .maybeSingle();
-
-    if (!roleData || !["admin", "agent"].includes(roleData.role)) {
-      throw new Error("Permissão insuficiente");
-    }
-
+    // 2. Validar Dados da Atribuição
     const { conversation_id, agent_id } = await req.json();
 
-    // 3. Validar se o Agente de Destino existe e está ativo
-    const { data: targetAgent, error: targetErr } = await supabaseAdmin
-      .from("profiles")
-      .select("id, name, is_active")
-      .eq("id", agent_id)
-      .single();
+    // Validar Agente de Destino
+    const { data: target } = await supabaseAdmin.from("profiles").select("name, is_active").eq("id", agent_id).single();
+    if (!target?.is_active) throw new Error("Agente de destino indisponível");
 
-    if (targetErr || !targetAgent || !targetAgent.is_active) {
-      throw new Error("Agente de destino não encontrado ou inativo");
-    }
-
-    // 4. Validar Existência da Conversa
-    const { data: conversation } = await supabaseAdmin
-      .from("conversations")
-      .select("id")
-      .eq("id", conversation_id)
-      .single();
-
-    if (!conversation) throw new Error("Conversa não encontrada");
-
-    // 5. Executar Atribuição Atomizada
-    const { error: updateError } = await supabaseAdmin
+    // 3. Executar com Log de Sistema
+    const { error: updError } = await supabaseAdmin
       .from("conversations")
       .update({
         assigned_to: agent_id,
         assigned_at: new Date().toISOString(),
-        assigned_by: user.id,
+        assigned_by: user.id // Capturado da sessão, não do payload
       })
       .eq("id", conversation_id);
 
-    if (updateError) throw updateError;
+    if (updError) throw updError;
 
-    // 6. Log de Sistema (Auditoria na Timeline)
+    // Timeline audit
     await supabaseAdmin.from("messages").insert({
       conversation_id,
       sender_type: "system",
       message_type: "system",
-      content: `👥 Atribuída para ${targetAgent.name} por ${actorProfile.name}`,
+      content: `👥 Atribuída para ${target.name} por ${actor.name}`,
       sent_at: new Date().toISOString(),
     });
 
-    return new Response(JSON.stringify({ success: true }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-
+    return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (err) {
-    console.error('[Assign Error]', err.message);
-    return new Response(JSON.stringify({ error: err.message }), {
-      status: 400,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(JSON.stringify({ error: err.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
   }
 });
