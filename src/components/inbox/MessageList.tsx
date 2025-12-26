@@ -23,7 +23,6 @@ export function MessageList({ messages, loading, conversationId, profiles }: Mes
   }, []);
 
   useEffect(() => {
-    // Only smooth scroll if there's a small number of new messages
     const isNewMessage = messages.length > prevLength.current;
     if (isNewMessage) {
       scrollToBottom('smooth');
@@ -33,7 +32,7 @@ export function MessageList({ messages, loading, conversationId, profiles }: Mes
     prevLength.current = messages.length;
   }, [messages.length, scrollToBottom]);
 
-  const getSenderName = (senderId: string | null | undefined): string | null => {
+  const getAgentName = (senderId: string | null | undefined): string | null => {
     if (!senderId) return null;
     const profile = profiles.find(p => p.id === senderId);
     return profile?.name || null;
@@ -55,24 +54,35 @@ export function MessageList({ messages, loading, conversationId, profiles }: Mes
       aria-label="Histórico de mensagens"
     >
       <div className="flex flex-col">
-        {messages.map((msg) => (
-          <MemoizedChatMessage
-            key={msg.id}
-            messageId={msg.id}
-            conversationId={conversationId}
-            content={msg.content}
-            messageType={msg.message_type}
-            mediaUrl={msg.media_url}
-            sentAt={msg.sent_at}
-            isOutgoing={msg.sender_type === 'agent'}
-            isSystem={msg.sender_type === 'system'}
-            deliveredAt={msg.delivered_at}
-            readAt={msg.read_at}
-            senderName={msg.agent_name || (msg.sender_type === 'agent' ? getSenderName(msg.sender_id || msg.agent_id) : null)}
-            isAIGenerated={msg.sender_type === 'agent' && !msg.sender_id && !msg.agent_id}
-            transcript={msg.transcript}
-          />
-        ))}
+        {messages.map((msg) => {
+          const isOutgoing = msg.sender_type === 'agent';
+          
+          // Lógica de nome:
+          // Se for agente: prioriza agent_name da tabela, senão busca no array de perfis
+          // Se for contato: usa o sender_name salvo na mensagem (vindo do WhatsApp)
+          const name = isOutgoing 
+            ? (msg.agent_name || getAgentName(msg.sender_id || msg.agent_id))
+            : msg.sender_name;
+
+          return (
+            <MemoizedChatMessage
+              key={msg.id}
+              messageId={msg.id}
+              conversationId={conversationId}
+              content={msg.content}
+              messageType={msg.message_type}
+              mediaUrl={msg.media_url}
+              sentAt={msg.sent_at}
+              isOutgoing={isOutgoing}
+              isSystem={msg.sender_type === 'system'}
+              deliveredAt={msg.delivered_at}
+              readAt={msg.read_at}
+              senderName={name}
+              isAIGenerated={isOutgoing && !msg.sender_id && !msg.agent_id}
+              transcript={msg.transcript}
+            />
+          );
+        })}
       </div>
     </div>
   );
