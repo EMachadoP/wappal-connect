@@ -44,30 +44,27 @@ serve(async (req) => {
       .eq('id', conversation_id)
       .single();
 
-    if (convErr || !conv) throw new Error('Conversa não encontrada no banco de dados');
+    if (convErr || !conv) throw new Error('Conversa não encontrada');
 
     const { data: settings } = await supabaseAdmin.from('zapi_settings').select('*').limit(1).single();
     
-    // Prioridade: Env Vars > Configurações do Banco
     const instanceId = Deno.env.get('ZAPI_INSTANCE_ID') || settings?.zapi_instance_id;
     const token = Deno.env.get('ZAPI_TOKEN') || settings?.zapi_token;
     const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN') || settings?.zapi_security_token;
 
     if (!instanceId || !token) {
-      throw new Error('Credenciais da Z-API não configuradas. Verifique o Painel Admin.');
+      throw new Error('Credenciais da Z-API não configuradas.');
     }
 
-    // Identificar destinatário
     const contact = conv.contacts as any;
     const recipient = contact?.lid || conv.chat_id || contact?.phone;
     
     if (!recipient) {
-      throw new Error('Não foi possível encontrar um identificador de destinatário válido (Phone/LID)');
+      throw new Error('Destinatário não encontrado.');
     }
 
     const senderName = profile.display_name || profile.name || 'Atendente';
     const prefixedContent = `*${senderName}:*\n${content}`;
-    const zapiBaseUrl = `https://api.z-api.io/instances/${instanceId}/token/${token}`;
     
     let endpoint = '/send-text';
     let zapiBody: any = { phone: recipient, message: prefixedContent };
@@ -80,9 +77,7 @@ serve(async (req) => {
       zapiBody = { phone: recipient, audio: media_url }; 
     }
 
-    console.log(`[Z-API] Enviando para ${recipient} via instância ${instanceId}`);
-
-    const response = await fetch(`${zapiBaseUrl}${endpoint}`, {
+    const response = await fetch(`https://api.z-api.io/instances/${instanceId}/token/${token}${endpoint}`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
@@ -92,13 +87,8 @@ serve(async (req) => {
     });
 
     const result = await response.json();
-    
-    if (!response.ok) {
-      console.error('[Z-API Error]', result);
-      throw new Error(result.message || result.error || 'Erro na resposta da Z-API');
-    }
+    if (!response.ok) throw new Error(result.message || 'Erro Z-API');
 
-    // Registrar no histórico
     await supabaseAdmin.from('messages').insert({
       conversation_id,
       sender_type: 'agent',
@@ -114,12 +104,11 @@ serve(async (req) => {
       sent_at: new Date().toISOString(),
     });
 
-    return new Response(JSON.stringify({ success: true, messageId: result.messageId }), { 
+    return new Response(JSON.stringify({ success: true }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
 
   } catch (error: any) {
-    console.error('[Send Message Error]', error.message);
     return new Response(JSON.stringify({ error: error.message }), { 
       status: 400, 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
