@@ -8,11 +8,12 @@ interface MessageListProps {
   loading?: boolean;
   conversationId?: string | null;
   profiles: any[];
+  contactName?: string; // Novo prop para fallback
 }
 
 const MemoizedChatMessage = memo(ChatMessage);
 
-export function MessageList({ messages, loading, conversationId, profiles }: MessageListProps) {
+export function MessageList({ messages, loading, conversationId, profiles, contactName }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const prevLength = useRef(messages.length);
 
@@ -59,10 +60,11 @@ export function MessageList({ messages, loading, conversationId, profiles }: Mes
           
           // Lógica de nome:
           // Se for agente: prioriza agent_name da tabela, senão busca no array de perfis
-          // Se for contato: usa o sender_name salvo na mensagem (vindo do WhatsApp)
+          // Se for contato: usa o sender_name salvo na mensagem (vinda do WhatsApp) 
+          // ou o nome do contato principal como fallback
           const name = isOutgoing 
             ? (msg.agent_name || getAgentName(msg.sender_id || msg.agent_id))
-            : msg.sender_name;
+            : (msg.sender_name || contactName);
 
           return (
             <MemoizedChatMessage
