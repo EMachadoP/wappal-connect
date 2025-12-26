@@ -1,0 +1,58 @@
+name: G7 CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm install
+      - name: Run Unit Tests
+        run: npm test
+
+  deploy:
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy Edge Functions
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PROJECT_ID: ${{ github.ref == 'refs/heads/main' && secrets.PROD_PROJECT_ID || secrets.STAGING_PROJECT_ID }}
+        run: |
+          supabase link --project-ref $PROJECT_ID
+          supabase functions deploy --no-verify-jwt
+
+      - name: Notify Webhook on Failure
+        if: failure()
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+          --data '{"text":"🚨 Falha no Deploy de ${{ github.ref_name }}! Verifique os logs no GitHub."}' \
+          ${{ secrets.NOTIFICATIONS_WEBHOOK_URL }}
+
+      - name: Notify Webhook on Success
+        if: success()
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+          --data '{"text":"✅ Deploy realizado com sucesso em ${{ github.ref_name }}!"}' \
+          ${{ secrets.NOTIFICATIONS_WEBHOOK_URL }}
