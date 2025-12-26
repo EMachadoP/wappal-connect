@@ -70,15 +70,16 @@ export function ConversationList({
   }), [conversations, userId]);
 
   return (
-    <div className={`${isMobile ? 'w-full' : 'w-80'} border-r border-border flex flex-col bg-card h-full overflow-hidden`}>
+    <div className={`${isMobile ? 'w-full' : 'w-80'} border-r border-border flex flex-col bg-card h-full overflow-hidden`} role="navigation" aria-label="Lista de conversas">
       <div className="shrink-0 p-3 border-b border-border">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" aria-hidden="true" />
           <Input
             placeholder="Buscar por nome ou número..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-9"
+            aria-label="Buscar conversas"
           />
         </div>
       </div>

@@ -23,7 +23,9 @@ export function MessageList({ messages, loading, conversationId, profiles }: Mes
   }, []);
 
   useEffect(() => {
-    if (messages.length > prevLength.current) {
+    // Only smooth scroll if there's a small number of new messages
+    const isNewMessage = messages.length > prevLength.current;
+    if (isNewMessage) {
       scrollToBottom('smooth');
     } else {
       scrollToBottom('auto');
@@ -39,7 +41,7 @@ export function MessageList({ messages, loading, conversationId, profiles }: Mes
 
   if (loading && messages.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center">
+      <div className="flex-1 flex items-center justify-center" aria-busy="true">
         <p className="text-muted-foreground">Carregando mensagens...</p>
       </div>
     );
@@ -49,6 +51,8 @@ export function MessageList({ messages, loading, conversationId, profiles }: Mes
     <div 
       ref={containerRef}
       className="flex-1 overflow-y-auto p-4 scrollbar-thin"
+      role="log"
+      aria-label="Histórico de mensagens"
     >
       <div className="flex flex-col">
         {messages.map((msg) => (
