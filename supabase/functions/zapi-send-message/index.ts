@@ -15,9 +15,8 @@ serve(async (req) => {
 
   try {
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader) throw new Error('Não autorizado: Token ausente');
+    if (!authHeader) throw new Error('Não autorizado: Sessão ausente');
 
-    // Usar cliente de auth para validar o usuário logado
     const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } }
     });
@@ -25,65 +24,73 @@ serve(async (req) => {
     const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
     if (authError || !user) throw new Error('Sessão expirada ou inválida');
 
-    // Cliente Admin para ler configurações protegidas
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
     
-    // Validar se o agente está ativo
+    // Obter nome do atendente
     const { data: profile } = await supabaseAdmin
       .from('profiles')
-      .select('id, name, display_name, is_active')
+      .select('name, display_name')
       .eq('id', user.id)
       .single();
 
-    if (!profile?.is_active) throw new Error('Agente inativo ou não autorizado');
+    const senderName = profile?.display_name || profile?.name || 'Atendente G7';
 
     const { conversation_id, content, message_type, media_url } = await req.json();
     
-    // Buscar conversa e destinatário
     const { data: conv } = await supabaseAdmin
       .from('conversations')
-      .select('id, chat_id, contacts(phone, lid)')
+      .select('*, contacts(*)')
       .eq('id', conversation_id)
       .single();
 
-    if (!conv) throw new Error('Conversa não encontrada');
+    if (!conv) throw new Error('Conversa não localizada no banco');
 
-    // Buscar credenciais protegidas por RLS (usando service_role)
+    // Credenciais
     const { data: settings } = await supabaseAdmin.from('zapi_settings').select('*').limit(1).single();
-    
-    const instanceId = settings?.zapi_instance_id || Deno.env.get('ZAPI_INSTANCE_ID');
-    const token = settings?.zapi_token || Deno.env.get('ZAPI_TOKEN');
-    const clientToken = settings?.zapi_security_token || Deno.env.get('ZAPI_CLIENT_TOKEN');
+    const instanceId = Deno.env.get('ZAPI_INSTANCE_ID') || settings?.zapi_instance_id;
+    const token = Deno.env.get('ZAPI_TOKEN') || settings?.zapi_token;
+    const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN') || settings?.zapi_security_token;
 
-    if (!instanceId || !token) throw new Error('Configuração do WhatsApp pendente.');
+    if (!instanceId || !token) {
+      console.error('[Send Message] Erro: Faltam credenciais ZAPI (Instance ou Token)');
+      throw new Error('Configurações de WhatsApp incompletas no servidor');
+    }
 
-    const contact = conv.contacts as any;
-    const recipient = contact?.lid || conv.chat_id || contact?.phone;
-    
-    const senderName = profile.display_name || profile.name || 'Atendente';
+    const recipient = conv.contacts?.lid || conv.chat_id || conv.contacts?.phone;
+    if (!recipient) throw new Error('O destinatário não possui um identificador válido (Phone/LID)');
+
+    console.log(`[Send Message] Enviando para ${recipient} via instância ${instanceId}`);
+
     const prefixedContent = `*${senderName}:*\n${content}`;
+    const zapiBaseUrl = `https://api.z-api.io/instances/${instanceId}/token/${token}`;
     
     let endpoint = '/send-text';
-    let zapiBody: any = { phone: recipient, message: prefixedContent };
+    let body: any = { phone: recipient, message: prefixedContent };
 
     if (message_type === 'image') { 
       endpoint = '/send-image'; 
-      zapiBody = { phone: recipient, image: media_url, caption: prefixedContent }; 
+      body = { phone: recipient, image: media_url, caption: prefixedContent }; 
+    } else if (message_type === 'audio') { 
+      endpoint = '/send-audio'; 
+      body = { phone: recipient, audio: media_url }; 
     }
 
-    const response = await fetch(`https://api.z-api.io/instances/${instanceId}/token/${token}${endpoint}`, {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (clientToken) headers['Client-Token'] = clientToken;
+
+    const response = await fetch(`${zapiBaseUrl}${endpoint}`, {
       method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        ...(clientToken ? { 'Client-Token': clientToken } : {})
-      },
-      body: JSON.stringify(zapiBody),
+      headers,
+      body: JSON.stringify(body),
     });
 
     const result = await response.json();
-    if (!response.ok) throw new Error(result.message || 'Erro na Z-API');
+    if (!response.ok) {
+      console.error('[Z-API Error]', result);
+      throw new Error(result.message || 'Falha na API do WhatsApp');
+    }
 
-    // Registrar mensagem enviada
+    // Salvar registro
     await supabaseAdmin.from('messages').insert({
       conversation_id,
       sender_type: 'agent',
@@ -92,19 +99,21 @@ serve(async (req) => {
       content,
       message_type: message_type || 'text',
       media_url,
+      sent_at: new Date().toISOString(),
       provider: 'zapi',
       provider_message_id: result.messageId || result.zapiMessageId,
       status: 'sent',
-      direction: 'outbound',
-      sent_at: new Date().toISOString(),
+      direction: 'outbound'
     });
 
-    return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ success: true }), { 
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+    });
 
-  } catch (error: any) {
-    console.error('[ZAPI-SEND] Error:', error.message);
+  } catch (error) {
+    console.error('[Send Message Error]', error.message);
     return new Response(JSON.stringify({ error: error.message }), { 
-      status: 400, 
+      status: 500, 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   }

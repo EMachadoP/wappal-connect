@@ -14,7 +14,6 @@ serve(async (req) => {
   const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
 
   try {
-    // 1. Validar Quem está Operando
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) throw new Error("Não autorizado");
 
@@ -23,44 +22,63 @@ serve(async (req) => {
     });
 
     const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
-    if (authError || !user) throw new Error("Sessão inválida");
+    if (authError || !user) throw new Error("Token inválido");
 
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Validar status do autor
-    const { data: actor } = await supabaseAdmin.from("profiles").select("name, is_active").eq("id", user.id).single();
-    if (!actor?.is_active) throw new Error("Agente inativo");
+    // Validação de Permissão
+    const { data: roleData } = await supabaseAdmin
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", user.id)
+      .maybeSingle();
 
-    // 2. Validar Dados da Atribuição
+    if (!roleData || !["admin", "agent"].includes(roleData.role)) {
+      throw new Error("Permissão insuficiente");
+    }
+
     const { conversation_id, agent_id } = await req.json();
 
-    // Validar Agente de Destino
-    const { data: target } = await supabaseAdmin.from("profiles").select("name, is_active").eq("id", agent_id).single();
-    if (!target?.is_active) throw new Error("Agente de destino indisponível");
+    // Validar se o agente de destino existe e é ativo
+    const { data: targetAgent } = await supabaseAdmin
+      .from("profiles")
+      .select("id, name, is_active")
+      .eq("id", agent_id)
+      .single();
 
-    // 3. Executar com Log de Sistema
-    const { error: updError } = await supabaseAdmin
+    if (!targetAgent || !targetAgent.is_active) {
+      throw new Error("Agente de destino inválido ou inativo");
+    }
+
+    // Executar atribuição
+    await supabaseAdmin
       .from("conversations")
       .update({
         assigned_to: agent_id,
         assigned_at: new Date().toISOString(),
-        assigned_by: user.id // Capturado da sessão, não do payload
+        assigned_by: user.id, // Quem realizou a ação
       })
       .eq("id", conversation_id);
 
-    if (updError) throw updError;
-
-    // Timeline audit
+    // Registrar evento de sistema
+    const { data: actor } = await supabaseAdmin.from("profiles").select("name").eq("id", user.id).single();
+    
     await supabaseAdmin.from("messages").insert({
       conversation_id,
       sender_type: "system",
       message_type: "system",
-      content: `👥 Atribuída para ${target.name} por ${actor.name}`,
+      content: `👥 Atribuída para ${targetAgent.name} por ${actor?.name || "sistema"}`,
       sent_at: new Date().toISOString(),
     });
 
-    return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+
   } catch (err) {
-    return new Response(JSON.stringify({ error: err.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    return new Response(JSON.stringify({ error: err.message }), {
+      status: 400,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });
