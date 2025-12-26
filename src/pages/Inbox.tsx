@@ -9,7 +9,8 @@ import { ConversationList } from '@/components/inbox/ConversationList';
 import { ChatArea } from '@/components/inbox/ChatArea';
 import { useRealtimeMessages } from '@/hooks/useRealtimeMessages';
 import { ChatSkeleton } from '@/components/inbox/ChatSkeleton';
-import { useRealtimeInbox } from '@/hooks/useRealtimeInbox';
+import { useRealtimeInbox, Conversation } from '@/hooks/useRealtimeInbox';
+import { invokeFunction } from '@/lib/api-client';
 
 export default function InboxPage() {
   const { id: conversationIdParam } = useParams<{ id?: string }>();
@@ -22,12 +23,10 @@ export default function InboxPage() {
   const [activeContact, setActiveContact] = useState<any>(null);
   const [activeConvData, setActiveConvData] = useState<any>(null);
 
-  // Hook customizado para gerenciar a lista e realtime global
   const { conversations, loading: loadingConversations } = useRealtimeInbox({
     onNewInboundMessage: playNotificationSound
   });
 
-  // Hook para mensagens da conversa ativa
   const { messages, loading: loadingMessages } = useRealtimeMessages(activeConversationId);
 
   const fetchActiveConversationDetails = useCallback(async (id: string) => {
@@ -40,8 +39,6 @@ export default function InboxPage() {
     if (data) {
       setActiveConvData(data);
       setActiveContact(data.contacts);
-      
-      // Marcar como lida se houver mensagens não lidas
       if (data.unread_count > 0) {
         await supabase.from('conversations').update({ unread_count: 0 }).eq('id', id);
       }
@@ -54,7 +51,6 @@ export default function InboxPage() {
     }
   }, [activeConversationId, fetchActiveConversationDetails]);
 
-  // Sincronizar parâmetro da URL com estado local
   useEffect(() => {
     if (conversationIdParam && conversationIdParam !== activeConversationId) {
       setActiveConversationId(conversationIdParam);
@@ -66,21 +62,15 @@ export default function InboxPage() {
       navigate(`/inbox/${id}`);
     } else {
       setActiveConversationId(id);
-      // Opcional: atualizar a URL sem recarregar totalmente no desktop
       window.history.pushState(null, '', `/inbox/${id}`);
     }
   }, [isMobile, navigate]);
 
   const handleSendMessage = async (content: string) => {
     if (!activeConversationId || !user) return;
-    
-    // Chamada segura via Edge Function
-    await supabase.functions.invoke('zapi-send-message', {
-      body: { 
-        conversation_id: activeConversationId, 
-        content, 
-        message_type: 'text'
-      },
+    await invokeFunction('zapi-send-message', { 
+      conversation_id: activeConversationId, 
+      content 
     });
   };
 
@@ -91,7 +81,7 @@ export default function InboxPage() {
     <AppLayout>
       <div className="flex h-full overflow-hidden bg-background">
         <ConversationList 
-          conversations={conversations} 
+          conversations={conversations as any} 
           activeConversationId={activeConversationId} 
           userId={user.id} 
           onSelectConversation={handleSelectConversation} 
@@ -106,7 +96,7 @@ export default function InboxPage() {
               ) : (
                 <ChatArea
                   contact={activeContact}
-                  messages={messages as any}
+                  messages={messages}
                   profiles={[]}
                   conversationId={activeConversationId}
                   conversationStatus={activeConvData?.status}
@@ -119,11 +109,7 @@ export default function InboxPage() {
               )
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground bg-muted/10">
-                <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mb-4">
-                  <ChatSkeleton /> {/* Apenas como placeholder visual */}
-                </div>
-                <p className="text-lg font-medium">Suas conversas aparecem aqui</p>
-                <p className="text-sm">Selecione um contato na lista para iniciar o atendimento.</p>
+                <p className="text-lg font-medium">Selecione uma conversa para iniciar</p>
               </div>
             )}
           </div>
