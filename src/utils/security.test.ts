@@ -10,4 +10,8 @@ describe('Security Utils', () => {
     expect(result.length).toBeLessThanOrEqual(100);
     expect(result.startsWith('test')).toBe(true);
   });
+
+  it('should handle empty strings', () => {
+    expect(sanitizeInput("   ")).toBe("");
+  });
 });
