@@ -1,3 +1,5 @@
+"use client";
+
 import { useState } from 'react';
 import { format } from 'date-fns';
 import { Check, CheckCheck, FileText, Camera, Video, Mic, File } from 'lucide-react';
@@ -73,12 +75,8 @@ export function ChatMessage({
     onMessageUpdated?.(messageId, newContent);
   };
 
-  // Don't render if deleted
-  if (isDeleted) {
-    return null;
-  }
+  if (isDeleted) return null;
 
-  // Render system messages as centered badge
   if (isSystem || messageType === 'system') {
     return (
       <div className="flex justify-center my-3">
@@ -89,47 +87,8 @@ export function ChatMessage({
     );
   }
 
-  // Render media placeholder when no media_url
-  const renderMediaPlaceholder = () => {
-    switch (messageType) {
-      case 'image':
-        return (
-          <div className="flex items-center gap-2 p-3 bg-background/30 rounded-lg">
-            <Camera className="w-6 h-6 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground">📷 Imagem</span>
-          </div>
-        );
-      case 'video':
-        return (
-          <div className="flex items-center gap-2 p-3 bg-background/30 rounded-lg">
-            <Video className="w-6 h-6 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground">🎬 Vídeo</span>
-          </div>
-        );
-      case 'audio':
-        return (
-          <div className="flex items-center gap-2 p-3 bg-background/30 rounded-lg">
-            <Mic className="w-6 h-6 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground">🎤 Áudio</span>
-          </div>
-        );
-      case 'document':
-        return (
-          <div className="flex items-center gap-2 p-3 bg-background/30 rounded-lg">
-            <File className="w-6 h-6 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground">📄 Documento</span>
-          </div>
-        );
-      default:
-        return null;
-    }
-  };
-
   const renderMedia = () => {
-    // If no media_url, show placeholder
-    if (!mediaUrl) {
-      return renderMediaPlaceholder();
-    }
+    if (!mediaUrl) return null;
 
     switch (messageType) {
       case 'image':
@@ -137,33 +96,20 @@ export function ChatMessage({
           <img
             src={mediaUrl}
             alt="Imagem"
-            className="max-w-xs rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
+            className="max-w-xs rounded-lg cursor-pointer hover:opacity-90 transition-opacity mb-2"
             onClick={() => window.open(mediaUrl, '_blank')}
-            onError={(e) => {
-              // If image fails to load, show placeholder
-              e.currentTarget.style.display = 'none';
-              e.currentTarget.parentElement?.querySelector('.media-fallback')?.classList.remove('hidden');
-            }}
           />
         );
       case 'video':
-        return (
-          <video
-            src={mediaUrl}
-            controls
-            className="max-w-xs rounded-lg"
-          />
-        );
+        return <video src={mediaUrl} controls className="max-w-xs rounded-lg mb-2" />;
       case 'audio':
         return (
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-2 mb-2">
             <audio src={mediaUrl} controls className="max-w-xs" />
             {transcript && (
               <div className={cn(
                 "text-xs p-2 rounded-md max-w-xs",
-                isOutgoing 
-                  ? "bg-primary-foreground/10 text-primary-foreground/90" 
-                  : "bg-muted text-muted-foreground"
+                isOutgoing ? "bg-primary-foreground/10 text-primary-foreground/90" : "bg-muted text-muted-foreground"
               )}>
                 <span className="font-medium">📝 Transcrição:</span>
                 <p className="mt-1 whitespace-pre-wrap">{transcript}</p>
@@ -177,7 +123,7 @@ export function ChatMessage({
             href={mediaUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-2 p-3 bg-background/50 rounded-lg hover:bg-background/70 transition-colors"
+            className="flex items-center gap-2 p-3 bg-background/50 rounded-lg hover:bg-background/70 transition-colors mb-2"
           >
             <FileText className="w-8 h-8" />
             <span className="text-sm">Documento</span>
@@ -190,33 +136,18 @@ export function ChatMessage({
 
   const renderStatus = () => {
     if (!isOutgoing) return null;
-
-    if (readAt) {
-      return <CheckCheck className="w-4 h-4 text-info" />;
-    }
-    if (deliveredAt) {
-      return <CheckCheck className="w-4 h-4" />;
-    }
+    if (readAt) return <CheckCheck className="w-4 h-4 text-info" />;
+    if (deliveredAt) return <CheckCheck className="w-4 h-4" />;
     return <Check className="w-4 h-4" />;
   };
 
-  // Only show edit/delete for outgoing text messages
   const canEditDelete = isOutgoing && messageType === 'text';
 
   return (
-    <div
-      className={cn(
-        'flex mb-2 group',
-        isOutgoing ? 'justify-end' : 'justify-start'
-      )}
-    >
-      {/* Actions menu for outgoing messages - appears on left */}
+    <div className={cn('flex mb-2 group', isOutgoing ? 'justify-end' : 'justify-start')}>
       {canEditDelete && isOutgoing && (
         <div className="flex items-center mr-1">
-          <MessageActionsMenu
-            onEdit={() => setEditModalOpen(true)}
-            onDelete={handleDelete}
-          />
+          <MessageActionsMenu onEdit={() => setEditModalOpen(true)} onDelete={handleDelete} />
         </div>
       )}
 
@@ -228,53 +159,34 @@ export function ChatMessage({
             : 'bg-chat-incoming text-chat-incoming-foreground rounded-bl-none'
         )}
       >
-        {/* Nome do operador para mensagens enviadas */}
-        {isOutgoing && senderName && (
-          <p className="text-xs font-medium text-primary-foreground/80 mb-1">
+        {/* Nome do remetente (ajustado para aparecer em ambos os lados) */}
+        {senderName && (
+          <p className={cn(
+            "text-[11px] font-bold mb-1 truncate",
+            isOutgoing ? "text-primary-foreground/80" : "text-primary"
+          )}>
             {senderName}
           </p>
         )}
         
-        {messageType !== 'text' && messageType !== 'system' && renderMedia()}
+        {renderMedia()}
         
         {localContent && (
           <p className="text-sm whitespace-pre-wrap break-words">{localContent}</p>
         )}
         
-        <div className={cn(
-          'flex items-center gap-1 mt-1',
-          isOutgoing ? 'justify-end' : 'justify-start'
-        )}>
-          <span className={cn(
-            'text-xs',
-            isOutgoing ? 'text-primary-foreground/70' : 'text-muted-foreground'
-          )}>
+        <div className={cn('flex items-center gap-1 mt-1', isOutgoing ? 'justify-end' : 'justify-start')}>
+          <span className={cn('text-[10px]', isOutgoing ? 'text-primary-foreground/70' : 'text-muted-foreground')}>
             {time}
           </span>
           {renderStatus()}
         </div>
 
-        {/* Feedback buttons for AI-generated messages */}
         {isOutgoing && isAIGenerated && localContent && conversationId && (
-          <MessageFeedback
-            messageId={messageId}
-            conversationId={conversationId}
-            messageContent={localContent}
-          />
+          <MessageFeedback messageId={messageId} conversationId={conversationId} messageContent={localContent} />
         )}
       </div>
 
-      {/* Actions menu for incoming messages - appears on right */}
-      {canEditDelete && !isOutgoing && (
-        <div className="flex items-center ml-1">
-          <MessageActionsMenu
-            onEdit={() => setEditModalOpen(true)}
-            onDelete={handleDelete}
-          />
-        </div>
-      )}
-
-      {/* Edit Modal */}
       <EditMessageModal
         open={editModalOpen}
         onOpenChange={setEditModalOpen}
