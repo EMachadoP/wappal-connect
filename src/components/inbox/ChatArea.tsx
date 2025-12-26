@@ -126,8 +126,7 @@ export function ChatArea(props: ChatAreaProps) {
         messages={messages} 
         loading={loading} 
         conversationId={conversationId} 
-        profiles={props.profiles}
-        contactName={contact.name}
+        profiles={props.profiles} 
       />
 
       {conversationId && (

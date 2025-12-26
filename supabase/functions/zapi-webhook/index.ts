@@ -10,116 +10,137 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   try {
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-    );
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     const payload = await req.json();
     console.log('[Z-API Webhook] Payload recebido:', JSON.stringify(payload));
 
-    // 1. Validar idempotência (evitar duplicados)
-    const providerMessageId = payload.messageId;
-    if (providerMessageId) {
-      const { data: existing } = await supabase
-        .from('messages')
-        .select('id')
-        .eq('provider_message_id', providerMessageId)
-        .maybeSingle();
-      
-      if (existing) {
-        return new Response(JSON.stringify({ success: true, duplicated: true }));
-      }
+    const fromMe = Boolean(payload.fromMe);
+    const isGroup = Boolean(payload.isGroup);
+    
+    // Z-API envia IDs em diferentes campos dependendo da versão/tipo
+    const chatLid = payload.chatLid || payload.chatId || payload.phone;
+    const lid = payload.contact?.lid || (payload.phone?.includes('@lid') ? payload.phone : null);
+    const phone = payload.phone?.includes('@c.us') ? payload.phone.replace('@c.us', '') : (isGroup ? null : payload.phone);
+    
+    if (!chatLid) {
+      console.error('[Z-API Webhook] Falha: Nenhum identificador de chat encontrado no payload');
+      return new Response(JSON.stringify({ error: 'No Chat ID found' }), { status: 400 });
     }
 
-    // 2. Extrair dados básicos
-    const phone = payload.phone;
-    const senderName = payload.senderName || payload.pushName || phone;
-    const isGroup = !!payload.isGroup;
-    const chatId = payload.chatId || phone;
-    const content = payload.text?.message || payload.caption || "";
-    
-    // 3. Identificar ou Criar Contato
-    let { data: contact } = await supabase
+    // 1. Localizar ou Criar Contato
+    let contactId;
+    const { data: existingContact } = await supabase
       .from('contacts')
       .select('id')
-      .eq('phone', phone)
+      .or(`chat_lid.eq.${chatLid}${phone ? `,phone.eq.${phone}` : ''}${lid ? `,lid.eq.${lid}` : ''}`)
       .maybeSingle();
 
-    if (!contact) {
-      const { data: newContact, error: contactErr } = await supabase
+    if (existingContact) {
+      contactId = existingContact.id;
+      await supabase.from('contacts').update({ 
+        chat_lid: chatLid,
+        lid: lid || undefined,
+        whatsapp_display_name: payload.senderName || payload.chatName || undefined
+      }).eq('id', contactId);
+    } else {
+      const { data: newContact, error: cErr } = await supabase
         .from('contacts')
         .insert({
-          phone,
-          name: senderName,
+          name: payload.senderName || payload.chatName || phone || "Contato Novo",
+          phone: isGroup ? null : phone,
+          lid: lid,
+          chat_lid: chatLid,
           is_group: isGroup,
-          chat_lid: isGroup ? chatId : null,
-          whatsapp_display_name: payload.pushName
+          whatsapp_display_name: payload.senderName || payload.chatName
         })
         .select('id')
         .single();
-      
-      if (contactErr) throw contactErr;
-      contact = newContact;
+      if (cErr) throw cErr;
+      contactId = newContact.id;
     }
 
-    // 4. Identificar ou Criar Conversa (Thread)
-    const threadKey = isGroup ? chatId : phone;
-    let { data: conversation } = await supabase
+    // 2. Gerenciar Conversa (thread_key = chatLid para consistência)
+    const { data: conv } = await supabase
       .from('conversations')
       .select('id, unread_count')
-      .eq('thread_key', threadKey)
+      .eq('thread_key', chatLid)
       .maybeSingle();
 
-    if (!conversation) {
+    let conversationId;
+    if (conv) {
+      conversationId = conv.id;
+      await supabase.from('conversations').update({
+        status: 'open',
+        last_message_at: new Date().toISOString(),
+        unread_count: fromMe ? 0 : (conv.unread_count || 0) + 1,
+        chat_id: chatLid // Atualiza o chat_id real
+      }).eq('id', conversationId);
+    } else {
       const { data: newConv, error: convErr } = await supabase
         .from('conversations')
         .insert({
-          contact_id: contact.id,
-          chat_id: chatId,
-          thread_key: threadKey,
+          contact_id: contactId,
+          chat_id: chatLid,
+          thread_key: chatLid,
           status: 'open',
-          unread_count: 1
+          unread_count: fromMe ? 0 : 1,
         })
-        .select('id, unread_count')
+        .select('id')
         .single();
-      
       if (convErr) throw convErr;
-      conversation = newConv;
-    } else {
-      // Atualizar contagem de não lidas e data da última mensagem
-      await supabase
-        .from('conversations')
-        .update({ 
-          unread_count: (conversation.unread_count || 0) + 1,
-          last_message_at: new Date().toISOString(),
-          status: 'open' // Reabre se estiver resolvida
-        })
-        .eq('id', conversation.id);
+      conversationId = newConv.id;
     }
 
-    // 5. Inserir a Mensagem
-    const { error: msgErr } = await supabase
-      .from('messages')
-      .insert({
-        conversation_id: conversation.id,
-        sender_type: 'contact',
-        sender_name: senderName,
-        content: content,
-        message_type: 'text',
-        provider_message_id: providerMessageId,
-        sent_at: new Date().toISOString()
-      });
+    // 3. Extrair Conteúdo da Mensagem
+    let content = "";
+    if (payload.text?.message) content = payload.text.message;
+    else if (payload.message?.text) content = payload.message.text;
+    else if (typeof payload.body === 'string') content = payload.body;
+    else if (payload.image?.caption) content = payload.image.caption;
+    
+    if (!content && payload.type) content = `[Mensagem de tipo: ${payload.type}]`;
 
-    if (msgErr) throw msgErr;
+    // 4. Salvar Mensagem no Banco
+    const { error: msgErr } = await supabase.from('messages').insert({
+      conversation_id: conversationId,
+      sender_type: fromMe ? 'agent' : 'contact',
+      message_type: payload.type === 'image' ? 'image' : (payload.type === 'audio' ? 'audio' : 'text'),
+      content: content,
+      provider: 'zapi',
+      provider_message_id: payload.messageId,
+      chat_id: chatLid,
+      direction: fromMe ? 'outbound' : 'inbound',
+      sent_at: new Date().toISOString(),
+      media_url: payload.image?.url || payload.audio?.url || payload.video?.url || payload.document?.url || null,
+    });
 
-    // 6. Trigger opcional para IA (se configurado)
-    // fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/ai-maybe-reply`, { ... });
+    if (msgErr) console.error('[Z-API Webhook] Erro ao inserir mensagem:', msgErr);
 
-    return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
+    // 5. Acionar IA se for entrada e não for grupo
+    if (!fromMe && !isGroup) {
+      console.log('[Z-API Webhook] Acionando resposta automática de IA...');
+      fetch(`${supabaseUrl}/functions/v1/ai-maybe-reply`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json', 
+          'Authorization': `Bearer ${supabaseServiceKey}` 
+        },
+        body: JSON.stringify({ conversation_id: conversationId }),
+      }).catch(err => console.error('[Z-API Webhook] Erro ao chamar ai-maybe-reply:', err));
+    }
+
+    return new Response(JSON.stringify({ success: true, conversationId }), { 
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+    });
 
   } catch (error) {
-    console.error('[Z-API Webhook Error]', error.message);
-    return new Response(error.message, { status: 500 });
+    console.error('[Z-API Webhook Critical Error]', error.message);
+    return new Response(JSON.stringify({ error: error.message }), { 
+      status: 500, 
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+    });
   }
 });

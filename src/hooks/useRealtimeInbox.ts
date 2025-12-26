@@ -23,25 +23,16 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
   const channelRef = useRef<any>(null);
 
   const fetchConversations = useCallback(async () => {
-    // Optimized selection: only columns needed for the list UI
     const { data, error } = await supabase
       .from('conversations')
-      .select(`
-        id, 
-        status, 
-        priority, 
-        unread_count, 
-        last_message_at, 
-        assigned_to,
-        contacts (id, name, phone, chat_lid, profile_picture_url)
-      `)
+      .select(`*, contacts (*)`)
       .order('last_message_at', { ascending: false });
 
     if (!error && data) {
       setConversations(data.map((conv: any) => ({
         id: conv.id,
         contact: conv.contacts,
-        last_message: 'Ver histórico...', // Removed content fetch to keep list light
+        last_message: conv.last_message_content || 'Nenhuma mensagem',
         last_message_type: 'text',
         last_message_at: conv.last_message_at,
         unread_count: conv.unread_count,
@@ -54,6 +45,7 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
   }, []);
 
   const setupSubscription = useCallback(() => {
+    // Cleanup existing channel
     if (channelRef.current) {
       supabase.removeChannel(channelRef.current);
     }
@@ -62,17 +54,28 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'conversations' },
-        () => fetchConversations()
+        () => {
+          console.log('[Realtime] Conversation update detected');
+          fetchConversations();
+        }
       )
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages', filter: 'sender_type=eq.contact' },
-        () => {
+        (payload) => {
+          console.log('[Realtime] New inbound message');
           onNewInboundMessage?.();
-          fetchConversations();
+          fetchConversations(); // Update list to reflect last message
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log(`[Realtime] Subscription status: ${status}`);
+        if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
+          // Automatic reconnection logic is handled by Supabase client, 
+          // but we can force a refresh if it drops
+          setTimeout(setupSubscription, 3000);
+        }
+      });
 
     channelRef.current = channel;
   }, [fetchConversations, onNewInboundMessage]);
@@ -81,6 +84,7 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
     fetchConversations();
     setupSubscription();
 
+    // Re-fetch on tab focus to handle missed updates
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         fetchConversations();

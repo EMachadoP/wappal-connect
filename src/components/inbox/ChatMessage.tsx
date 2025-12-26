@@ -73,10 +73,12 @@ export function ChatMessage({
     onMessageUpdated?.(messageId, newContent);
   };
 
+  // Don't render if deleted
   if (isDeleted) {
     return null;
   }
 
+  // Render system messages as centered badge
   if (isSystem || messageType === 'system') {
     return (
       <div className="flex justify-center my-3">
@@ -87,6 +89,7 @@ export function ChatMessage({
     );
   }
 
+  // Render media placeholder when no media_url
   const renderMediaPlaceholder = () => {
     switch (messageType) {
       case 'image':
@@ -123,6 +126,7 @@ export function ChatMessage({
   };
 
   const renderMedia = () => {
+    // If no media_url, show placeholder
     if (!mediaUrl) {
       return renderMediaPlaceholder();
     }
@@ -136,6 +140,7 @@ export function ChatMessage({
             className="max-w-xs rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
             onClick={() => window.open(mediaUrl, '_blank')}
             onError={(e) => {
+              // If image fails to load, show placeholder
               e.currentTarget.style.display = 'none';
               e.currentTarget.parentElement?.querySelector('.media-fallback')?.classList.remove('hidden');
             }}
@@ -195,6 +200,7 @@ export function ChatMessage({
     return <Check className="w-4 h-4" />;
   };
 
+  // Only show edit/delete for outgoing text messages
   const canEditDelete = isOutgoing && messageType === 'text';
 
   return (
@@ -204,6 +210,7 @@ export function ChatMessage({
         isOutgoing ? 'justify-end' : 'justify-start'
       )}
     >
+      {/* Actions menu for outgoing messages - appears on left */}
       {canEditDelete && isOutgoing && (
         <div className="flex items-center mr-1">
           <MessageActionsMenu
@@ -221,12 +228,9 @@ export function ChatMessage({
             : 'bg-chat-incoming text-chat-incoming-foreground rounded-bl-none'
         )}
       >
-        {/* Nome do remetente (Agente ou Contato) */}
-        {senderName && (
-          <p className={cn(
-            "text-[10px] font-bold uppercase tracking-wider mb-1 opacity-80",
-            isOutgoing ? "text-primary-foreground" : "text-primary"
-          )}>
+        {/* Nome do operador para mensagens enviadas */}
+        {isOutgoing && senderName && (
+          <p className="text-xs font-medium text-primary-foreground/80 mb-1">
             {senderName}
           </p>
         )}
@@ -242,7 +246,7 @@ export function ChatMessage({
           isOutgoing ? 'justify-end' : 'justify-start'
         )}>
           <span className={cn(
-            'text-[10px]',
+            'text-xs',
             isOutgoing ? 'text-primary-foreground/70' : 'text-muted-foreground'
           )}>
             {time}
@@ -250,6 +254,7 @@ export function ChatMessage({
           {renderStatus()}
         </div>
 
+        {/* Feedback buttons for AI-generated messages */}
         {isOutgoing && isAIGenerated && localContent && conversationId && (
           <MessageFeedback
             messageId={messageId}
@@ -259,6 +264,7 @@ export function ChatMessage({
         )}
       </div>
 
+      {/* Actions menu for incoming messages - appears on right */}
       {canEditDelete && !isOutgoing && (
         <div className="flex items-center ml-1">
           <MessageActionsMenu
@@ -268,6 +274,7 @@ export function ChatMessage({
         </div>
       )}
 
+      {/* Edit Modal */}
       <EditMessageModal
         open={editModalOpen}
         onOpenChange={setEditModalOpen}
