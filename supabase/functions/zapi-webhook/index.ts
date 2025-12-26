@@ -15,34 +15,31 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     const payload = await req.json();
-    console.log('[Z-API Webhook] Payload recebido:', JSON.stringify(payload));
+    console.log('[Z-API Webhook] Payload:', JSON.stringify(payload));
 
     const fromMe = Boolean(payload.fromMe);
     const isGroup = Boolean(payload.isGroup);
     
-    // Z-API envia IDs em diferentes campos dependendo da versão/tipo
-    const chatLid = payload.chatLid || payload.chatId || payload.phone;
-    const lid = payload.contact?.lid || (payload.phone?.includes('@lid') ? payload.phone : null);
-    const phone = payload.phone?.includes('@c.us') ? payload.phone.replace('@c.us', '') : (isGroup ? null : payload.phone);
+    // Normalização de IDs
+    const rawChatId = payload.chatLid || payload.chatId || payload.phone;
+    if (!rawChatId) throw new Error('No Chat ID found');
     
-    if (!chatLid) {
-      console.error('[Z-API Webhook] Falha: Nenhum identificador de chat encontrado no payload');
-      return new Response(JSON.stringify({ error: 'No Chat ID found' }), { status: 400 });
-    }
+    const chatLid = rawChatId.trim().toLowerCase();
+    const phone = payload.phone?.includes('@c.us') ? payload.phone.replace('@c.us', '') : (isGroup ? null : payload.phone);
+    const lid = payload.contact?.lid || (payload.phone?.includes('@lid') ? payload.phone : null);
 
     // 1. Localizar ou Criar Contato
     let contactId;
     const { data: existingContact } = await supabase
       .from('contacts')
       .select('id')
-      .or(`chat_lid.eq.${chatLid}${phone ? `,phone.eq.${phone}` : ''}${lid ? `,lid.eq.${lid}` : ''}`)
+      .or(`chat_lid.eq."${chatLid}",phone.eq."${phone || 'null'}",lid.eq."${lid || 'null'}"`)
       .maybeSingle();
 
     if (existingContact) {
       contactId = existingContact.id;
       await supabase.from('contacts').update({ 
         chat_lid: chatLid,
-        lid: lid || undefined,
         whatsapp_display_name: payload.senderName || payload.chatName || undefined
       }).eq('id', contactId);
     } else {
@@ -62,7 +59,7 @@ serve(async (req) => {
       contactId = newContact.id;
     }
 
-    // 2. Gerenciar Conversa (thread_key = chatLid para consistência)
+    // 2. Gerenciar Conversa (usando thread_key normalizada)
     const { data: conv } = await supabase
       .from('conversations')
       .select('id, unread_count')
@@ -76,7 +73,7 @@ serve(async (req) => {
         status: 'open',
         last_message_at: new Date().toISOString(),
         unread_count: fromMe ? 0 : (conv.unread_count || 0) + 1,
-        chat_id: chatLid // Atualiza o chat_id real
+        chat_id: chatLid
       }).eq('id', conversationId);
     } else {
       const { data: newConv, error: convErr } = await supabase
@@ -94,7 +91,7 @@ serve(async (req) => {
       conversationId = newConv.id;
     }
 
-    // 3. Extrair Conteúdo da Mensagem
+    // 3. Extrair Conteúdo
     let content = "";
     if (payload.text?.message) content = payload.text.message;
     else if (payload.message?.text) content = payload.message.text;
@@ -103,10 +100,11 @@ serve(async (req) => {
     
     if (!content && payload.type) content = `[Mensagem de tipo: ${payload.type}]`;
 
-    // 4. Salvar Mensagem no Banco
-    const { error: msgErr } = await supabase.from('messages').insert({
+    // 4. Salvar Mensagem
+    await supabase.from('messages').insert({
       conversation_id: conversationId,
       sender_type: fromMe ? 'agent' : 'contact',
+      sender_name: payload.senderName || null,
       message_type: payload.type === 'image' ? 'image' : (payload.type === 'audio' ? 'audio' : 'text'),
       content: content,
       provider: 'zapi',
@@ -117,30 +115,19 @@ serve(async (req) => {
       media_url: payload.image?.url || payload.audio?.url || payload.video?.url || payload.document?.url || null,
     });
 
-    if (msgErr) console.error('[Z-API Webhook] Erro ao inserir mensagem:', msgErr);
-
-    // 5. Acionar IA se for entrada e não for grupo
+    // 5. IA se for entrada
     if (!fromMe && !isGroup) {
-      console.log('[Z-API Webhook] Acionando resposta automática de IA...');
       fetch(`${supabaseUrl}/functions/v1/ai-maybe-reply`, {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json', 
-          'Authorization': `Bearer ${supabaseServiceKey}` 
-        },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
         body: JSON.stringify({ conversation_id: conversationId }),
-      }).catch(err => console.error('[Z-API Webhook] Erro ao chamar ai-maybe-reply:', err));
+      }).catch(err => console.error('[Webhook AI Error]', err));
     }
 
-    return new Response(JSON.stringify({ success: true, conversationId }), { 
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-    });
+    return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
-    console.error('[Z-API Webhook Critical Error]', error.message);
-    return new Response(JSON.stringify({ error: error.message }), { 
-      status: 500, 
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-    });
+    console.error('[Webhook Error]', error.message);
+    return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });

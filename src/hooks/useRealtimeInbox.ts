@@ -44,59 +44,42 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
     setLoading(false);
   }, []);
 
-  const setupSubscription = useCallback(() => {
-    // Cleanup existing channel
+  useEffect(() => {
+    fetchConversations();
+
     if (channelRef.current) {
       supabase.removeChannel(channelRef.current);
     }
 
-    const channel = supabase.channel('inbox-realtime-global')
+    // Global channel for list updates
+    const channel = supabase.channel('global-inbox-updates')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'conversations' },
         () => {
-          console.log('[Realtime] Conversation update detected');
+          console.log('[RealtimeInbox] Conversation changed');
           fetchConversations();
         }
       )
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: 'sender_type=eq.contact' },
+        { event: 'INSERT', schema: 'public', table: 'messages' },
         (payload) => {
-          console.log('[Realtime] New inbound message');
-          onNewInboundMessage?.();
-          fetchConversations(); // Update list to reflect last message
+          console.log('[RealtimeInbox] New message in system');
+          if (payload.new.sender_type === 'contact') {
+            onNewInboundMessage?.();
+          }
+          fetchConversations();
         }
       )
-      .subscribe((status) => {
-        console.log(`[Realtime] Subscription status: ${status}`);
-        if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
-          // Automatic reconnection logic is handled by Supabase client, 
-          // but we can force a refresh if it drops
-          setTimeout(setupSubscription, 3000);
-        }
-      });
+      .subscribe();
 
     channelRef.current = channel;
-  }, [fetchConversations, onNewInboundMessage]);
-
-  useEffect(() => {
-    fetchConversations();
-    setupSubscription();
-
-    // Re-fetch on tab focus to handle missed updates
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        fetchConversations();
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       if (channelRef.current) supabase.removeChannel(channelRef.current);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [fetchConversations, setupSubscription]);
+  }, [fetchConversations, onNewInboundMessage]);
 
   return { conversations, loading, refetch: fetchConversations };
 }

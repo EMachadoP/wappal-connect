@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Database } from '@/integrations/supabase/types';
 
@@ -7,19 +7,24 @@ type Message = Database['public']['Tables']['messages']['Row'];
 export function useRealtimeMessages(conversationId: string | null) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
+  const channelRef = useRef<any>(null);
 
   const fetchMessages = useCallback(async (id: string) => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('messages')
-      .select('*')
-      .eq('conversation_id', id)
-      .order('sent_at', { ascending: true });
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('conversation_id', id)
+        .order('sent_at', { ascending: true });
 
-    if (!error && data) {
-      setMessages(data);
+      if (error) throw error;
+      if (data) setMessages(data);
+    } catch (err) {
+      console.error('[RealtimeMessages] Error fetching:', err);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -30,57 +35,53 @@ export function useRealtimeMessages(conversationId: string | null) {
 
     fetchMessages(conversationId);
 
-    const channel = supabase
-      .channel(`messages:${conversationId}`)
+    // Cleanup previous channel
+    if (channelRef.current) {
+      supabase.removeChannel(channelRef.current);
+    }
+
+    // Subscribe to ALL changes for this conversation's messages
+    const channel = supabase.channel(`chat:${conversationId}`)
       .on(
         'postgres_changes',
         {
-          event: 'INSERT',
+          event: '*', // Listen to INSERT, UPDATE, and DELETE
           schema: 'public',
           table: 'messages',
           filter: `conversation_id=eq.${conversationId}`,
         },
         (payload) => {
-          const newMessage = payload.new as Message;
-          setMessages((prev) => {
-            if (prev.some((m) => m.id === newMessage.id)) return prev;
-            return [...prev, newMessage].sort(
-              (a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime()
-            );
-          });
+          console.log('[RealtimeMessages] Change detected:', payload.eventType);
+          
+          if (payload.eventType === 'INSERT') {
+            const newMessage = payload.new as Message;
+            setMessages((prev) => {
+              if (prev.some((m) => m.id === newMessage.id)) return prev;
+              return [...prev, newMessage].sort(
+                (a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime()
+              );
+            });
+          } else if (payload.eventType === 'UPDATE') {
+            const updated = payload.new as Message;
+            setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+          } else if (payload.eventType === 'DELETE') {
+            setMessages((prev) => prev.filter((m) => m.id !== payload.old.id));
+          }
         }
       )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'messages',
-          filter: `conversation_id=eq.${conversationId}`,
-        },
-        (payload) => {
-          const updatedMessage = payload.new as Message;
-          setMessages((prev) =>
-            prev.map((m) => (m.id === updatedMessage.id ? updatedMessage : m))
-          );
+      .subscribe((status) => {
+        if (status === 'SUBSCRIPTION_ERROR') {
+          console.error('[RealtimeMessages] Subscription error, retrying...');
+          setTimeout(() => fetchMessages(conversationId), 2000);
         }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'DELETE',
-          schema: 'public',
-          table: 'messages',
-          filter: `conversation_id=eq.${conversationId}`,
-        },
-        (payload) => {
-          setMessages((prev) => prev.filter((m) => m.id !== payload.old.id));
-        }
-      )
-      .subscribe();
+      });
+
+    channelRef.current = channel;
 
     return () => {
-      supabase.removeChannel(channel);
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+      }
     };
   }, [conversationId, fetchMessages]);
 
