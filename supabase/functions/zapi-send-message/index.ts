@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, client-token',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
 serve(async (req) => {
@@ -17,6 +17,7 @@ serve(async (req) => {
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) throw new Error('Não autorizado: Token ausente');
 
+    // Usar cliente de auth para validar o usuário logado
     const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } }
     });
@@ -24,45 +25,41 @@ serve(async (req) => {
     const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
     if (authError || !user) throw new Error('Sessão expirada ou inválida');
 
+    // Cliente Admin para ler configurações protegidas
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
     
-    const { data: profile, error: profileErr } = await supabaseAdmin
+    // Validar se o agente está ativo
+    const { data: profile } = await supabaseAdmin
       .from('profiles')
       .select('id, name, display_name, is_active')
       .eq('id', user.id)
       .single();
 
-    if (profileErr || !profile || !profile.is_active) {
-      throw new Error('Agente inativo ou não autorizado');
-    }
+    if (!profile?.is_active) throw new Error('Agente inativo ou não autorizado');
 
     const { conversation_id, content, message_type, media_url } = await req.json();
     
-    const { data: conv, error: convErr } = await supabaseAdmin
+    // Buscar conversa e destinatário
+    const { data: conv } = await supabaseAdmin
       .from('conversations')
       .select('id, chat_id, contacts(phone, lid)')
       .eq('id', conversation_id)
       .single();
 
-    if (convErr || !conv) throw new Error('Conversa não encontrada');
+    if (!conv) throw new Error('Conversa não encontrada');
 
+    // Buscar credenciais protegidas por RLS (usando service_role)
     const { data: settings } = await supabaseAdmin.from('zapi_settings').select('*').limit(1).single();
     
-    const instanceId = Deno.env.get('ZAPI_INSTANCE_ID') || settings?.zapi_instance_id;
-    const token = Deno.env.get('ZAPI_TOKEN') || settings?.zapi_token;
-    const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN') || settings?.zapi_security_token;
+    const instanceId = settings?.zapi_instance_id || Deno.env.get('ZAPI_INSTANCE_ID');
+    const token = settings?.zapi_token || Deno.env.get('ZAPI_TOKEN');
+    const clientToken = settings?.zapi_security_token || Deno.env.get('ZAPI_CLIENT_TOKEN');
 
-    if (!instanceId || !token) {
-      throw new Error('Credenciais da Z-API não configuradas.');
-    }
+    if (!instanceId || !token) throw new Error('Configuração do WhatsApp pendente.');
 
     const contact = conv.contacts as any;
     const recipient = contact?.lid || conv.chat_id || contact?.phone;
     
-    if (!recipient) {
-      throw new Error('Destinatário não encontrado.');
-    }
-
     const senderName = profile.display_name || profile.name || 'Atendente';
     const prefixedContent = `*${senderName}:*\n${content}`;
     
@@ -72,9 +69,6 @@ serve(async (req) => {
     if (message_type === 'image') { 
       endpoint = '/send-image'; 
       zapiBody = { phone: recipient, image: media_url, caption: prefixedContent }; 
-    } else if (message_type === 'audio') { 
-      endpoint = '/send-audio'; 
-      zapiBody = { phone: recipient, audio: media_url }; 
     }
 
     const response = await fetch(`https://api.z-api.io/instances/${instanceId}/token/${token}${endpoint}`, {
@@ -87,8 +81,9 @@ serve(async (req) => {
     });
 
     const result = await response.json();
-    if (!response.ok) throw new Error(result.message || 'Erro Z-API');
+    if (!response.ok) throw new Error(result.message || 'Erro na Z-API');
 
+    // Registrar mensagem enviada
     await supabaseAdmin.from('messages').insert({
       conversation_id,
       sender_type: 'agent',
@@ -104,11 +99,10 @@ serve(async (req) => {
       sent_at: new Date().toISOString(),
     });
 
-    return new Response(JSON.stringify({ success: true }), { 
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-    });
+    return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error: any) {
+    console.error('[ZAPI-SEND] Error:', error.message);
     return new Response(JSON.stringify({ error: error.message }), { 
       status: 400, 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
