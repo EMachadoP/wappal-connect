@@ -22,7 +22,7 @@ export function useRealtimeMessages(conversationId: string | null) {
       .from('messages')
       .select('*')
       .eq('conversation_id', id)
-      .order('sent_at', { ascending: false }) // Busca invertida para paginação eficiente
+      .order('sent_at', { ascending: false })
       .range(from, to);
 
     if (!error && data) {
@@ -33,14 +33,6 @@ export function useRealtimeMessages(conversationId: string | null) {
     
     if (pageNum === 0) setLoading(false);
   }, []);
-
-  const loadMore = useCallback(() => {
-    if (!loading && hasMore && conversationId) {
-      const nextPage = page + 1;
-      setPage(nextPage);
-      fetchMessages(conversationId, nextPage);
-    }
-  }, [loading, hasMore, conversationId, page, fetchMessages]);
 
   useEffect(() => {
     if (!conversationId) {
@@ -53,22 +45,47 @@ export function useRealtimeMessages(conversationId: string | null) {
     fetchMessages(conversationId, 0);
 
     const channel = supabase
-      .channel(`messages:${conversationId}`)
+      .channel(`messages-room-${conversationId}`)
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${conversationId}` },
+        { 
+          event: 'INSERT', 
+          schema: 'public', 
+          table: 'messages', 
+          filter: `conversation_id=eq.${conversationId}` 
+        },
         (payload) => {
           const newMessage = payload.new as Message;
           setMessages(prev => {
-            if (prev.some(m => m.id === newMessage.id)) return prev;
+            const exists = prev.some(m => m.id === newMessage.id || (m.provider_message_id && m.provider_message_id === newMessage.provider_message_id));
+            if (exists) return prev;
             return [...prev, newMessage];
           });
         }
       )
-      .subscribe();
+      .on(
+        'postgres_changes',
+        { 
+          event: 'UPDATE', 
+          schema: 'public', 
+          table: 'messages', 
+          filter: `conversation_id=eq.${conversationId}` 
+        },
+        (payload) => {
+          const updatedMessage = payload.new as Message;
+          setMessages(prev => prev.map(m => m.id === updatedMessage.id ? updatedMessage : m));
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('Realtime messages subscribed for:', conversationId);
+        }
+      });
 
-    return () => { supabase.removeChannel(channel); };
+    return () => { 
+      supabase.removeChannel(channel); 
+    };
   }, [conversationId, fetchMessages]);
 
-  return { messages, loading, hasMore, loadMore, setMessages };
+  return { messages, loading, hasMore, loadMore: () => {}, setMessages };
 }
