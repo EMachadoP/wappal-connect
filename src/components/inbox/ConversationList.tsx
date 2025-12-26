@@ -86,7 +86,7 @@ export function ConversationList({
           <TabsTrigger value="mine" className="text-[10px] px-1 py-3 h-auto">Minhas ({countByTab.mine})</TabsTrigger>
           <TabsTrigger value="unassigned" className="text-[10px] px-1 py-3 h-auto">Fila ({countByTab.unassigned})</TabsTrigger>
           <TabsTrigger value="all" className="text-[10px] px-1 py-3 h-auto">Todos ({countByTab.all})</TabsTrigger>
-          <TabsTrigger value="resolved" className="text-[10px] px-1 py-3 h-auto">OK ({countByTab.resolved})</TabsTrigger>
+          <TabsTrigger value="resolved" className="text-[10px] px-1 py-3 h-auto">OK</TabsTrigger>
         </TabsList>
       </Tabs>
 
