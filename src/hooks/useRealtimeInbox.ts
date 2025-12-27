@@ -51,13 +51,14 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
       supabase.removeChannel(channelRef.current);
     }
 
-    // Global channel for list updates
+    // Canal global para atualizações da lista
     const channel = supabase.channel('global-inbox-updates')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'conversations' },
-        () => {
-          console.log('[RealtimeInbox] Conversation changed');
+        (payload) => {
+          console.log('[RealtimeInbox] Mudança na conversa detectada');
+          // Ao mudar qualquer coisa na conversa (última msg, unread, etc), recarregamos a lista
           fetchConversations();
         }
       )
@@ -65,10 +66,11 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages' },
         (payload) => {
-          console.log('[RealtimeInbox] New message in system');
+          console.log('[RealtimeInbox] Nova mensagem no sistema');
           if (payload.new.sender_type === 'contact') {
             onNewInboundMessage?.();
           }
+          // Forçamos o refresh para atualizar o preview da última mensagem na lista
           fetchConversations();
         }
       )
