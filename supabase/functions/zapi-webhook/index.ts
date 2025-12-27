@@ -7,63 +7,72 @@ const corsHeaders = {
 };
 
 serve(async (req) => {
+  // 1. Permitir chamadas de teste (CORS)
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
+
+  console.log(`[Z-API WEBHOOK] Request received: ${req.method}`);
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const payload = await req.json();
-    console.log('[Webhook Debug] Payload:', JSON.stringify(payload));
+    // Registrar que o webhook foi chamado no banco para debug visual
+    await supabase.from('zapi_settings').update({ 
+      last_webhook_received_at: new Date().toISOString() 
+    }).is('team_id', null);
 
-    // 1. Ignorar ACKs e Status (evitar loops e excesso de processamento)
-    if (payload.status || payload.ack || !payload.phone) {
+    const payload = await req.json();
+    console.log('[Z-API WEBHOOK] Payload Full:', JSON.stringify(payload));
+
+    // Ignorar ACKs e Status (evitar loops)
+    if (payload.status || payload.ack) {
+      console.log('[Z-API WEBHOOK] Ignored (Status/Ack)');
       return new Response(JSON.stringify({ success: true, ignored: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    if (!payload.phone) {
+      console.error('[Z-API WEBHOOK] Error: No phone in payload');
+      return new Response(JSON.stringify({ error: 'No phone provided' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     const isGroup = Boolean(payload.isGroup);
     const fromMe = Boolean(payload.fromMe);
-    
-    // Identificador estável do chat
     const chatLid = (payload.chatLid || payload.chatId || payload.phone).trim().toLowerCase();
-    
-    // Telefone limpo (removendo sufixos do WhatsApp)
     const rawPhone = payload.phone.split('@')[0];
     const cleanPhone = isGroup ? null : rawPhone;
-    
-    // 2. Localizar ou Criar Contato
-    let contactId;
-    
-    // Busca por chat_lid OU phone OU lid
-    const { data: contactData } = await supabase
+
+    console.log(`[Z-API WEBHOOK] Identifying: Chat=${chatLid}, FromMe=${fromMe}, Group=${isGroup}`);
+
+    // 2. Localizar ou Criar Contato (usando UPSERT para evitar erros de duplicidade)
+    const contactData = {
+      chat_lid: chatLid,
+      phone: cleanPhone,
+      is_group: isGroup,
+      name: payload.senderName || payload.chatName || rawPhone || "Contato Novo",
+      whatsapp_display_name: payload.senderName || payload.chatName,
+      profile_picture_url: payload.senderPhoto || payload.chatPhoto || null,
+      updated_at: new Date().toISOString()
+    };
+
+    // Tenta encontrar por chat_lid ou phone
+    const { data: existingContact } = await supabase
       .from('contacts')
       .select('id')
-      .or(`chat_lid.eq.${chatLid},phone.eq.${cleanPhone || 'null'}`)
+      .or(`chat_lid.eq."${chatLid}",phone.eq."${cleanPhone || 'null'}"`)
       .limit(1)
       .maybeSingle();
 
-    if (contactData) {
-      contactId = contactData.id;
-      // Atualizar nome se veio algo novo
-      await supabase.from('contacts').update({
-        whatsapp_display_name: payload.senderName || payload.chatName,
-        profile_picture_url: payload.senderPhoto || payload.chatPhoto || null
-      }).eq('id', contactId);
+    let contactId;
+    if (existingContact) {
+      contactId = existingContact.id;
+      await supabase.from('contacts').update(contactData).eq('id', contactId);
     } else {
       const { data: newContact, error: cErr } = await supabase
         .from('contacts')
-        .insert({
-          name: payload.senderName || payload.chatName || rawPhone || "Contato Novo",
-          phone: cleanPhone,
-          chat_lid: chatLid,
-          is_group: isGroup,
-          whatsapp_display_name: payload.senderName || payload.chatName,
-          profile_picture_url: payload.senderPhoto || payload.chatPhoto || null
-        })
+        .insert(contactData)
         .select('id')
         .single();
-        
       if (cErr) throw cErr;
       contactId = newContact.id;
     }
@@ -73,7 +82,6 @@ serve(async (req) => {
       .from('conversations')
       .select('id, unread_count, status')
       .eq('chat_id', chatLid)
-      .limit(1)
       .maybeSingle();
 
     let conversationId;
@@ -82,12 +90,8 @@ serve(async (req) => {
       const updates: any = {
         last_message_at: new Date().toISOString(),
         unread_count: fromMe ? 0 : (conv.unread_count || 0) + 1,
+        status: (conv.status === 'resolved' && !fromMe) ? 'open' : conv.status
       };
-      
-      if (conv.status === 'resolved' && !fromMe) {
-        updates.status = 'open';
-      }
-      
       await supabase.from('conversations').update(updates).eq('id', conversationId);
     } else {
       const { data: newConv, error: convErr } = await supabase
@@ -102,30 +106,23 @@ serve(async (req) => {
         })
         .select('id')
         .single();
-        
       if (convErr) throw convErr;
       conversationId = newConv.id;
     }
 
-    // 4. Extrair Conteúdo (Z-API envia em lugares diferentes dependendo do tipo)
-    let content = "";
-    if (payload.text?.message) content = payload.text.message;
-    else if (payload.message?.text) content = payload.message.text;
-    else if (typeof payload.body === 'string') content = payload.body;
-    else if (payload.caption) content = payload.caption;
-    
-    // Fallback visual se for mídia
-    if (!content) {
-      const typeMap: any = { image: '📷 Imagem', audio: '🎤 Áudio', ptt: '🎤 Áudio', video: '🎥 Vídeo', document: '📄 Documento' };
-      content = typeMap[payload.type] || `[Mensagem: ${payload.type}]`;
+    // 4. Extrair Texto
+    let content = payload.text?.message || payload.message?.text || payload.body || payload.caption || "";
+    if (!content && payload.type) {
+      const icons: any = { image: '📷 Imagem', audio: '🎤 Áudio', ptt: '🎤 Áudio', video: '🎥 Vídeo', document: '📄 Documento' };
+      content = icons[payload.type] || `[${payload.type}]`;
     }
 
     // 5. Salvar Mensagem
-    await supabase.from('messages').insert({
+    const { error: msgErr } = await supabase.from('messages').insert({
       conversation_id: conversationId,
       sender_type: fromMe ? 'agent' : 'contact',
       sender_name: payload.senderName || null,
-      message_type: payload.type === 'ptt' ? 'audio' : (payload.type || 'text'),
+      message_type: (payload.type === 'ptt' ? 'audio' : (payload.type || 'text')),
       content: content,
       provider: 'zapi',
       provider_message_id: payload.messageId || payload.id,
@@ -135,19 +132,22 @@ serve(async (req) => {
       media_url: payload.imageUrl || payload.audioUrl || payload.videoUrl || payload.documentUrl || payload.image?.url || payload.audio?.url || payload.video?.url || payload.document?.url || null,
     });
 
-    // 6. Resposta automática IA (apenas inbound e não-grupo)
+    if (msgErr) console.error('[Z-API WEBHOOK] DB Error:', msgErr);
+
+    // 6. Resposta IA (async)
     if (!fromMe && !isGroup) {
       fetch(`${supabaseUrl}/functions/v1/ai-maybe-reply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
         body: JSON.stringify({ conversation_id: conversationId }),
-      }).catch(e => console.error('AI Error:', e));
+      }).catch(e => console.error('[Z-API WEBHOOK] AI Trigger Fail:', e));
     }
 
+    console.log('[Z-API WEBHOOK] Success!');
     return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error: any) {
-    console.error('[Webhook Error]', error);
+    console.error('[Z-API WEBHOOK] FATAL ERROR:', error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });
