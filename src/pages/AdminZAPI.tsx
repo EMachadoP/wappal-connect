@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
-import { Save, Loader2, TestTube, MessageSquare, Info, CheckCircle, XCircle } from 'lucide-react';
+import { Save, Loader2, TestTube, MessageSquare, Info, CheckCircle, XCircle, Activity, RefreshCw } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useUserRole } from '@/hooks/useUserRole';
@@ -14,6 +14,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
+import { formatDistanceToNow } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 
 interface ZAPISettings {
   id: string;
@@ -23,6 +25,7 @@ interface ZAPISettings {
   zapi_security_token: string | null;
   open_tickets_group_id: string | null;
   enable_group_notifications: boolean;
+  last_webhook_received_at?: string | null;
 }
 
 interface Team {
@@ -56,21 +59,11 @@ export default function AdminZAPIPage() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      // Fetch teams
-      const { data: teamsData } = await supabase
-        .from('teams')
-        .select('id, name')
-        .order('name');
-      
-      if (teamsData) {
-        setTeams(teamsData);
-      }
-
-      // Fetch settings for selected team
+      const { data: teamsData } = await supabase.from('teams').select('id, name').order('name');
+      if (teamsData) setTeams(teamsData);
       await fetchSettings(selectedTeamId === '__global__' ? null : selectedTeamId);
     } catch (error) {
       console.error('Error fetching data:', error);
-      toast({ variant: 'destructive', title: 'Erro', description: 'Falha ao carregar dados' });
     } finally {
       setLoading(false);
     }
@@ -78,19 +71,14 @@ export default function AdminZAPIPage() {
 
   const fetchSettings = async (teamId: string | null) => {
     let query = supabase.from('zapi_settings').select('*');
-    
-    if (teamId) {
-      query = query.eq('team_id', teamId);
-    } else {
-      query = query.is('team_id', null);
-    }
+    if (teamId) query = query.eq('team_id', teamId);
+    else query = query.is('team_id', null);
 
-    const { data, error } = await query.single();
+    const { data } = await query.maybeSingle();
 
     if (data) {
       setSettings(data);
     } else {
-      // Reset to defaults if no settings found
       setSettings({
         id: '',
         team_id: teamId,
@@ -104,22 +92,17 @@ export default function AdminZAPIPage() {
   };
 
   useEffect(() => {
-    if (user && isAdmin) {
-      fetchData();
-    }
+    if (user && isAdmin) fetchData();
   }, [user, isAdmin]);
 
   useEffect(() => {
-    if (!loading) {
-      fetchSettings(selectedTeamId === '__global__' ? null : selectedTeamId);
-    }
+    if (!loading) fetchSettings(selectedTeamId === '__global__' ? null : selectedTeamId);
   }, [selectedTeamId]);
 
   const handleSave = async () => {
     setSaving(true);
     try {
       const teamId = selectedTeamId === '__global__' ? null : selectedTeamId;
-      
       const payload = {
         team_id: teamId,
         zapi_instance_id: settings.zapi_instance_id || null,
@@ -130,269 +113,91 @@ export default function AdminZAPIPage() {
       };
 
       if (settings.id) {
-        const { error } = await supabase
-          .from('zapi_settings')
-          .update(payload)
-          .eq('id', settings.id);
-        
-        if (error) throw error;
+        await supabase.from('zapi_settings').update(payload).eq('id', settings.id);
       } else {
-        const { data, error } = await supabase
-          .from('zapi_settings')
-          .insert(payload)
-          .select()
-          .single();
-        
-        if (error) throw error;
-        if (data) {
-          setSettings(data);
-        }
+        const { data } = await supabase.from('zapi_settings').insert(payload).select().single();
+        if (data) setSettings(data);
       }
-
       toast({ title: 'Configurações salvas!' });
     } catch (error) {
-      console.error('Error saving settings:', error);
-      toast({ variant: 'destructive', title: 'Erro', description: 'Falha ao salvar configurações' });
+      toast({ variant: 'destructive', title: 'Erro ao salvar' });
     } finally {
       setSaving(false);
     }
   };
 
-  const handleTestConnection = async () => {
-    setTesting(true);
-    setTestResult(null);
+  if (authLoading || roleLoading) return <div className="p-8 text-center">Carregando...</div>;
+  if (!user || !isAdmin) return <Navigate to="/inbox" replace />;
 
-    try {
-      const instanceId = settings.zapi_instance_id;
-      const token = settings.zapi_token;
-
-      if (!instanceId || !token) {
-        setTestResult({ success: false, message: 'Preencha Instance ID e Token' });
-        return;
-      }
-
-      // Test Z-API connection by getting instance status
-      const response = await fetch(
-        `https://api.z-api.io/instances/${instanceId}/token/${token}/status`,
-        {
-          headers: settings.zapi_security_token 
-            ? { 'Client-Token': settings.zapi_security_token }
-            : {},
-        }
-      );
-
-      const result = await response.json();
-
-      if (response.ok && result.connected) {
-        setTestResult({ success: true, message: `Conectado! Número: ${result.smartphoneConnected || 'N/A'}` });
-      } else {
-        setTestResult({ success: false, message: result.error || 'Falha na conexão' });
-      }
-    } catch (error) {
-      console.error('Test error:', error);
-      setTestResult({ success: false, message: 'Erro ao testar conexão' });
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  if (authLoading || roleLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <Navigate to="/auth" replace />;
-  }
-
-  if (!isAdmin) {
-    return <Navigate to="/inbox" replace />;
-  }
+  const lastSignal = settings.last_webhook_received_at 
+    ? formatDistanceToNow(new Date(settings.last_webhook_received_at), { addSuffix: true, locale: ptBR })
+    : 'Nunca';
 
   return (
     <AppLayout>
-      <div className="p-6 space-y-6 overflow-auto h-full">
+      <div className="p-6 space-y-6 overflow-auto h-full max-w-4xl mx-auto">
         <div className="flex items-center justify-between flex-wrap gap-4">
           <div>
             <h1 className="text-2xl font-bold">Configurações Z-API</h1>
-            <p className="text-muted-foreground">Configure a integração com WhatsApp via Z-API</p>
+            <p className="text-muted-foreground">Sincronização com WhatsApp</p>
           </div>
-          <Button onClick={handleSave} disabled={saving}>
-            {saving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
-            Salvar
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => fetchData()}>
+              <RefreshCw className="w-4 h-4 mr-2" /> Atualizar
+            </Button>
+            <Button onClick={handleSave} disabled={saving}>
+              {saving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
+              Salvar
+            </Button>
+          </div>
         </div>
 
-        {loading ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          </div>
-        ) : (
-          <div className="space-y-6">
-            {/* Team Selector */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Escopo das Configurações</CardTitle>
-                <CardDescription>
-                  Configure para uma equipe específica ou globalmente
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
+        {/* MONITOR DE SINAL */}
+        <Card className="border-primary/50 bg-primary/5">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Activity className="w-4 h-4 text-primary animate-pulse" />
+              Monitor de Conexão (Webhook)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-2xl font-bold">{settings.last_webhook_received_at ? 'Recebendo Sinal' : 'Sem Sinal'}</p>
+                <p className="text-xs text-muted-foreground mt-1">Última mensagem detectada: <span className="font-medium text-foreground">{lastSignal}</span></p>
+              </div>
+              <Badge variant={settings.last_webhook_received_at ? "default" : "destructive"} className="px-3 py-1">
+                {settings.last_webhook_received_at ? 'Webhook OK' : 'Webhook Inativo'}
+              </Badge>
+            </div>
+            {!settings.last_webhook_received_at && (
+              <div className="mt-4 p-3 bg-destructive/10 border border-destructive/20 rounded-md text-xs text-destructive flex gap-2">
+                <Info className="w-4 h-4 shrink-0" />
+                <p>O servidor ainda não recebeu nenhuma chamada do Z-API. Verifique se a URL do Webhook no painel da Z-API está configurada para: <strong>https://qoolzhzdcfnyblymdvbq.supabase.co/functions/v1/zapi-webhook</strong></p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <div className="grid gap-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Credenciais da Instância</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>Equipe</Label>
-                  <Select value={selectedTeamId} onValueChange={setSelectedTeamId}>
-                    <SelectTrigger className="w-[300px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__global__">🌐 Configuração Global</SelectItem>
-                      {teams.map(team => (
-                        <SelectItem key={team.id} value={team.id}>{team.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    Configurações de equipe têm prioridade sobre a global
-                  </p>
+                  <Label>Instance ID</Label>
+                  <Input value={settings.zapi_instance_id || ''} onChange={(e) => setSettings({ ...settings, zapi_instance_id: e.target.value })} />
                 </div>
-              </CardContent>
-            </Card>
-
-            {/* Credentials Card */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <MessageSquare className="w-5 h-5" />
-                  Credenciais Z-API
-                </CardTitle>
-                <CardDescription>
-                  Obtenha as credenciais no painel da Z-API (z-api.io)
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Instance ID</Label>
-                    <Input
-                      value={settings.zapi_instance_id || ''}
-                      onChange={(e) => setSettings({ ...settings, zapi_instance_id: e.target.value })}
-                      placeholder="Ex: 3C4B5A6D7E8F..."
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Token</Label>
-                    <Input
-                      type="password"
-                      value={settings.zapi_token || ''}
-                      onChange={(e) => setSettings({ ...settings, zapi_token: e.target.value })}
-                      placeholder="Seu token Z-API"
-                    />
-                  </div>
-                </div>
-
                 <div className="space-y-2">
-                  <Label>Security Token (opcional)</Label>
-                  <Input
-                    type="password"
-                    value={settings.zapi_security_token || ''}
-                    onChange={(e) => setSettings({ ...settings, zapi_security_token: e.target.value })}
-                    placeholder="Client-Token para requisições seguras"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Necessário apenas se você habilitou o token de segurança no painel Z-API
-                  </p>
+                  <Label>Token</Label>
+                  <Input type="password" value={settings.zapi_token || ''} onChange={(e) => setSettings({ ...settings, zapi_token: e.target.value })} />
                 </div>
-
-                <Separator />
-
-                <div className="flex items-center gap-4">
-                  <Button variant="outline" onClick={handleTestConnection} disabled={testing}>
-                    {testing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <TestTube className="w-4 h-4 mr-2" />}
-                    Testar Conexão
-                  </Button>
-
-                  {testResult && (
-                    <Badge variant={testResult.success ? 'default' : 'destructive'} className="flex items-center gap-1">
-                      {testResult.success ? <CheckCircle className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
-                      {testResult.message}
-                    </Badge>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Group Notifications Card */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  📣 Notificações de Chamados
-                </CardTitle>
-                <CardDescription>
-                  Envie notificações automáticas para um grupo WhatsApp quando novos chamados são abertos
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center gap-4">
-                  <Switch
-                    checked={settings.enable_group_notifications}
-                    onCheckedChange={(checked) => setSettings({ ...settings, enable_group_notifications: checked })}
-                  />
-                  <Label>Habilitar notificações de grupo</Label>
-                </div>
-
-                {settings.enable_group_notifications && (
-                  <div className="space-y-4 pl-4 border-l-2 border-primary/20">
-                    <div className="space-y-2">
-                      <Label>ID do Grupo WhatsApp</Label>
-                      <Input
-                        value={settings.open_tickets_group_id || ''}
-                        onChange={(e) => setSettings({ ...settings, open_tickets_group_id: e.target.value })}
-                        placeholder="Ex: 120363123456789012@g.us"
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Use o formato completo do grupo (terminando em @g.us)
-                      </p>
-                    </div>
-
-                    <div className="p-4 bg-muted rounded-lg">
-                      <h4 className="font-medium mb-2 flex items-center gap-2">
-                        <Info className="w-4 h-4" />
-                        Como obter o ID do grupo?
-                      </h4>
-                      <ol className="text-sm text-muted-foreground space-y-1 list-decimal list-inside">
-                        <li>Abra o grupo no WhatsApp Web</li>
-                        <li>Na URL, copie o ID após "g.us/"</li>
-                        <li>Ou use a API Z-API: GET /chats para listar grupos</li>
-                      </ol>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Info Card */}
-            <Card className="border-primary/20 bg-primary/5">
-              <CardContent className="pt-6">
-                <div className="flex gap-4">
-                  <Info className="w-5 h-5 text-primary flex-shrink-0 mt-1" />
-                  <div className="space-y-2 text-sm">
-                    <p className="font-medium">Como funciona?</p>
-                    <ul className="space-y-1 text-muted-foreground">
-                      <li>• Quando uma nova conversa é criada, um protocolo é gerado automaticamente</li>
-                      <li>• Se as notificações estiverem habilitadas, uma mensagem é enviada ao grupo</li>
-                      <li>• A mensagem inclui: protocolo, contato, prioridade, condomínio e resumo</li>
-                      <li>• Um registro é criado na timeline do chamado para auditoria</li>
-                      <li>• Sistema de deduplicação evita envios duplicados</li>
-                    </ul>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </AppLayout>
   );
