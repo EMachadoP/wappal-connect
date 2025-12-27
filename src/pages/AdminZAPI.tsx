@@ -33,6 +33,9 @@ export default function AdminZAPIPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [lastSignal, setLastSignal] = useState<string | null>(null);
+  
+  // Estado separado para o formulário para evitar sobrescrita
   const [settings, setSettings] = useState<ZAPISettings>({
     id: '',
     team_id: null,
@@ -44,24 +47,45 @@ export default function AdminZAPIPage() {
     forward_webhook_url: '',
   });
 
-  const fetchData = async (silent = false) => {
-    if (!silent) setLoading(true);
+  // Busca inicial dos dados (apenas uma vez ou quando clicar em atualizar)
+  const fetchSettings = async () => {
+    setLoading(true);
     try {
       const { data } = await supabase.from('zapi_settings').select('*').is('team_id', null).maybeSingle();
-      if (data) setSettings(data);
+      if (data) {
+        setSettings(data);
+        setLastSignal(data.last_webhook_received_at);
+      }
     } catch (error) {
-      console.error('Error fetching data:', error);
+      console.error('Error fetching settings:', error);
     } finally {
-      if (!silent) setLoading(false);
+      setLoading(false);
+    }
+  };
+
+  // Busca apenas o sinal (timestamp) para o monitor, sem mexer nos campos de texto
+  const fetchSignalOnly = async () => {
+    try {
+      const { data } = await supabase
+        .from('zapi_settings')
+        .select('last_webhook_received_at')
+        .is('team_id', null)
+        .maybeSingle();
+      
+      if (data) {
+        setLastSignal(data.last_webhook_received_at);
+      }
+    } catch (error) {
+      console.error('Error fetching signal:', error);
     }
   };
 
   useEffect(() => {
     if (user && isAdmin) {
-      fetchData();
+      fetchSettings();
       
-      // Atualiza o sinal a cada 5 segundos automaticamente
-      const interval = setInterval(() => fetchData(true), 5000);
+      // Monitor de sinal: atualiza apenas o timestamp a cada 5s
+      const interval = setInterval(fetchSignalOnly, 5000);
       return () => clearInterval(interval);
     }
   }, [user, isAdmin]);
@@ -78,13 +102,16 @@ export default function AdminZAPIPage() {
       };
 
       if (settings.id) {
-        await supabase.from('zapi_settings').update(payload).eq('id', settings.id);
+        const { error } = await supabase.from('zapi_settings').update(payload).eq('id', settings.id);
+        if (error) throw error;
       } else {
-        const { data } = await supabase.from('zapi_settings').insert(payload).select().single();
+        const { data, error } = await supabase.from('zapi_settings').insert(payload).select().single();
+        if (error) throw error;
         if (data) setSettings(data);
       }
-      toast({ title: 'Configurações salvas!' });
+      toast({ title: 'Configurações salvas com sucesso!' });
     } catch (error) {
+      console.error('Save error:', error);
       toast({ variant: 'destructive', title: 'Erro ao salvar' });
     } finally {
       setSaving(false);
@@ -94,12 +121,12 @@ export default function AdminZAPIPage() {
   if (authLoading || roleLoading) return <div className="p-8 text-center">Carregando...</div>;
   if (!user || !isAdmin) return <Navigate to="/inbox" replace />;
 
-  const lastSignal = settings.last_webhook_received_at 
-    ? formatDistanceToNow(new Date(settings.last_webhook_received_at), { addSuffix: true, locale: ptBR })
+  const signalTimeDisplay = lastSignal 
+    ? formatDistanceToNow(new Date(lastSignal), { addSuffix: true, locale: ptBR })
     : 'Nunca';
 
-  const isOnline = settings.last_webhook_received_at && 
-    (new Date().getTime() - new Date(settings.last_webhook_received_at).getTime() < 60000);
+  const isOnline = lastSignal && 
+    (new Date().getTime() - new Date(lastSignal).getTime() < 60000);
 
   return (
     <AppLayout>
@@ -110,7 +137,7 @@ export default function AdminZAPIPage() {
             <p className="text-muted-foreground">Sincronização com WhatsApp</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => fetchData()}>
+            <Button variant="outline" size="sm" onClick={fetchSettings}>
               <RefreshCw className="w-4 h-4 mr-2" /> Atualizar
             </Button>
             <Button onClick={handleSave} disabled={saving}>
@@ -131,11 +158,11 @@ export default function AdminZAPIPage() {
           <CardContent>
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-2xl font-bold">{settings.last_webhook_received_at ? 'Recebendo Sinal' : 'Sem Sinal'}</p>
-                <p className="text-xs text-muted-foreground mt-1">Última mensagem detectada: <span className="font-medium text-foreground">{lastSignal}</span></p>
+                <p className="text-2xl font-bold">{lastSignal ? 'Recebendo Sinal' : 'Sem Sinal'}</p>
+                <p className="text-xs text-muted-foreground mt-1">Última mensagem detectada: <span className="font-medium text-foreground">{signalTimeDisplay}</span></p>
               </div>
-              <Badge variant={settings.last_webhook_received_at ? "default" : "destructive"} className={`px-3 py-1 ${isOnline ? 'bg-green-600' : ''}`}>
-                {isOnline ? 'CONECTADO AGORA' : settings.last_webhook_received_at ? 'WEBHOOK OK' : 'WEBHOOK INATIVO'}
+              <Badge variant={lastSignal ? "default" : "destructive"} className={`px-3 py-1 ${isOnline ? 'bg-green-600 hover:bg-green-600' : ''}`}>
+                {isOnline ? 'CONECTADO AGORA' : lastSignal ? 'WEBHOOK OK' : 'WEBHOOK INATIVO'}
               </Badge>
             </div>
           </CardContent>
@@ -155,13 +182,11 @@ export default function AdminZAPIPage() {
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label>URL de Encaminhamento (URL do Evolvy)</Label>
-              <div className="flex gap-2">
-                <Input 
-                  placeholder="https://sua-url-do-evolvy.com/webhook" 
-                  value={settings.forward_webhook_url || ''} 
-                  onChange={(e) => setSettings({ ...settings, forward_webhook_url: e.target.value })} 
-                />
-              </div>
+              <Input 
+                placeholder="https://sua-url-do-evolvy.com/webhook" 
+                value={settings.forward_webhook_url || ''} 
+                onChange={(e) => setSettings({ ...settings, forward_webhook_url: e.target.value })} 
+              />
               <p className="text-xs text-muted-foreground flex items-center gap-1 mt-2">
                 <Info className="w-3 h-3" />
                 Cole aqui a URL que estava configurada no painel da Z-API antes.
@@ -179,11 +204,18 @@ export default function AdminZAPIPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Instance ID</Label>
-                  <Input value={settings.zapi_instance_id || ''} onChange={(e) => setSettings({ ...settings, zapi_instance_id: e.target.value })} />
+                  <Input 
+                    value={settings.zapi_instance_id || ''} 
+                    onChange={(e) => setSettings({ ...settings, zapi_instance_id: e.target.value })} 
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Token</Label>
-                  <Input type="password" value={settings.zapi_token || ''} onChange={(e) => setSettings({ ...settings, zapi_token: e.target.value })} />
+                  <Input 
+                    type="password" 
+                    value={settings.zapi_token || ''} 
+                    onChange={(e) => setSettings({ ...settings, zapi_token: e.target.value })} 
+                  />
                 </div>
               </div>
             </CardContent>
