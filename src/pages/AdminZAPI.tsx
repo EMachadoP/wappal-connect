@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
-import { Save, Loader2, TestTube, MessageSquare, Info, CheckCircle, XCircle, Activity, RefreshCw } from 'lucide-react';
+import { Save, Loader2, Share2, Info, Activity, RefreshCw, ArrowRight } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useUserRole } from '@/hooks/useUserRole';
@@ -9,10 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -26,11 +23,7 @@ interface ZAPISettings {
   open_tickets_group_id: string | null;
   enable_group_notifications: boolean;
   last_webhook_received_at?: string | null;
-}
-
-interface Team {
-  id: string;
-  name: string;
+  forward_webhook_url?: string | null;
 }
 
 export default function AdminZAPIPage() {
@@ -40,9 +33,6 @@ export default function AdminZAPIPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
-
   const [settings, setSettings] = useState<ZAPISettings>({
     id: '',
     team_id: null,
@@ -51,17 +41,14 @@ export default function AdminZAPIPage() {
     zapi_security_token: '',
     open_tickets_group_id: '',
     enable_group_notifications: false,
+    forward_webhook_url: '',
   });
-
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [selectedTeamId, setSelectedTeamId] = useState<string>('__global__');
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const { data: teamsData } = await supabase.from('teams').select('id, name').order('name');
-      if (teamsData) setTeams(teamsData);
-      await fetchSettings(selectedTeamId === '__global__' ? null : selectedTeamId);
+      const { data } = await supabase.from('zapi_settings').select('*').is('team_id', null).maybeSingle();
+      if (data) setSettings(data);
     } catch (error) {
       console.error('Error fetching data:', error);
     } finally {
@@ -69,47 +56,19 @@ export default function AdminZAPIPage() {
     }
   };
 
-  const fetchSettings = async (teamId: string | null) => {
-    let query = supabase.from('zapi_settings').select('*');
-    if (teamId) query = query.eq('team_id', teamId);
-    else query = query.is('team_id', null);
-
-    const { data } = await query.maybeSingle();
-
-    if (data) {
-      setSettings(data);
-    } else {
-      setSettings({
-        id: '',
-        team_id: teamId,
-        zapi_instance_id: '',
-        zapi_token: '',
-        zapi_security_token: '',
-        open_tickets_group_id: '',
-        enable_group_notifications: false,
-      });
-    }
-  };
-
   useEffect(() => {
     if (user && isAdmin) fetchData();
   }, [user, isAdmin]);
 
-  useEffect(() => {
-    if (!loading) fetchSettings(selectedTeamId === '__global__' ? null : selectedTeamId);
-  }, [selectedTeamId]);
-
   const handleSave = async () => {
     setSaving(true);
     try {
-      const teamId = selectedTeamId === '__global__' ? null : selectedTeamId;
       const payload = {
-        team_id: teamId,
+        team_id: null,
         zapi_instance_id: settings.zapi_instance_id || null,
         zapi_token: settings.zapi_token || null,
         zapi_security_token: settings.zapi_security_token || null,
-        open_tickets_group_id: settings.open_tickets_group_id || null,
-        enable_group_notifications: settings.enable_group_notifications,
+        forward_webhook_url: settings.forward_webhook_url || null,
       };
 
       if (settings.id) {
@@ -170,12 +129,35 @@ export default function AdminZAPIPage() {
                 {settings.last_webhook_received_at ? 'Webhook OK' : 'Webhook Inativo'}
               </Badge>
             </div>
-            {!settings.last_webhook_received_at && (
-              <div className="mt-4 p-3 bg-destructive/10 border border-destructive/20 rounded-md text-xs text-destructive flex gap-2">
-                <Info className="w-4 h-4 shrink-0" />
-                <p>O servidor ainda não recebeu nenhuma chamada do Z-API. Verifique se a URL do Webhook no painel da Z-API está configurada para: <strong>https://qoolzhzdcfnyblymdvbq.supabase.co/functions/v1/zapi-webhook</strong></p>
+          </CardContent>
+        </Card>
+
+        {/* ENCAMINHAMENTO (MULTIPLICADOR) */}
+        <Card className="border-amber-500/30 bg-amber-500/5">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Share2 className="w-4 h-4 text-amber-600" />
+              Multiplicador de Webhook (Evolvy/Outros)
+            </CardTitle>
+            <CardDescription>
+              Como a Z-API só aceita uma URL, use este campo para enviar as mensagens também para o Evolvy.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label>URL de Encaminhamento (URL do Evolvy)</Label>
+              <div className="flex gap-2">
+                <Input 
+                  placeholder="https://sua-url-do-evolvy.com/webhook" 
+                  value={settings.forward_webhook_url || ''} 
+                  onChange={(e) => setSettings({ ...settings, forward_webhook_url: e.target.value })} 
+                />
               </div>
-            )}
+              <p className="text-xs text-muted-foreground flex items-center gap-1 mt-2">
+                <Info className="w-3 h-3" />
+                Cole aqui a URL que estava configurada no painel da Z-API antes.
+              </p>
+            </div>
           </CardContent>
         </Card>
 

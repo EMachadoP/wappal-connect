@@ -10,24 +10,38 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   const now = new Date().toISOString();
-  console.log(`[Z-API WEBHOOK] Request received at ${now}`);
+  const payload = await req.json();
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // 1. Registrar atividade (Sinal de Vida)
-    // Tenta atualizar, se não houver linha, não faz nada (evita erro)
+    // 1. Obter configurações e URL de encaminhamento
+    const { data: settings } = await supabase.from('zapi_settings')
+      .select('forward_webhook_url')
+      .is('team_id', null)
+      .maybeSingle();
+
+    // Registrar sinal de vida
     await supabase.from('zapi_settings')
       .update({ last_webhook_received_at: now })
       .is('team_id', null);
 
-    const payload = await req.json();
-    
-    // Ignorar confirmações de leitura
+    // 2. ENCAMINHAMENTO (Forwarding)
+    // Se houver uma URL externa (Evolvy), envia o payload original para lá sem esperar resposta
+    if (settings?.forward_webhook_url) {
+      console.log(`[Z-API WEBHOOK] Encaminhando para: ${settings.forward_webhook_url}`);
+      fetch(settings.forward_webhook_url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).catch(err => console.error('[Forward Error]', err));
+    }
+
+    // 3. Ignorar confirmações de leitura (para o nosso processamento interno)
     if (payload.status || payload.ack) {
-      return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
+      return new Response(JSON.stringify({ success: true, forwarded: !!settings?.forward_webhook_url }), { headers: corsHeaders });
     }
 
     const phone = payload.phone || payload.senderPhone || payload.chatId;
@@ -38,7 +52,7 @@ serve(async (req) => {
     const chatLid = (payload.chatLid || payload.chatId || phone).trim().toLowerCase();
     const contactName = payload.senderName || payload.chatName || payload.pushName || phone.split('@')[0];
 
-    // 2. Salvar Contato
+    // 4. Salvar Contato
     const { data: contact } = await supabase.from('contacts').upsert({
       chat_lid: chatLid,
       phone: isGroup ? null : phone.split('@')[0],
@@ -49,7 +63,7 @@ serve(async (req) => {
 
     if (!contact) throw new Error('Falha ao processar contato');
 
-    // 3. Salvar Conversa
+    // 5. Salvar Conversa
     const { data: conv } = await supabase.from('conversations').upsert({
       contact_id: contact.id,
       chat_id: chatLid,
@@ -62,7 +76,7 @@ serve(async (req) => {
 
     if (!fromMe) await supabase.rpc('increment_unread_count', { conv_id: conv.id });
 
-    // 4. Salvar Mensagem
+    // 6. Salvar Mensagem
     let content = payload.text?.message || payload.message?.text || payload.body || payload.caption || "";
     if (!content && payload.type) content = `[${payload.type}]`;
 
@@ -80,7 +94,7 @@ serve(async (req) => {
       media_url: payload.imageUrl || payload.audioUrl || payload.videoUrl || payload.documentUrl || payload.image?.url || payload.audio?.url || payload.video?.url || payload.document?.url || null,
     });
 
-    // 5. IA (opcional)
+    // 7. IA (opcional)
     if (!fromMe && !isGroup) {
       fetch(`${supabaseUrl}/functions/v1/ai-maybe-reply`, {
         method: 'POST',
@@ -92,7 +106,7 @@ serve(async (req) => {
     return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
 
   } catch (error: any) {
-    console.error('[Webook Error]', error.message);
+    console.error('[Webhook Error]', error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 200, headers: corsHeaders });
   }
 });
