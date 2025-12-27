@@ -15,27 +15,41 @@ serve(async (req) => {
 
   try {
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader) throw new Error('Não autorizado: Sessão ausente');
-
-    const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader } }
-    });
+    // Permitir chamada interna com service key OU chamada de cliente com token de usuário
+    const isServiceKey = authHeader?.includes(supabaseServiceKey);
+    let userId = 'system';
     
-    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
-    if (authError || !user) throw new Error('Sessão expirada ou inválida');
+    if (!isServiceKey) {
+      if (!authHeader) throw new Error('Não autorizado: Sessão ausente');
+      const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
+        global: { headers: { Authorization: authHeader } }
+      });
+      const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
+      if (authError || !user) throw new Error('Sessão expirada ou inválida');
+      userId = user.id;
+    }
 
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
     
     // Obter nome do atendente
-    const { data: profile } = await supabaseAdmin
-      .from('profiles')
-      .select('name, display_name')
-      .eq('id', user.id)
-      .single();
+    let senderName = 'Atendente G7';
+    if (userId !== 'system') {
+      const { data: profile } = await supabaseAdmin
+        .from('profiles')
+        .select('name, display_name')
+        .eq('id', userId)
+        .single();
+      if (profile) {
+        senderName = profile.display_name || profile.name || 'Atendente G7';
+      }
+    } else {
+      // Se for chamada de sistema (IA), usar nome do agente de IA configurado ou padrão
+      senderName = 'Ana Mônica (IA)';
+    }
 
-    const senderName = profile?.display_name || profile?.name || 'Atendente G7';
-
-    const { conversation_id, content, message_type, media_url } = await req.json();
+    const { conversation_id, content, message_type, media_url, sender_name: overrideSenderName } = await req.json();
+    
+    if (overrideSenderName) senderName = overrideSenderName;
     
     const { data: conv } = await supabaseAdmin
       .from('conversations')
@@ -45,8 +59,10 @@ serve(async (req) => {
 
     if (!conv) throw new Error('Conversa não localizada no banco');
 
-    // Credenciais
+    // Credenciais - Tenta Env Var primeiro, depois banco
     const { data: settings } = await supabaseAdmin.from('zapi_settings').select('*').limit(1).single();
+    
+    // Prioridade: Env Var > Banco
     const instanceId = Deno.env.get('ZAPI_INSTANCE_ID') || settings?.zapi_instance_id;
     const token = Deno.env.get('ZAPI_TOKEN') || settings?.zapi_token;
     const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN') || settings?.zapi_security_token;
@@ -56,25 +72,47 @@ serve(async (req) => {
       throw new Error('Configurações de WhatsApp incompletas no servidor');
     }
 
-    const recipient = conv.contacts?.lid || conv.chat_id || conv.contacts?.phone;
+    // Determinar destinatário
+    const contact = conv.contacts;
+    let recipient = conv.chat_id;
+    
+    // Fallbacks para garantir envio
+    if (!recipient && contact) {
+      recipient = contact.chat_lid || contact.phone || contact.lid;
+    }
+
     if (!recipient) throw new Error('O destinatário não possui um identificador válido (Phone/LID)');
 
     console.log(`[Send Message] Enviando para ${recipient} via instância ${instanceId}`);
 
-    const prefixedContent = `*${senderName}:*\n${content}`;
-    const zapiBaseUrl = `https://api.z-api.io/instances/${instanceId}/token/${token}`;
-    
+    // Formatar mensagem
+    // Se for áudio, não adiciona prefixo de nome
+    let finalContent = content;
     let endpoint = '/send-text';
-    let body: any = { phone: recipient, message: prefixedContent };
+    let body: any = { phone: recipient };
 
-    if (message_type === 'image') { 
+    if (message_type === 'text') {
+      // Adicionar nome do remetente apenas se não for IA automática (opcional, aqui estamos colocando sempre)
+      // Mas para IA (system), às vezes queremos parecer mais natural
+      if (userId !== 'system' || overrideSenderName) {
+        finalContent = `*${senderName}:*\n${content}`;
+      }
+      body.message = finalContent;
+    } else if (message_type === 'image') { 
       endpoint = '/send-image'; 
-      body = { phone: recipient, image: media_url, caption: prefixedContent }; 
+      body.image = media_url;
+      body.caption = content ? `*${senderName}:*\n${content}` : ''; 
     } else if (message_type === 'audio') { 
       endpoint = '/send-audio'; 
-      body = { phone: recipient, audio: media_url }; 
+      body.audio = media_url; 
+    } else if (message_type === 'document' || message_type === 'file') {
+      endpoint = '/send-document';
+      body.document = media_url;
+      // Tentar extrair extensão/nome se possível, ou usar padrão
+      body.fileName = 'documento'; 
     }
 
+    const zapiBaseUrl = `https://api.z-api.io/instances/${instanceId}/token/${token}`;
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (clientToken) headers['Client-Token'] = clientToken;
 
@@ -90,13 +128,13 @@ serve(async (req) => {
       throw new Error(result.message || 'Falha na API do WhatsApp');
     }
 
-    // Salvar registro
+    // Salvar registro no banco
     await supabaseAdmin.from('messages').insert({
       conversation_id,
-      sender_type: 'agent',
-      sender_id: user.id,
+      sender_type: userId === 'system' ? 'agent' : 'agent', // 'agent' para ambos visualmente
+      sender_id: userId === 'system' ? null : userId,
       agent_name: senderName,
-      content,
+      content: content, // Salvar conteúdo original sem prefixo no banco
       message_type: message_type || 'text',
       media_url,
       sent_at: new Date().toISOString(),
@@ -106,11 +144,17 @@ serve(async (req) => {
       direction: 'outbound'
     });
 
-    return new Response(JSON.stringify({ success: true }), { 
+    // Atualizar conversa
+    await supabaseAdmin.from('conversations').update({
+      last_message_at: new Date().toISOString(),
+      // Se IA respondeu, talvez queira marcar algo? Por enquanto não.
+    }).eq('id', conversation_id);
+
+    return new Response(JSON.stringify({ success: true, messageId: result.messageId }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('[Send Message Error]', error.message);
     return new Response(JSON.stringify({ error: error.message }), { 
       status: 500, 
