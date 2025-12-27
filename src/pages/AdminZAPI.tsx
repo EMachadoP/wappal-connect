@@ -44,20 +44,26 @@ export default function AdminZAPIPage() {
     forward_webhook_url: '',
   });
 
-  const fetchData = async () => {
-    setLoading(true);
+  const fetchData = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const { data } = await supabase.from('zapi_settings').select('*').is('team_id', null).maybeSingle();
       if (data) setSettings(data);
     } catch (error) {
       console.error('Error fetching data:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (user && isAdmin) fetchData();
+    if (user && isAdmin) {
+      fetchData();
+      
+      // Atualiza o sinal a cada 5 segundos automaticamente
+      const interval = setInterval(() => fetchData(true), 5000);
+      return () => clearInterval(interval);
+    }
   }, [user, isAdmin]);
 
   const handleSave = async () => {
@@ -92,6 +98,9 @@ export default function AdminZAPIPage() {
     ? formatDistanceToNow(new Date(settings.last_webhook_received_at), { addSuffix: true, locale: ptBR })
     : 'Nunca';
 
+  const isOnline = settings.last_webhook_received_at && 
+    (new Date().getTime() - new Date(settings.last_webhook_received_at).getTime() < 60000);
+
   return (
     <AppLayout>
       <div className="p-6 space-y-6 overflow-auto h-full max-w-4xl mx-auto">
@@ -112,10 +121,10 @@ export default function AdminZAPIPage() {
         </div>
 
         {/* MONITOR DE SINAL */}
-        <Card className="border-primary/50 bg-primary/5">
+        <Card className={`transition-colors duration-500 ${isOnline ? 'border-green-500/50 bg-green-500/5' : 'border-primary/50 bg-primary/5'}`}>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Activity className="w-4 h-4 text-primary animate-pulse" />
+              <Activity className={`w-4 h-4 ${isOnline ? 'text-green-500 animate-bounce' : 'text-primary animate-pulse'}`} />
               Monitor de Conexão (Webhook)
             </CardTitle>
           </CardHeader>
@@ -125,8 +134,8 @@ export default function AdminZAPIPage() {
                 <p className="text-2xl font-bold">{settings.last_webhook_received_at ? 'Recebendo Sinal' : 'Sem Sinal'}</p>
                 <p className="text-xs text-muted-foreground mt-1">Última mensagem detectada: <span className="font-medium text-foreground">{lastSignal}</span></p>
               </div>
-              <Badge variant={settings.last_webhook_received_at ? "default" : "destructive"} className="px-3 py-1">
-                {settings.last_webhook_received_at ? 'Webhook OK' : 'Webhook Inativo'}
+              <Badge variant={settings.last_webhook_received_at ? "default" : "destructive"} className={`px-3 py-1 ${isOnline ? 'bg-green-600' : ''}`}>
+                {isOnline ? 'CONECTADO AGORA' : settings.last_webhook_received_at ? 'WEBHOOK OK' : 'WEBHOOK INATIVO'}
               </Badge>
             </div>
           </CardContent>
