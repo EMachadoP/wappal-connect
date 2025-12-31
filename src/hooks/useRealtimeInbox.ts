@@ -20,9 +20,16 @@ interface UseRealtimeInboxProps {
 export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps = {}) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
-  const channelRef = useRef<any>(null);
+  const processedMessageIds = useRef<Set<string>>(new Set());
+  const lastFetchTime = useRef<number>(0);
 
   const fetchConversations = useCallback(async () => {
+    // Throttle fetches to max once every 300ms
+    const now = Date.now();
+    if (now - lastFetchTime.current < 300) return;
+    lastFetchTime.current = now;
+
+    console.log('[RealtimeInbox] Fetching conversations...');
     const { data, error } = await supabase
       .from('conversations')
       .select(`*, contacts (*)`)
@@ -47,18 +54,13 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
   useEffect(() => {
     fetchConversations();
 
-    if (channelRef.current) {
-      supabase.removeChannel(channelRef.current);
-    }
-
-    // Canal global para atualizações da lista
+    // Canal estável para Inbox global
     const channel = supabase.channel('global-inbox-updates')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'conversations' },
         (payload) => {
-          console.log('[RealtimeInbox] Mudança na conversa detectada');
-          // Ao mudar qualquer coisa na conversa (última msg, unread, etc), recarregamos a lista
+          console.log('[RealtimeInbox] Conversation record update');
           fetchConversations();
         }
       )
@@ -66,20 +68,29 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages' },
         (payload) => {
-          console.log('[RealtimeInbox] Nova mensagem no sistema');
-          if (payload.new.sender_type === 'contact') {
+          const newMessage = payload.new;
+          if (!newMessage || processedMessageIds.current.has(newMessage.id)) return;
+
+          processedMessageIds.current.add(newMessage.id);
+          console.log('[RealtimeInbox] New message incoming:', newMessage.id);
+
+          if (newMessage.sender_type === 'contact') {
             onNewInboundMessage?.();
           }
-          // Forçamos o refresh para atualizar o preview da última mensagem na lista
+
           fetchConversations();
+
+          // Limpa o set ocasionalmente para não crescer infinitamente
+          if (processedMessageIds.current.size > 100) {
+            processedMessageIds.current = new Set([...processedMessageIds.current].slice(-50));
+          }
         }
       )
       .subscribe();
 
-    channelRef.current = channel;
-
     return () => {
-      if (channelRef.current) supabase.removeChannel(channelRef.current);
+      console.log('[RealtimeInbox] Cleaning up channel');
+      supabase.removeChannel(channel);
     };
   }, [fetchConversations, onNewInboundMessage]);
 

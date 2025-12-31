@@ -1,4 +1,4 @@
-project_id = "mifoqjuhwljudovtuoka"
+project_id = "qoolzhzdcfnyblymdvbq"
 
 [functions.zapi-webhook]
 verify_jwt = false
@@ -25,7 +25,7 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.ai-test]
-verify_jwt = true
+verify_jwt = false
 
 [functions.kb-generate-embedding]
 verify_jwt = true
@@ -55,4 +55,7 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.create-protocol]
-verify_jwt = true
+verify_jwt = false
+
+[functions.create-ticket]
+verify_jwt = false

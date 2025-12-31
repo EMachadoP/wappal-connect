@@ -1,0 +1,13 @@
+{
+  "id": "271841c4-cf87-4435-8737-d97dddf8fc23",
+  "team_id": null,
+  "zapi_instance_id": "3DE2F780008FF0A77B4332C54B267657",
+  "zapi_token": "8679E66FF0E2F3C507889FCA",
+  "zapi_security_token": "Fbe04ead11a7e42c7bb7b6b18f1ea5aa7S",
+  "open_tickets_group_id": null,
+  "enable_group_notifications": false,
+  "created_at": "2025-12-27T01:23:20.92794+00:00",
+  "updated_at": "2025-12-29T22:01:15.037453+00:00",
+  "forward_webhook_url": null,
+  "last_webhook_received_at": "2025-12-29T22:01:14.844+00:00"
+}

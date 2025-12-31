@@ -219,11 +219,13 @@ serve(async (req) => {
     // ========== 1. Send WhatsApp Group Message ==========
     if (settings.whatsapp_notifications_enabled && settings.whatsapp_group_id) {
       try {
-        const zapiInstanceId = Deno.env.get("ZAPI_INSTANCE_ID");
-        const zapiToken = Deno.env.get("ZAPI_TOKEN");
-        const zapiClientToken = Deno.env.get("ZAPI_CLIENT_TOKEN");
+        const { data: zapiSettings } = await supabase.from('zapi_settings').select('*').limit(1).single();
 
-        if (zapiInstanceId && zapiToken && zapiClientToken) {
+        const zapiInstanceId = Deno.env.get("ZAPI_INSTANCE_ID") || zapiSettings?.zapi_instance_id;
+        const zapiToken = Deno.env.get("ZAPI_TOKEN") || zapiSettings?.zapi_token;
+        const zapiClientToken = Deno.env.get("ZAPI_CLIENT_TOKEN") || zapiSettings?.zapi_security_token;
+
+        if (zapiInstanceId && zapiToken) {
           const priorityEmoji = isCritical ? "🔴 CRÍTICO" : "🟢 Normal";
           const priorityText = isCritical ? "Resolver HOJE" : `Resolver até ${dueDate}`;
 

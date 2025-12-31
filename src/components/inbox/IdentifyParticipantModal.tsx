@@ -52,6 +52,7 @@ const ROLE_TYPES = [
   { value: 'administrador', label: 'Administrador' },
   { value: 'conselheiro', label: 'Conselheiro' },
   { value: 'funcionario', label: 'Funcionário' },
+  { value: 'supervisor_condominial', label: 'Supervisor Condominial' },
   { value: 'visitante', label: 'Visitante' },
   { value: 'prestador', label: 'Prestador de Serviço' },
   { value: 'fornecedor', label: 'Fornecedor' },

@@ -42,6 +42,11 @@ export function useParticipantInfo(contactId: string | undefined, conversationId
     }
 
     setLoading(true);
+    // CRITICAL: Reset transient state to avoid mixing data between contacts
+    setParticipant(null);
+    setContactInfo(null);
+    setParticipantState(null);
+    setDisplayNameType('UNKNOWN');
 
     try {
       // Fetch contact info

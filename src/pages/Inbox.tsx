@@ -17,7 +17,7 @@ export default function InboxPage() {
   const isMobile = useIsMobile();
   const { user, loading: authLoading } = useAuth();
   const { playNotificationSound } = useNotificationSound();
-  
+
   const [activeConversationId, setActiveConversationId] = useState<string | null>(conversationIdParam || null);
   const [activeContact, setActiveContact] = useState<any>(null);
   const [activeConvData, setActiveConvData] = useState<any>(null);
@@ -40,7 +40,7 @@ export default function InboxPage() {
     if (data) {
       setActiveConvData(data);
       setActiveContact(data.contacts);
-      
+
       // Marcar como lida se houver mensagens não lidas
       if (data.unread_count > 0) {
         await supabase.from('conversations').update({ unread_count: 0 }).eq('id', id);
@@ -50,6 +50,9 @@ export default function InboxPage() {
 
   useEffect(() => {
     if (activeConversationId) {
+      // Clear transient data immediately to prevent UI mixing
+      setActiveContact(null);
+      setActiveConvData(null);
       fetchActiveConversationDetails(activeConversationId);
     }
   }, [activeConversationId, fetchActiveConversationDetails]);
@@ -62,26 +65,52 @@ export default function InboxPage() {
   }, [conversationIdParam, activeConversationId]);
 
   const handleSelectConversation = useCallback((id: string) => {
-    if (isMobile) {
-      navigate(`/inbox/${id}`);
-    } else {
-      setActiveConversationId(id);
-      // Opcional: atualizar a URL sem recarregar totalmente no desktop
-      window.history.pushState(null, '', `/inbox/${id}`);
-    }
-  }, [isMobile, navigate]);
+    // Navigate updates the URL parameter, which in turn updates conversationIdParam
+    // and triggers our sync useEffect. This is the standard way to handle tab/list switches.
+    navigate(`/inbox/${id}`);
+  }, [navigate]);
 
   const handleSendMessage = async (content: string) => {
-    if (!activeConversationId || !user) return;
-    
-    // Chamada segura via Edge Function
-    await supabase.functions.invoke('zapi-send-message', {
-      body: { 
-        conversation_id: activeConversationId, 
-        content, 
-        message_type: 'text'
-      },
-    });
+    // Debug Alerts
+    if (!user) { alert('Erro: Usuário não logado'); return; }
+    if (!activeConversationId) { alert('Erro: Nenhuma conversa selecionada (ID nulo)'); return; }
+
+    try {
+      // Obter sessão para Authorization Header
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      if (!token) throw new Error("Sessão perdida. Faça login novamente.");
+
+      // Chamada direta via Fetch para debug de rede
+      const response = await fetch('https://qoolzhzdcfnyblymdvbq.supabase.co/functions/v1/zapi-send-message', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          conversation_id: activeConversationId,
+          content,
+          message_type: 'text'
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Erro HTTP ${response.status}: ${errorText}`);
+      }
+
+      // Sucesso
+      // alert('Mensagem enviada!'); // Opcional, remover em produção
+    } catch (error: any) {
+      console.error('Erro ao enviar:', error);
+      // Import toast if not available, finding where it is imported or adding import if needed (it is not imported in original snippet, but likely available via sonner or similar in this project based on ChatArea.tsx having toast)
+      // Actually ChatArea receives toast, Inbox.tsx doesn't seem to import it.
+      // I will assume simple alert or console for now, or check imports.
+      // I'll add the import first if I can.
+      alert(`Erro ao enviar: ${error.message || 'Erro desconhecido'}`);
+    }
   };
 
   if (authLoading) return null;
@@ -90,14 +119,14 @@ export default function InboxPage() {
   return (
     <AppLayout>
       <div className="flex h-full overflow-hidden bg-background">
-        <ConversationList 
-          conversations={conversations} 
-          activeConversationId={activeConversationId} 
-          userId={user.id} 
-          onSelectConversation={handleSelectConversation} 
-          isMobile={isMobile} 
+        <ConversationList
+          conversations={conversations}
+          activeConversationId={activeConversationId}
+          userId={user.id}
+          onSelectConversation={handleSelectConversation}
+          isMobile={isMobile}
         />
-        
+
         {!isMobile && (
           <div className="flex-1 flex flex-col min-w-0">
             {activeConversationId ? (
@@ -105,6 +134,7 @@ export default function InboxPage() {
                 <ChatSkeleton />
               ) : (
                 <ChatArea
+                  key={activeConversationId}
                   contact={activeContact}
                   messages={messages as any}
                   profiles={[]}

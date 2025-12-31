@@ -24,6 +24,8 @@ export function useContactCondominiums(contactId: string | null): UseContactCond
     }
 
     setLoading(true);
+    // Clear old data immediately to prevent mixing
+    setCondominiums([]);
     try {
       const { data, error } = await supabase
         .from('contact_condominiums')

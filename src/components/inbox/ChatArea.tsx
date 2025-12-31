@@ -52,7 +52,7 @@ export function ChatArea(props: ChatAreaProps) {
   const [identifyModalOpen, setIdentifyModalOpen] = useState(false);
   const [protocolModalOpen, setProtocolModalOpen] = useState(false);
 
-  const { participant, contactInfo, displayNameType, refetch: refetchParticipant } = 
+  const { participant, contactInfo, displayNameType, refetch: refetchParticipant } =
     useParticipantInfo(contact?.id, conversationId ?? undefined);
 
   const { condominiums, loading: loadingCondos } = useContactCondominiums(contact?.id ?? null);
@@ -72,7 +72,7 @@ export function ChatArea(props: ChatAreaProps) {
 
   return (
     <div className="flex-1 flex flex-col bg-background h-full overflow-hidden">
-      <ChatHeader 
+      <ChatHeader
         contact={contact}
         isMobile={!!isMobile}
         isResolved={isResolved}
@@ -89,6 +89,7 @@ export function ChatArea(props: ChatAreaProps) {
         onAssignAgent={props.onAssignAgent}
         onAssignTeam={props.onAssignTeam}
         onAddLabel={props.onAddLabel}
+        onGenerateProtocol={() => setProtocolModalOpen(true)}
       />
 
       {conversationId && (
@@ -122,11 +123,11 @@ export function ChatArea(props: ChatAreaProps) {
         </div>
       )}
 
-      <MessageList 
-        messages={messages} 
-        loading={loading} 
-        conversationId={conversationId} 
-        profiles={props.profiles} 
+      <MessageList
+        messages={messages}
+        loading={loading}
+        conversationId={conversationId}
+        profiles={props.profiles}
         contactName={participant?.name || contact?.name}
       />
 
@@ -141,7 +142,7 @@ export function ChatArea(props: ChatAreaProps) {
         />
       )}
 
-      <ChatInputArea 
+      <ChatInputArea
         onSendMessage={props.onSendMessage}
         onSendFile={props.onSendFile}
         isResolved={isResolved}

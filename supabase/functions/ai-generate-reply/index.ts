@@ -6,55 +6,94 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Input validation constants
-const MAX_MESSAGE_CONTENT_LENGTH = 8192;
-const MAX_SYSTEM_PROMPT_LENGTH = 16384;
-const MAX_MESSAGES_COUNT = 50;
-const VALID_ROLES = ['user', 'assistant', 'system'] as const;
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// --- HELPERS ---
 
-// Sanitize string: trim, enforce max length
-function sanitizeString(value: unknown, maxLength: number): string {
-  if (value === null || value === undefined) return '';
-  if (typeof value !== 'string') return '';
-  return value.trim().slice(0, maxLength);
+function isOperationalIssue(text: string) {
+  return /(câmera|camera|cftv|dvr|gravador|nvr|port[aã]o|motor|cerca|interfone|controle de acesso|catraca|fechadura|tv coletiva|antena|acesso remoto|sem imagem|sem sinal|travado|n[aã]o abre|n[aã]o fecha|parou|quebrado|defeito)/i.test(text);
 }
 
-// Validate and sanitize messages array
-function validateMessages(rawMessages: unknown): { role: string; content: string }[] {
-  if (!Array.isArray(rawMessages)) return [];
-  
-  return rawMessages
-    .slice(0, MAX_MESSAGES_COUNT)
-    .filter((msg): msg is { role: string; content: string } => {
-      if (!msg || typeof msg !== 'object') return false;
-      const role = (msg as Record<string, unknown>).role;
-      const content = (msg as Record<string, unknown>).content;
-      return typeof role === 'string' && 
-             VALID_ROLES.includes(role as typeof VALID_ROLES[number]) &&
-             typeof content === 'string';
-    })
-    .map(msg => ({
-      role: msg.role,
-      content: sanitizeString(msg.content, MAX_MESSAGE_CONTENT_LENGTH),
-    }));
+function looksLikeApartment(text: string) {
+  return /^\s*\d{1,6}[A-Za-z]?\s*$/.test(text.trim());
 }
 
-interface AIProviderConfig {
-  id: string;
-  provider: 'openai' | 'gemini' | 'lovable';
-  model: string;
-  temperature: number;
-  max_tokens: number;
-  top_p: number;
-  active: boolean;
-  key_ref: string;
+function buildSummaryFromRecentUserMessages(msgs: { role: string; content: string }[], max = 3) {
+  const users = msgs.filter(m => m.role === 'user').slice(-max).map(m => m.content);
+  return users.join(' | ').slice(0, 500);
 }
+
+function getLastByRole(msgs: { role: string; content: string }[], role: string) {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i]?.role === role) return msgs[i];
+  }
+  return null;
+}
+
+/**
+ * Executes the create-protocol edge function
+ */
+async function executeCreateProtocol(
+  supabase: any,
+  supabaseUrl: string,
+  supabaseServiceKey: string,
+  conversationId: string,
+  args: any
+) {
+  // 1. Deep Condominium Lookup (Critical for Asana/G7)
+  const { data: conv } = await supabase
+    .from('conversations')
+    .select('contact_id, active_condominium_id, contacts(condominium_id, name, role)')
+    .eq('id', conversationId)
+    .single();
+
+  let condominiumId = conv?.active_condominium_id || conv?.contacts?.condominium_id;
+
+  if (!condominiumId) {
+    const { data: part } = await supabase
+      .from('conversation_participants')
+      .select('entity_id')
+      .eq('conversation_id', conversationId)
+      .not('entity_id', 'is', null)
+      .limit(1)
+      .single();
+    if (part) condominiumId = part.entity_id;
+  }
+
+  const bodyObj = {
+    conversation_id: conversationId,
+    condominium_id: condominiumId,
+    summary: args.summary,
+    priority: args.priority || 'normal',
+    category: args.category || 'operational',
+    requester_name: args.requester_name || (conv?.contacts as any)?.name || 'Não informado',
+    requester_role: args.requester_role || (conv?.contacts as any)?.role || 'Morador',
+    apartment: args.apartment,
+    notify_group: true // IMPORTANT: Triggers WhatsApp + Asana
+  };
+
+  console.log('[TICKET] Calling create-protocol with body:', bodyObj);
+
+  const response = await fetch(`${supabaseUrl}/functions/v1/create-protocol`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${supabaseServiceKey}`,
+      'apikey': supabaseServiceKey,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(bodyObj)
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Create protocol failed: ${errorText}`);
+  }
+
+  return await response.json();
+}
+
+// --- SERVE ---
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+  if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   const startTime = Date.now();
 
@@ -64,253 +103,211 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     const rawBody = await req.json();
-    
-    // Validate and sanitize inputs
-    const messages = validateMessages(rawBody.messages);
-    const systemPrompt = sanitizeString(rawBody.systemPrompt, MAX_SYSTEM_PROMPT_LENGTH);
-    const providerId = rawBody.providerId && UUID_REGEX.test(rawBody.providerId) ? rawBody.providerId : undefined;
-    const ragEnabled = rawBody.ragEnabled !== false;
+    const messages = (rawBody.messages || []).slice(0, 50); // Limit to 50
+    const conversationIdRaw = rawBody.conversation_id || rawBody.conversationId || rawBody.conversation?.id;
+    const conversationId = (typeof conversationIdRaw === 'string') ? conversationIdRaw : undefined;
 
-    // RAG: Search for relevant knowledge snippets
-    let ragContext = '';
-    let usedSnippets: string[] = [];
-    
-    if (ragEnabled && messages.length > 0) {
-      const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
-      if (lastUserMessage) {
-        try {
-          // For now, do a simple text search until embeddings are fully set up
-          const { data: snippets } = await supabase
-            .from('kb_snippets')
-            .select('id, title, problem_text, solution_text, category')
-            .eq('approved', true)
-            .textSearch('problem_text', lastUserMessage.content.split(' ').slice(0, 5).join(' | '), { type: 'websearch' })
-            .limit(3);
+    // Dynamically clean passed systemPrompt from negative examples (mimicry prevention)
+    let basePrompt = rawBody.systemPrompt || "";
+    basePrompt = basePrompt.split(/EXEMPLO ERRADO|EXEMPLO DE ERRO|MIMETISMO/i)[0].trim();
 
-          if (snippets && snippets.length > 0) {
-            ragContext = '\n\n### Base de Conhecimento Relevante:\n' +
-              snippets.map(s => `**${s.title}** (${s.category})\nProblema: ${s.problem_text}\nSolução: ${s.solution_text}`).join('\n\n');
-            usedSnippets = snippets.map(s => s.id);
-            console.log('RAG: Found', snippets.length, 'relevant snippets');
-            
-            // Update usage count
-            for (const s of snippets) {
-              await supabase.from('kb_snippets').update({ used_count: supabase.rpc('increment', { x: 1 }) }).eq('id', s.id);
-            }
-          }
-        } catch (ragError) {
-          console.warn('RAG search error:', ragError);
-        }
+    const messagesNoSystem = messages.filter((m: any) => m.role !== 'system');
+
+    // Get last user message and recent context
+    const lastUserMsg = getLastByRole(messagesNoSystem, 'user');
+    const lastUserMsgText = (lastUserMsg?.content || "").trim();
+    const recentText = messagesNoSystem.slice(-6).map((m: any) => m.content).join(" ");
+
+    // --- TIER 4: DETERMINISTIC (Bulletproof Context-Aware) ---
+    const lastIssueMsg = [...messagesNoSystem].reverse().find(m => m.role === 'user' && isOperationalIssue(m.content));
+    const hasOperationalContext = isOperationalIssue(recentText);
+    const aptCandidate = [...messagesNoSystem]
+      .reverse()
+      .find(m => m.role === "user" && looksLikeApartment(m.content))
+      ?.content.trim();
+
+    const isProvidingApartment = looksLikeApartment(lastUserMsgText) && hasOperationalContext;
+    const needsApartment = /(interfone|tv|controle|apartamento|apto|unidade)/i.test(recentText);
+    const canOpenNow = hasOperationalContext && (!needsApartment || Boolean(aptCandidate));
+
+    if (conversationId && (canOpenNow || isProvidingApartment)) {
+      if (needsApartment && !aptCandidate) {
+        console.log('[TICKET] Deterministic block: Need apartment for issue:', lastIssueMsg?.content);
+        return new Response(JSON.stringify({
+          text: "Entendido. Para eu abrir o protocolo agora mesmo, me confirme por favor o número do seu apartamento.",
+          finish_reason: 'NEED_APARTMENT',
+          provider: 'deterministic',
+          model: 'keyword-detection',
+          request_id: crypto.randomUUID()
+        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
+      try {
+        const ticketData = await executeCreateProtocol(supabase, supabaseUrl, supabaseServiceKey, conversationId, {
+          summary: (lastIssueMsg?.content || lastUserMsgText).slice(0, 500),
+          priority: /travado|urgente|urgência|emergência/i.test(recentText) ? 'critical' : 'normal',
+          apartment: aptCandidate
+        });
+
+        const protocolCode = ticketData.protocol?.protocol_code || ticketData.protocol_code;
+        return new Response(JSON.stringify({
+          text: `Certo. Já registrei o chamado sob o protocolo **${protocolCode}** e encaminhei para a equipe operacional. Vamos dar sequência por aqui.`,
+          finish_reason: 'DETERMINISTIC_SUCCESS',
+          provider: 'deterministic',
+          model: 'keyword-detection',
+          request_id: crypto.randomUUID()
+        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      } catch (e) {
+        console.error("Deterministic opening failed, falling back to LLM...", e);
       }
     }
 
-    const enhancedPrompt = systemPrompt + ragContext + '\n\nREGRA: Nunca invente preços. Preços só podem vir do JSON de políticas.';
+    // --- TIER 5: IA (LLM) ---
 
-    // Get active provider config
-    let providerQuery = supabase
+    // Final Prompt Reinforcement
+    const cleanPrompt = `${basePrompt}
+
+Sua personalidade é Ana Mônica, assistente da G7.
+Sua única função é ajudar com problemas técnicos de condomínio.
+Para registrar um problema, use SEMPRE a ferramenta 'create_protocol' IMEDIATAMENTE.
+NUNCA diga que registrou o protocolo sem chamar a ferramenta.
+NUNCA invente preços ou prazos.`;
+
+    const { data: providerConfig } = await supabase
       .from('ai_provider_configs')
       .select('*')
-      .eq('active', true);
+      .eq('active', true)
+      .limit(1)
+      .single();
 
-    if (providerId) {
-      providerQuery = providerQuery.eq('id', providerId);
-    }
+    if (!providerConfig) throw new Error('Nenhum provedor de IA ativo configurado');
+    const provider = providerConfig as any;
 
-    const { data: providers, error: providerError } = await providerQuery.limit(1).single();
+    const apiKey = Deno.env.get(provider.key_ref || (provider.provider === 'lovable' ? 'LOVABLE_API_KEY' : ''));
+    if (!apiKey) throw new Error(`Chave de API não encontrada para ${provider.provider}`);
 
-    if (providerError || !providers) {
-      console.error('No active AI provider found:', providerError);
-      return new Response(
-        JSON.stringify({ error: 'Nenhum provedor de IA ativo configurado' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const provider = providers as AIProviderConfig;
-    console.log('Using provider:', provider.provider, provider.model);
-
-    // Get API key from environment
-    let apiKey: string | undefined;
-    
-    if (provider.provider === 'lovable') {
-      apiKey = Deno.env.get('LOVABLE_API_KEY');
-    } else if (provider.key_ref) {
-      apiKey = Deno.env.get(provider.key_ref);
-    }
-
-    if (!apiKey) {
-      console.error('API key not found for provider:', provider.provider);
-      return new Response(
-        JSON.stringify({ error: `Chave de API não encontrada para ${provider.provider}` }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // Build request based on provider
-    let response: Response;
-    let responseData: any;
-
-    if (provider.provider === 'lovable') {
-      // Use Lovable AI Gateway
-      console.log('Calling Lovable AI Gateway with enhancedPrompt');
-      response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: provider.model,
-          messages: [
-            { role: 'system', content: enhancedPrompt },
-            ...messages,
-          ],
-          temperature: Number(provider.temperature) || 0.7,
-          max_tokens: provider.max_tokens || 1024,
-        }),
-      });
-    } else if (provider.provider === 'openai') {
-      // Direct OpenAI API
-      console.log('Calling OpenAI API with enhancedPrompt');
-      
-      // Check if model is GPT-5 or newer (needs max_completion_tokens instead of max_tokens)
-      const isNewerModel = provider.model.includes('gpt-5') || provider.model.includes('gpt-4.1') || provider.model.includes('o3') || provider.model.includes('o4');
-      
-      const openaiBody: Record<string, any> = {
-        model: provider.model,
-        messages: [
-          { role: 'system', content: enhancedPrompt },
-          ...messages,
-        ],
-      };
-      
-      // Newer models use max_completion_tokens and don't support temperature
-      if (isNewerModel) {
-        openaiBody.max_completion_tokens = provider.max_tokens || 1024;
-      } else {
-        openaiBody.temperature = Number(provider.temperature) || 0.7;
-        openaiBody.max_tokens = provider.max_tokens || 1024;
+    // Tool definition (using create_protocol as name to avoid confusion)
+    const protocolTool = [{
+      type: "function",
+      function: {
+        name: "create_protocol",
+        description: "Registra tecnicamente um problema de condomínio para a equipe operacional.",
+        parameters: {
+          type: "object",
+          properties: {
+            summary: { type: "string", description: "O problema detalhado" },
+            priority: { type: "string", enum: ["normal", "critical"] },
+            apartment: { type: "string", description: "Apartamento (se souber)" }
+          },
+          required: ["summary"]
+        }
       }
-      
-      response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(openaiBody),
-      });
-    } else if (provider.provider === 'gemini') {
-      // Direct Gemini API
-      console.log('Calling Gemini API with enhancedPrompt');
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${provider.model}:generateContent?key=${apiKey}`;
-      
-      // Convert messages to Gemini format
-      const geminiMessages = messages.map(m => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content }],
-      }));
+    }];
 
+    let response: Response;
+    if (provider.provider === 'lovable' || provider.provider === 'openai') {
+      response = await fetch(
+        provider.provider === 'lovable' ? 'https://ai.gateway.lovable.dev/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: provider.model,
+            messages: [{ role: 'system', content: cleanPrompt }, ...messagesNoSystem],
+            tools: protocolTool,
+            tool_choice: 'auto',
+            temperature: Number(provider.temperature) || 0.7
+          })
+        }
+      );
+    } else if (provider.provider === 'gemini') {
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${provider.model}:generateContent?key=${apiKey}`;
       response = await fetch(geminiUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          systemInstruction: { parts: [{ text: enhancedPrompt }] },
-          contents: geminiMessages,
-          generationConfig: {
-            temperature: Number(provider.temperature) || 0.7,
-            maxOutputTokens: provider.max_tokens || 1024,
-            topP: Number(provider.top_p) || 1.0,
-          },
-        }),
+          systemInstruction: { parts: [{ text: cleanPrompt }] },
+          contents: messagesNoSystem.map(m => ({
+            role: m.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: m.content }]
+          })),
+          tools: [{ functionDeclarations: [protocolTool[0].function] }],
+          toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+          generationConfig: { temperature: Number(provider.temperature) || 0.7 }
+        })
       });
-    } else {
-      return new Response(
-        JSON.stringify({ error: `Provedor não suportado: ${provider.provider}` }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
+    } else { throw new Error(`Provedor não suportado: ${provider.provider}`); }
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('AI API error:', response.status, errorText);
-      
-      if (response.status === 429) {
-        return new Response(
-          JSON.stringify({ error: 'Limite de requisições excedido. Tente novamente mais tarde.' }),
-          { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-      
-      if (response.status === 402) {
-        return new Response(
-          JSON.stringify({ error: 'Créditos insuficientes. Adicione créditos ao workspace.' }),
-          { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
+    if (!response.ok) throw new Error(`Erro da API de IA: ${await response.text()}`);
+    const responseData = await response.json();
 
-      return new Response(
-        JSON.stringify({ error: `Erro da API: ${errorText}` }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    responseData = await response.json();
-    
-    // Extract response based on provider format
-    let generatedText: string;
+    let generatedText = '';
+    let functionCall: any = null;
     let tokensIn = 0;
     let tokensOut = 0;
-    let finishReason: string | null = null;
 
-    if (provider.provider === 'gemini' && !provider.model.includes('/')) {
-      // Native Gemini API response
-      generatedText = responseData.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    if (provider.provider === 'gemini') {
+      const candidate = responseData.candidates?.[0];
+      const part = candidate?.content?.parts?.find((p: any) => p.functionCall);
+      if (part) {
+        functionCall = { name: part.functionCall.name, args: part.functionCall.args };
+      } else {
+        generatedText = candidate?.content?.parts?.[0]?.text || '';
+      }
       tokensIn = responseData.usageMetadata?.promptTokenCount || 0;
       tokensOut = responseData.usageMetadata?.candidatesTokenCount || 0;
-      finishReason = responseData.candidates?.[0]?.finishReason || null;
-      
-      // Log if response was cut due to max tokens
-      if (finishReason === 'MAX_TOKENS') {
-        console.warn('Response truncated due to MAX_TOKENS limit. Consider increasing max_tokens.');
-      }
-      console.log('Gemini response - finishReason:', finishReason, 'tokensOut:', tokensOut);
     } else {
-      // OpenAI-compatible response (Lovable AI, OpenAI, Gemini via gateway)
-      generatedText = responseData.choices?.[0]?.message?.content || '';
+      const msg = responseData.choices?.[0]?.message;
+      if (msg?.tool_calls?.length) {
+        functionCall = {
+          name: msg.tool_calls[0].function.name,
+          args: JSON.parse(msg.tool_calls[0].function.arguments)
+        };
+      } else {
+        generatedText = msg?.content || '';
+      }
       tokensIn = responseData.usage?.prompt_tokens || 0;
       tokensOut = responseData.usage?.completion_tokens || 0;
-      finishReason = responseData.choices?.[0]?.finish_reason || null;
-      
-      if (finishReason === 'length') {
-        console.warn('Response truncated due to length limit. Consider increasing max_tokens.');
-      }
-      console.log('AI response - finishReason:', finishReason, 'tokensOut:', tokensOut);
     }
 
-    const latencyMs = Date.now() - startTime;
+    // --- FALLBACK INTENT DETECTION ---
+    const aiSaidWillRegister = /vou registrar|vou abrir|vou encaminhar|registrei/i.test(generatedText);
+    if (!functionCall && aiSaidWillRegister) {
+      console.warn('FALLBACK: Intent detected. Forcing protocol creation...');
+      functionCall = {
+        name: 'create_protocol',
+        args: {
+          summary: (lastIssueMsg?.content || buildSummaryFromRecentUserMessages(messagesNoSystem)).slice(0, 500),
+          priority: /travado|urgente|urgência|emergência/i.test(recentText) ? 'critical' : 'normal',
+          apartment: aptCandidate
+        }
+      };
+    }
 
-    return new Response(
-      JSON.stringify({
-        text: generatedText,
-        provider: provider.provider,
-        model: provider.model,
-        tokens_in: tokensIn,
-        tokens_out: tokensOut,
-        latency_ms: latencyMs,
-        request_id: crypto.randomUUID(),
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    // Implementation of Tool call (if triggered by AI or Fallback)
+    if (functionCall && (functionCall.name === 'create_protocol' || functionCall.name === 'create_ticket')) {
+      try {
+        const ticketData = await executeCreateProtocol(supabase, supabaseUrl, supabaseServiceKey, conversationId!, functionCall.args);
+        const protocolCode = ticketData.protocol?.protocol_code || ticketData.protocol_code;
+        generatedText = `Certo. Já registrei o chamado sob o protocolo **${protocolCode}** e encaminhei para a equipe operacional. Vamos dar sequência por aqui.`;
+      } catch (e) {
+        console.error('Tool call failed:', e);
+        generatedText = "Puxa, tive um probleminha técnico ao tentar abrir o protocolo automaticamente agora. Mas não se preocupe, eu já anotei tudo e vou passar agora mesmo para a equipe manual. Qual o seu nome por favor?";
+      }
+    }
 
-  } catch (error) {
-    console.error('AI generate error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return new Response(
-      JSON.stringify({ error: errorMessage }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return new Response(JSON.stringify({
+      text: generatedText,
+      provider: provider.provider,
+      model: provider.model,
+      tokens_in: tokensIn,
+      tokens_out: tokensOut,
+      latency_ms: Date.now() - startTime,
+      request_id: crypto.randomUUID()
+    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
+  } catch (error: any) {
+    console.error('AI Error:', error);
+    return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: corsHeaders });
   }
 });

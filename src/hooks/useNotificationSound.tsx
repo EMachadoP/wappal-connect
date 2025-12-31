@@ -2,63 +2,68 @@ import { useRef, useCallback, useEffect } from 'react';
 
 export function useNotificationSound() {
   const audioContextRef = useRef<AudioContext | null>(null);
+  const unlockedRef = useRef(false);
   const lastPlayedRef = useRef<number>(0);
 
-  // Initialize audio context on first user interaction
   useEffect(() => {
-    const initAudioContext = () => {
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const unlock = async () => {
+      try {
+        if (!audioContextRef.current) {
+          audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+        }
+
+        const ctx = audioContextRef.current;
+        if (ctx.state === 'suspended') {
+          await ctx.resume();
+        }
+
+        unlockedRef.current = true;
+        console.log('[Notification] Audio unlocked');
+      } catch (err) {
+        console.warn('[Notification] Failed to unlock audio:', err);
       }
     };
 
-    // Initialize on any user interaction
-    const events = ['click', 'keydown', 'touchstart'];
-    events.forEach(event => document.addEventListener(event, initAudioContext, { once: true }));
-
-    return () => {
-      events.forEach(event => document.removeEventListener(event, initAudioContext));
-    };
+    // Unlock on first pointerdown gesture
+    window.addEventListener('pointerdown', unlock, { once: true });
+    return () => window.removeEventListener('pointerdown', unlock);
   }, []);
 
-  const playNotificationSound = useCallback(() => {
-    // Throttle: don't play more than once every 2 seconds
+  const playNotificationSound = useCallback(async () => {
+    // Throttle: don't play more than once every 1 second
     const now = Date.now();
-    if (now - lastPlayedRef.current < 2000) return;
+    if (now - lastPlayedRef.current < 1000) return;
     lastPlayedRef.current = now;
 
+    if (!unlockedRef.current) {
+      console.log('[Notification] Sound skipped (context not unlocked)');
+      return;
+    }
+
     try {
-      // Create audio context if needed
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-      }
-
       const ctx = audioContextRef.current;
-      
-      // Resume context if suspended (browser autoplay policy)
+      if (!ctx) return;
+
+      // Ensure context is running
       if (ctx.state === 'suspended') {
-        ctx.resume();
+        await ctx.resume();
       }
 
-      // Create a pleasant notification sound
       const oscillator = ctx.createOscillator();
       const gainNode = ctx.createGain();
 
       oscillator.connect(gainNode);
       gainNode.connect(ctx.destination);
 
-      // Two-tone notification sound
-      oscillator.frequency.setValueAtTime(880, ctx.currentTime); // A5
-      oscillator.frequency.setValueAtTime(1046.5, ctx.currentTime + 0.1); // C6
+      // Simple but pleasant two-tone beep
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(880, ctx.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(1046.5, ctx.currentTime + 0.1);
 
-      // Envelope for smooth sound
       gainNode.gain.setValueAtTime(0, ctx.currentTime);
-      gainNode.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.02);
-      gainNode.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.1);
-      gainNode.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.12);
+      gainNode.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.05);
       gainNode.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.3);
 
-      oscillator.type = 'sine';
       oscillator.start(ctx.currentTime);
       oscillator.stop(ctx.currentTime + 0.3);
 

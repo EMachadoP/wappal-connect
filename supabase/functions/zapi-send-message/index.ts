@@ -4,6 +4,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
 serve(async (req) => {
@@ -13,12 +14,18 @@ serve(async (req) => {
   const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
 
+  // Initialize admin client early so it's available in catch block
+  const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+
+  // Declare variables outside try so they're accessible in catch
+  let userId = 'system';
+  let conversation_id: string | undefined, content: string | undefined, senderName: string | undefined;
+
   try {
     const authHeader = req.headers.get('Authorization');
     // Permitir chamada interna com service key OU chamada de cliente com token de usuário
     const isServiceKey = authHeader?.includes(supabaseServiceKey);
-    let userId = 'system';
-    
+
     if (!isServiceKey) {
       if (!authHeader) throw new Error('Não autorizado: Sessão ausente');
       const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
@@ -29,10 +36,8 @@ serve(async (req) => {
       userId = user.id;
     }
 
-    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-    
     // Obter nome do atendente
-    let senderName = 'Atendente G7';
+    senderName = 'Atendente G7';
     if (userId !== 'system') {
       const { data: profile } = await supabaseAdmin
         .from('profiles')
@@ -43,14 +48,15 @@ serve(async (req) => {
         senderName = profile.display_name || profile.name || 'Atendente G7';
       }
     } else {
-      // Se for chamada de sistema (IA), usar nome do agente de IA configurado ou padrão
       senderName = 'Ana Mônica (IA)';
     }
 
-    const { conversation_id, content, message_type, media_url, sender_name: overrideSenderName } = await req.json();
-    
+    const json = await req.json();
+    ({ conversation_id, content } = json);
+    const { message_type, media_url, sender_name: overrideSenderName } = json;
+
     if (overrideSenderName) senderName = overrideSenderName;
-    
+
     const { data: conv } = await supabaseAdmin
       .from('conversations')
       .select('*, contacts(*)')
@@ -61,7 +67,7 @@ serve(async (req) => {
 
     // Credenciais - Tenta Env Var primeiro, depois banco
     const { data: settings } = await supabaseAdmin.from('zapi_settings').select('*').limit(1).single();
-    
+
     // Prioridade: Env Var > Banco
     const instanceId = Deno.env.get('ZAPI_INSTANCE_ID') || settings?.zapi_instance_id;
     const token = Deno.env.get('ZAPI_TOKEN') || settings?.zapi_token;
@@ -75,7 +81,7 @@ serve(async (req) => {
     // Determinar destinatário
     const contact = conv.contacts;
     let recipient = conv.chat_id;
-    
+
     // Fallbacks para garantir envio
     if (!recipient && contact) {
       recipient = contact.chat_lid || contact.phone || contact.lid;
@@ -98,18 +104,18 @@ serve(async (req) => {
         finalContent = `*${senderName}:*\n${content}`;
       }
       body.message = finalContent;
-    } else if (message_type === 'image') { 
-      endpoint = '/send-image'; 
+    } else if (message_type === 'image') {
+      endpoint = '/send-image';
       body.image = media_url;
-      body.caption = content ? `*${senderName}:*\n${content}` : ''; 
-    } else if (message_type === 'audio') { 
-      endpoint = '/send-audio'; 
-      body.audio = media_url; 
+      body.caption = content ? `*${senderName}:*\n${content}` : '';
+    } else if (message_type === 'audio') {
+      endpoint = '/send-audio';
+      body.audio = media_url;
     } else if (message_type === 'document' || message_type === 'file') {
       endpoint = '/send-document';
       body.document = media_url;
       // Tentar extrair extensão/nome se possível, ou usar padrão
-      body.fileName = 'documento'; 
+      body.fileName = 'documento';
     }
 
     const zapiBaseUrl = `https://api.z-api.io/instances/${instanceId}/token/${token}`;
@@ -125,7 +131,7 @@ serve(async (req) => {
     const result = await response.json();
     if (!response.ok) {
       console.error('[Z-API Error]', result);
-      throw new Error(result.message || 'Falha na API do WhatsApp');
+      throw new Error(`Falha Z-API (${response.status}): ${JSON.stringify(result)}`);
     }
 
     // Salvar registro no banco
@@ -144,21 +150,62 @@ serve(async (req) => {
       direction: 'outbound'
     });
 
-    // Atualizar conversa
-    await supabaseAdmin.from('conversations').update({
-      last_message_at: new Date().toISOString(),
-      // Se IA respondeu, talvez queira marcar algo? Por enquanto não.
-    }).eq('id', conversation_id);
+    // AUTO-PAUSE AI: Se um humano (não system) enviou mensagem, pausar IA por 30min
+    if (userId && userId !== 'system') {
+      console.log('[Auto-Pause] Human operator sent message, pausing AI for 30min');
 
-    return new Response(JSON.stringify({ success: true, messageId: result.messageId }), { 
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      const pauseUntil = new Date(Date.now() + 30 * 60 * 1000); // 30 minutos
+
+      await supabaseAdmin
+        .from('conversations')
+        .update({
+          human_control: true,
+          ai_mode: 'OFF',
+          ai_paused_until: pauseUntil.toISOString(),
+          last_message_at: new Date().toISOString(),
+        })
+        .eq('id', conversation_id);
+
+      // Log evento
+      await supabaseAdmin.from('ai_events').insert({
+        conversation_id,
+        event_type: 'human_intervention',
+        message: '👤 Operador assumiu conversa. IA pausada por 30min.',
+        metadata: {
+          user_id: userId,
+          paused_until: pauseUntil.toISOString(),
+        },
+      });
+    } else {
+      // Apenas atualizar timestamp se for IA
+      await supabaseAdmin.from('conversations').update({
+        last_message_at: new Date().toISOString(),
+      }).eq('id', conversation_id);
+    }
+
+    return new Response(JSON.stringify({ success: true, messageId: result.messageId }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
 
   } catch (error: any) {
     console.error('[Send Message Error]', error.message);
-    return new Response(JSON.stringify({ error: error.message }), { 
-      status: 500, 
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+
+    // Log detalhado no banco para debug remoto (com proteção contra crash)
+    try {
+      await supabaseAdmin.from('ai_logs').insert({
+        function_name: 'zapi-send-message',
+        input_data: { conversation_id: conversation_id || null, content: content || null, userId: userId || 'unknown' },
+        output_data: {},
+        error_message: error.message + (error.stack ? ` | ${error.stack}` : ''),
+        execution_time: 0
+      });
+    } catch (logError) {
+      console.error('[Failed to log error]', logError);
+    }
+
+    return new Response(JSON.stringify({ error: error.message, details: error }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
   }
 });

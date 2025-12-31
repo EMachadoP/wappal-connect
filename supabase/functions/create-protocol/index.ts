@@ -1,334 +1,238 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.1";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-serve(async (req: Request) => {
-  // Handle CORS preflight
+// Validar UUID para evitar crash do banco
+function isValidUUID(uuid: any) {
+  if (typeof uuid !== 'string' || !uuid) return false;
+  const regex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return regex.test(uuid);
+}
+
+serve(async (req) => {
+  // 1. Handle CORS early
   if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
+    return new Response('ok', { headers: corsHeaders });
   }
 
-  const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-  const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  console.log('--- [create-protocol] REQUISIÇÃO v5 ---');
+
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+  const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const supabaseClient = createClient(supabaseUrl, supabaseServiceKey, {
+    auth: { autoRefreshToken: false, persistSession: false }
+  });
+
+  let conversation_id_for_log = null;
+  const logBuffer: string[] = [];
+  const log = (msg: string) => { console.log(msg); logBuffer.push(msg); };
 
   try {
-    const body = await req.json();
-    const {
+    // 2. Parse Body
+    let body;
+    try {
+      body = await req.json();
+    } catch (e) {
+      throw new Error('Corpo da requisição não é um JSON válido.');
+    }
+
+    let {
       conversation_id,
       condominium_id,
+      participant_id,
       category,
       priority,
       summary,
+      created_by_agent_id,
       notify_group,
-      participant_id,
       requester_name,
       requester_role,
-      contact_id,
-      created_by_agent_id,
-      idempotency_key, // Optional: client-provided key to prevent duplicates
+      apartment
     } = body;
 
-    console.log('create-protocol called with:', JSON.stringify(body, null, 2));
+    if (isValidUUID(conversation_id)) conversation_id_for_log = conversation_id;
 
-    // Validate required fields
-    if (!conversation_id) {
-      return new Response(
-        JSON.stringify({ success: false, error: 'conversation_id is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    // 3. Validação de ID de Conversa
+    if (!conversation_id || !isValidUUID(conversation_id)) {
+      console.error('[create-protocol] Erro: conversation_id inválido:', conversation_id);
+      return new Response(JSON.stringify({ error: 'conversation_id inválido ou ausente' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
     }
 
-    // Check for existing protocol on this conversation (idempotency)
-    const { data: existingProtocol, error: checkError } = await supabase
-      .from('protocols')
-      .select('id, protocol_code, status')
-      .eq('conversation_id', conversation_id)
-      .eq('status', 'open')
+    // 4. Buscar conversa e contato
+    log(`[create-protocol] Buscando conversa ${conversation_id}...`);
+    const { data: conv, error: convError } = await supabaseClient
+      .from('conversations')
+      .select('id, active_condominium_id, contact_id, contacts(name, role, condominium_id)')
+      .eq('id', conversation_id)
       .maybeSingle();
 
-    if (checkError) {
-      console.error('Error checking existing protocol:', checkError);
-      return new Response(
-        JSON.stringify({ success: false, error: 'Failed to check existing protocol' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    if (convError) throw new Error(`Erro ao buscar conversa: ${convError.message}`);
+    if (!conv) throw new Error(`Conversa ${conversation_id} não encontrada.`);
+
+    const contact = conv.contacts as any;
+
+    // 5. Resolução de Condomínio
+    let resolvedCondoId = null;
+    let source = 'none';
+
+    if (condominium_id && isValidUUID(condominium_id)) {
+      resolvedCondoId = condominium_id;
+      source = 'input_direct';
     }
 
-    // If there's already an open protocol for this conversation, return it
-    if (existingProtocol) {
-      console.log('Existing open protocol found:', existingProtocol.protocol_code);
-      return new Response(
-        JSON.stringify({
-          success: true,
-          protocol: existingProtocol,
-          already_existed: true,
-        }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    if (!resolvedCondoId) {
+      resolvedCondoId = conv.active_condominium_id || contact?.condominium_id;
+      if (resolvedCondoId) source = 'conversation_or_contact';
     }
 
-    // Generate protocol code with atomic counter using advisory lock
-    const yearMonth = new Date().toISOString().slice(0, 7).replace('-', '');
-    
-    // Use a transaction with advisory lock to prevent race conditions
-    const { data: protocolData, error: protocolError } = await supabase.rpc('generate_protocol_code', {
-      p_year_month: yearMonth,
-    });
-
-    if (protocolError) {
-      console.error('Error generating protocol code via RPC:', protocolError);
-      
-      // Fallback: generate code with SELECT FOR UPDATE pattern
-      const { data: maxProtocol, error: maxError } = await supabase
-        .from('protocols')
-        .select('protocol_code')
-        .like('protocol_code', `${yearMonth}-%`)
-        .order('protocol_code', { ascending: false })
-        .limit(1)
+    if (!resolvedCondoId) {
+      const { data: partState } = await supabaseClient
+        .from('conversation_participant_state')
+        .select('participants(entity_id)')
+        .eq('conversation_id', conversation_id)
         .maybeSingle();
 
-      if (maxError) {
-        console.error('Error fetching max protocol:', maxError);
-        return new Response(
-          JSON.stringify({ success: false, error: 'Failed to generate protocol code' }),
-          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+      const entityId = (partState as any)?.participants?.entity_id;
+      if (entityId && isValidUUID(entityId)) {
+        resolvedCondoId = entityId;
+        source = 'sender_entity';
       }
-
-      let sequence = 1;
-      if (maxProtocol?.protocol_code) {
-        const parts = maxProtocol.protocol_code.split('-');
-        if (parts.length === 2) {
-          sequence = parseInt(parts[1], 10) + 1;
-        }
-      }
-      
-      const protocolCode = `${yearMonth}-${String(sequence).padStart(4, '0')}`;
-      
-      // Insert protocol with unique constraint protection
-      const { data: insertedProtocol, error: insertError } = await supabase
-        .from('protocols')
-        .insert({
-          protocol_code: protocolCode,
-          conversation_id,
-          condominium_id: condominium_id || null,
-          contact_id: contact_id || null,
-          participant_id: participant_id || null,
-          requester_name: requester_name || null,
-          requester_role: requester_role || null,
-          category: category || 'Geral',
-          priority: priority || 'medium',
-          summary: summary || null,
-          status: 'open',
-          created_by_type: 'agent',
-          created_by_agent_id: created_by_agent_id || null,
-        })
-        .select()
-        .single();
-
-      if (insertError) {
-        // Check if it's a unique constraint violation (race condition)
-        if (insertError.code === '23505') {
-          console.log('Race condition detected, retrying...');
-          // Retry once with incremented sequence
-          const retryCode = `${yearMonth}-${String(sequence + 1).padStart(4, '0')}`;
-          const { data: retryProtocol, error: retryError } = await supabase
-            .from('protocols')
-            .insert({
-              protocol_code: retryCode,
-              conversation_id,
-              condominium_id: condominium_id || null,
-              contact_id: contact_id || null,
-              participant_id: participant_id || null,
-              requester_name: requester_name || null,
-              requester_role: requester_role || null,
-              category: category || 'Geral',
-              priority: priority || 'medium',
-              summary: summary || null,
-              status: 'open',
-              created_by_type: 'agent',
-              created_by_agent_id: created_by_agent_id || null,
-            })
-            .select()
-            .single();
-
-          if (retryError) {
-            console.error('Retry insert failed:', retryError);
-            return new Response(
-              JSON.stringify({ success: false, error: 'Failed to create protocol after retry' }),
-              { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-            );
-          }
-
-          // Update conversation with protocol code
-          await supabase
-            .from('conversations')
-            .update({
-              protocol: retryProtocol.protocol_code,
-              priority: priority || 'medium',
-              active_condominium_id: condominium_id || null,
-            })
-            .eq('id', conversation_id);
-
-          console.log('Protocol created after retry:', retryProtocol.protocol_code);
-          return new Response(
-            JSON.stringify({ success: true, protocol: retryProtocol, already_existed: false }),
-            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        }
-
-        console.error('Insert error:', insertError);
-        return new Response(
-          JSON.stringify({ success: false, error: 'Failed to create protocol' }),
-          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      // Update conversation with protocol code
-      await supabase
-        .from('conversations')
-        .update({
-          protocol: insertedProtocol.protocol_code,
-          priority: priority || 'medium',
-          active_condominium_id: condominium_id || null,
-        })
-        .eq('id', conversation_id);
-
-      console.log('Protocol created successfully:', insertedProtocol.protocol_code);
-
-      // Trigger notification if requested
-      if (notify_group) {
-        try {
-          // Fetch condominium name if we have an ID
-          let condominiumName: string | null = null;
-          if (condominium_id) {
-            const { data: condo } = await supabase
-              .from('condominiums')
-              .select('name')
-              .eq('id', condominium_id)
-              .single();
-            condominiumName = condo?.name || null;
-          }
-          
-          await supabase.functions.invoke('protocol-opened', {
-            body: {
-              protocol_id: insertedProtocol.id,
-              protocol_code: insertedProtocol.protocol_code,
-              conversation_id,
-              condominium_id,
-              condominium_name: condominiumName,
-              category,
-              priority,
-              summary,
-              requester_name,
-              requester_role,
-            },
-          });
-          console.log('protocol-opened notification triggered');
-        } catch (notifyError) {
-          console.error('Failed to trigger protocol-opened notification:', notifyError);
-          // Don't fail the whole request for notification errors
-        }
-      }
-
-      return new Response(
-        JSON.stringify({ success: true, protocol: insertedProtocol, already_existed: false }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
     }
 
-    // RPC succeeded - use the generated code
-    const protocolCode = protocolData;
-    console.log('Protocol code generated via RPC:', protocolCode);
+    // 6. Criar Protocolo
+    const protocolCode = `PROT-${Date.now()}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
+    log(`[create-protocol] Criando ${protocolCode} via ${source}...`);
 
-    const { data: insertedProtocol, error: insertError } = await supabase
+    const { data: protocolRecord, error: protocolError } = await supabaseClient
       .from('protocols')
       .insert({
         protocol_code: protocolCode,
         conversation_id,
-        condominium_id: condominium_id || null,
-        contact_id: contact_id || null,
-        participant_id: participant_id || null,
-        requester_name: requester_name || null,
-        requester_role: requester_role || null,
-        category: category || 'Geral',
-        priority: priority || 'medium',
-        summary: summary || null,
+        condominium_id: resolvedCondoId,
+        participant_id: isValidUUID(participant_id) ? participant_id : null,
+        category: category || 'operational',
+        priority: priority || 'normal',
+        summary: summary || 'Gerado via sistema',
         status: 'open',
-        created_by_type: 'agent',
-        created_by_agent_id: created_by_agent_id || null,
+        created_by_agent_id: isValidUUID(created_by_agent_id) ? created_by_agent_id : null,
+        created_by_type: created_by_agent_id ? 'agent' : 'ai',
+        requester_name: requester_name || contact?.name || 'Não informado',
+        requester_role: requester_role || contact?.role || 'Morador',
+        apartment: apartment
       })
       .select()
       .single();
 
-    if (insertError) {
-      console.error('Insert error after RPC:', insertError);
-      return new Response(
-        JSON.stringify({ success: false, error: 'Failed to create protocol' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
+    if (protocolError) throw new Error(`Erro ao inserir protocolo: ${protocolError.message}`);
 
-    // Update conversation
-    await supabase
-      .from('conversations')
-      .update({
-        protocol: insertedProtocol.protocol_code,
-        priority: priority || 'medium',
-        active_condominium_id: condominium_id || null,
-      })
-      .eq('id', conversation_id);
+    // 7. Ações Pós-Criação
+    try {
+      await supabaseClient.from('conversations').update({ protocol: protocolCode, active_condominium_id: resolvedCondoId || conv.active_condominium_id }).eq('id', conversation_id);
+    } catch (e) { log(`Falha update conv: ${e.message}`); }
 
-    // Trigger notification if requested
+    // NOTIFY GROUP (WhatsApp + Asana via protocol-opened)
     if (notify_group) {
       try {
-        // Fetch condominium name if we have an ID
-        let condominiumName: string | null = null;
-        if (condominium_id) {
-          const { data: condo } = await supabase
-            .from('condominiums')
-            .select('name')
-            .eq('id', condominium_id)
-            .single();
-          condominiumName = condo?.name || null;
+        log(`[create-protocol] Disparando protocol-opened para ${protocolCode}...`);
+
+        let condoName = 'Não identificado';
+        if (resolvedCondoId) {
+          const { data: condoData } = await supabaseClient.from('condominiums').select('name').eq('id', resolvedCondoId).maybeSingle();
+          if (condoData) condoName = condoData.name;
         }
-        
-        await supabase.functions.invoke('protocol-opened', {
-          body: {
-            protocol_id: insertedProtocol.id,
-            protocol_code: insertedProtocol.protocol_code,
-            conversation_id,
-            condominium_id,
-            condominium_name: condominiumName,
-            category,
-            priority,
-            summary,
-            requester_name,
-            requester_role,
+
+        await fetch(`${supabaseUrl}/functions/v1/protocol-opened`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${supabaseServiceKey}`,
+            'apikey': supabaseServiceKey,
+            'Content-Type': 'application/json'
           },
+          body: JSON.stringify({
+            protocol_id: protocolRecord.id,
+            protocol_code: protocolCode,
+            priority: priority || 'normal',
+            category: category || 'operational',
+            summary: summary || 'Gerado via sistema',
+            condominium_id: resolvedCondoId,
+            condominium_name: condoName,
+            conversation_id: conversation_id,
+            contact_id: conv.contact_id,
+            requester_name: requester_name || contact?.name || 'Não informado',
+            requester_role: requester_role || contact?.role || 'Morador'
+          })
         });
-      } catch (notifyError) {
-        console.error('Failed to trigger notification:', notifyError);
-      }
+      } catch (e) { log(`Falha protocol-opened: ${e.message}`); }
+    } else {
+      // Fallback manual notifications if notify_group is false
+      try {
+        await supabaseClient.from('notifications').insert({
+          conversation_id,
+          notification_type: 'ticket_created',
+          message: `Protocolo ${protocolCode} criado`,
+          metadata: { protocol_code: protocolCode, protocol_id: protocolRecord.id }
+        });
+      } catch (e) { log(`Falha notificacao: ${e.message}`); }
+
+      try {
+        const msg = `✅ *Protocolo Gerado*\n\n🔢 *Número:* ${protocolCode}\n\nSeu atendimento foi registrado com sucesso.`;
+        await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
+          body: JSON.stringify({ conversation_id, content: msg, message_type: 'text' })
+        });
+      } catch (e) { log(`Falha Z-API: ${e.message}`); }
     }
 
-    console.log('Protocol created successfully:', insertedProtocol.protocol_code);
-    return new Response(
-      JSON.stringify({ success: true, protocol: insertedProtocol, already_existed: false }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    // 8. Log Final no Banco (COM PROVIDER)
+    try {
+      await supabaseClient.from('ai_logs').insert({
+        conversation_id,
+        status: 'success',
+        model: 'create-protocol',
+        provider: 'internal',
+        input_excerpt: `Resolved via ${source}${notify_group ? ' (notified group)' : ''}`,
+        output_text: `Protocol: ${protocolCode}\nLogs: ${logBuffer.join('\n')}`
+      });
+    } catch (e) { console.error('Falha ao logar em ai_logs:', e.message); }
 
-  } catch (error: unknown) {
-    console.error('Unexpected error in create-protocol:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Internal server error';
-    return new Response(
-      JSON.stringify({ success: false, error: errorMessage }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return new Response(JSON.stringify({
+      success: true,
+      protocol_code: protocolCode,
+      protocol: {
+        ...protocolRecord,
+        protocol_code: protocolCode
+      },
+      data: protocolRecord
+    }), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
+
+  } catch (error: any) {
+    console.error('[create-protocol] ERRO FATAL:', error.message);
+
+    try {
+      await supabaseClient.from('ai_logs').insert({
+        conversation_id: conversation_id_for_log,
+        status: 'error',
+        error_message: error.message,
+        model: 'create-protocol',
+        provider: 'internal', // REQUERIDO PELO BANCO
+        input_excerpt: logBuffer.join('\n')
+      });
+    } catch (e) { console.error('Falha ao logar erro em ai_logs:', e.message); }
+
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
   }
 });

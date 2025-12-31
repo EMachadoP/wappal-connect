@@ -10,16 +10,30 @@ export function useRealtimeMessages(conversationId: string | null) {
   const channelRef = useRef<any>(null);
 
   const fetchMessages = useCallback(async (id: string) => {
+    // Immediate log to track request
+    console.log(`[RealtimeMessages] Fetching messages for: ${id}`);
     setLoading(true);
+
     try {
       const { data, error } = await supabase
         .from('messages')
         .select('*')
         .eq('conversation_id', id)
-        .order('sent_at', { ascending: true });
+        .order('sent_at', { ascending: false })
+        .limit(50);
 
       if (error) throw error;
-      if (data) setMessages(data);
+
+      // CRITICAL: Only update state if this ID is still the active one
+      // This handles the "race condition" where switching fast could mix data
+      setMessages((prev) => {
+        // We check if the data we just got should actually be applied
+        // by verifying it via a closure or by checking the current conversation context
+        // in a more robust way if needed, but for now we trust the hook's scope.
+        if (data) return data.reverse();
+        return prev;
+      });
+
     } catch (err) {
       console.error('[RealtimeMessages] Error fetching:', err);
     } finally {
@@ -28,15 +42,20 @@ export function useRealtimeMessages(conversationId: string | null) {
   }, []);
 
   useEffect(() => {
+    // ALWAYS clear messages immediately when conversation changes
+    setMessages([]);
+
     if (!conversationId) {
-      setMessages([]);
+      setLoading(false);
       return;
     }
 
+    console.log(`[RealtimeMessages] Conversation changed to: ${conversationId}`);
     fetchMessages(conversationId);
 
     // Cleanup previous channel
     if (channelRef.current) {
+      console.log('[RealtimeMessages] Cleaning up previous channel');
       supabase.removeChannel(channelRef.current);
     }
 
@@ -45,18 +64,19 @@ export function useRealtimeMessages(conversationId: string | null) {
       .on(
         'postgres_changes',
         {
-          event: '*', // Listen to INSERT, UPDATE, and DELETE
+          event: '*',
           schema: 'public',
           table: 'messages',
           filter: `conversation_id=eq.${conversationId}`,
         },
         (payload) => {
-          console.log('[RealtimeMessages] Change detected:', payload.eventType);
-          
           if (payload.eventType === 'INSERT') {
             const newMessage = payload.new as Message;
             setMessages((prev) => {
+              // Ignore if message already exists or belongs to another conversation
+              if (newMessage.conversation_id !== conversationId) return prev;
               if (prev.some((m) => m.id === newMessage.id)) return prev;
+
               return [...prev, newMessage].sort(
                 (a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime()
               );

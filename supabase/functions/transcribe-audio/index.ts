@@ -14,137 +14,172 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  let msgIdForLog: string | null = null;
+  let convIdForLog: string | null = null;
+
   try {
-    const { message_id, audio_url } = await req.json();
-    
+    const body = await req.json();
+    const { message_id, audio_url, conversation_id } = body;
+    msgIdForLog = message_id;
+    convIdForLog = conversation_id;
+
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+
+    console.log(`[Transcribe] 🎤 Iniciando: ${message_id}`);
+
     if (!message_id || !audio_url) {
-      return new Response(JSON.stringify({ 
-        error: 'message_id and audio_url are required' 
-      }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      throw new Error('message_id e audio_url são obrigatórios');
     }
-    
+
+    // Verificar se tem OpenAI Key
     const openaiKey = Deno.env.get('OPENAI_API_KEY');
     if (!openaiKey) {
-      console.error('OPENAI_API_KEY not configured');
-      return new Response(JSON.stringify({ 
-        error: 'Transcription service not configured' 
-      }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      throw new Error('OPENAI_API_KEY não configurada. Por favor, execute: npx supabase secrets set OPENAI_API_KEY="sua_chave"');
     }
-    
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-    
-    console.log(`Transcribing audio for message ${message_id}:`, audio_url);
-    
-    // Download audio file
-    const audioResponse = await fetch(audio_url);
+
+    // Buscar token Z-API
+    const { data: zapiSettings } = await supabaseAdmin
+      .from('zapi_settings')
+      .select('zapi_security_token')
+      .maybeSingle();
+
+    const zapiClientToken = Deno.env.get('ZAPI_CLIENT_TOKEN') || zapiSettings?.zapi_security_token;
+
+    // Download do áudio
+    console.log(`[Transcribe] Baixando áudio...`);
+    const fetchHeaders: Record<string, string> = {
+      'User-Agent': 'G7-Client-Connector/1.0'
+    };
+
+    if (zapiClientToken) {
+      fetchHeaders['Client-Token'] = zapiClientToken;
+    }
+
+    const audioResponse = await fetch(audio_url, { headers: fetchHeaders });
+
     if (!audioResponse.ok) {
-      console.error('Failed to download audio:', audioResponse.status);
-      return new Response(JSON.stringify({ 
-        error: 'Failed to download audio file' 
-      }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      throw new Error(`Download falhou: ${audioResponse.status}`);
     }
-    
+
     const audioBlob = await audioResponse.blob();
-    console.log(`Audio downloaded: ${audioBlob.size} bytes, type: ${audioBlob.type}`);
-    
-    // Prepare form data for OpenAI Whisper API
+    console.log(`[Transcribe] ✅ Baixado: ${audioBlob.size} bytes`);
+
+    // Preparar FormData para OpenAI Transcription
     const formData = new FormData();
-    
-    // Determine file extension from content type or URL
-    let extension = 'ogg';
-    if (audio_url.includes('.mp3')) extension = 'mp3';
-    else if (audio_url.includes('.m4a')) extension = 'm4a';
-    else if (audio_url.includes('.wav')) extension = 'wav';
-    else if (audioBlob.type.includes('mpeg')) extension = 'mp3';
-    else if (audioBlob.type.includes('mp4')) extension = 'm4a';
-    
-    const file = new File([audioBlob], `audio.${extension}`, { type: audioBlob.type || 'audio/ogg' });
-    formData.append('file', file);
-    formData.append('model', 'whisper-1');
-    formData.append('language', 'pt'); // Portuguese
+    formData.append('file', audioBlob, 'audio.ogg');
+    // Usando o modelo gpt-4o-mini-transcribe para melhor custo (US$ 0,003/min)
+    formData.append('model', 'gpt-4o-mini-transcribe');
+    formData.append('language', 'pt');
     formData.append('response_format', 'json');
-    
-    // Call OpenAI Whisper API
-    console.log('Calling OpenAI Whisper API...');
-    const whisperResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+
+    console.log(`[Transcribe] Enviando para OpenAI (gpt-4o-mini-transcribe)...`);
+
+    // Chamar OpenAI API
+    let whisperResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${openaiKey}`,
+        'Authorization': `Bearer ${openaiKey}`
       },
-      body: formData,
+      body: formData
     });
-    
+
+    // Fallback para whisper-1 se o modelo novo não estiver disponível
+    if (whisperResponse.status === 404 || whisperResponse.status === 400) {
+      console.log(`[Transcribe] gpt-4o-mini-transcribe não disponível. Tentando whisper-1...`);
+      formData.set('model', 'whisper-1');
+      whisperResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${openaiKey}`
+        },
+        body: formData
+      });
+    }
+
+    console.log(`[Transcribe] Status Resposta: ${whisperResponse.status}`);
+
     if (!whisperResponse.ok) {
-      const errorText = await whisperResponse.text();
-      console.error('Whisper API error:', whisperResponse.status, errorText);
-      return new Response(JSON.stringify({ 
-        error: `Transcription failed: ${whisperResponse.status}` 
-      }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      const errText = await whisperResponse.text();
+      console.error(`[Transcribe] Erro Whisper:`, errText);
+      throw new Error(`Whisper API erro (${whisperResponse.status}): ${errText.substring(0, 200)}`);
     }
-    
-    const whisperResult = await whisperResponse.json();
-    const transcript = whisperResult.text?.trim() || '';
-    
-    console.log(`Transcription result for ${message_id}:`, transcript.substring(0, 100));
-    
-    if (!transcript) {
-      console.log('Empty transcription result');
-      return new Response(JSON.stringify({ 
-        success: true,
-        transcript: '',
-        message: 'Audio was empty or inaudible',
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-    
-    // Update message with transcript
-    const { error: updateError } = await supabase
+
+    const result = await whisperResponse.json();
+    const transcript = result.text?.trim() || "";
+
+    console.log(`[Transcribe] ✅ Transcrito: "${transcript.substring(0, 100)}..."`);
+
+    // Atualizar mensagem
+    const { error: updateError } = await supabaseAdmin
       .from('messages')
       .update({
-        transcript: transcript,
+        transcript: transcript || '[Sem áudio detectável]',
+        content: transcript ? `🎤 ${transcript}` : '[Sem áudio detectável]',
         transcribed_at: new Date().toISOString(),
         transcript_provider: 'openai-whisper',
       })
       .eq('id', message_id);
-    
+
     if (updateError) {
-      console.error('Error updating message with transcript:', updateError);
-      return new Response(JSON.stringify({ 
-        error: 'Failed to save transcript',
-        transcript, // Still return the transcript
-      }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      throw updateError;
     }
-    
-    console.log(`Successfully transcribed message ${message_id}`);
-    
+
+    // Log sucesso
+    await supabaseAdmin.from('ai_logs').insert({
+      conversation_id,
+      status: 'success',
+      model: 'whisper-1',
+      provider: 'openai',
+      input_excerpt: `✅ ${transcript.substring(0, 100)}`
+    });
+
+    // Trigger IA
+    if (conversation_id && transcript) {
+      console.log('[Transcribe] Disparando IA...');
+      await fetch(`${supabaseUrl}/functions/v1/ai-maybe-reply`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${supabaseServiceKey}`
+        },
+        body: JSON.stringify({ conversation_id }),
+      }).catch(e => console.error('[Transcribe] Erro ao disparar IA:', e));
+    }
+
     return new Response(JSON.stringify({
       success: true,
-      transcript,
-      message_id,
+      transcript
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
-    
-  } catch (error) {
-    console.error('Transcription error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return new Response(JSON.stringify({ error: errorMessage }), {
+
+  } catch (error: any) {
+    console.error('[Transcribe] ❌ ERRO:', error.message);
+
+    try {
+      const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+
+      await supabaseAdmin.from('ai_logs').insert({
+        conversation_id: convIdForLog,
+        status: 'error',
+        error_message: error.message,
+        model: 'whisper-1',
+        provider: 'openai'
+      });
+
+      if (msgIdForLog) {
+        await supabaseAdmin.from('messages').update({
+          transcript: '[Erro na transcrição]',
+          content: `[Áudio - ${error.message.substring(0, 50)}]`,
+          transcribed_at: new Date().toISOString(),
+          transcript_provider: 'error'
+        }).eq('id', msgIdForLog);
+      }
+    } catch (logErr) {
+      console.error('[Transcribe] Erro ao logar:', logErr);
+    }
+
+    return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });

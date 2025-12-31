@@ -87,9 +87,11 @@ export function GenerateProtocolModal({
   const fetchAllCondominiums = async () => {
     setLoadingCondominiums(true);
     try {
+      // Use 'entities' table which is where Identificar Remetente saves
       const { data, error } = await supabase
-        .from('condominiums')
+        .from('entities')
         .select('id, name')
+        .eq('type', 'condominio')
         .order('name');
 
       if (error) throw error;
@@ -98,12 +100,12 @@ export function GenerateProtocolModal({
       // Try to match entity name with condominium
       if (participant?.entity?.name && data) {
         const entityName = participant.entity.name.toLowerCase();
-        const matchedCondo = data.find(c => 
+        const matchedCondo = data.find(c =>
           c.name.toLowerCase() === entityName ||
           c.name.toLowerCase().includes(entityName) ||
           entityName.includes(c.name.toLowerCase())
         );
-        
+
         if (matchedCondo) {
           setEntityMatchedCondo(matchedCondo);
           if (!activeCondominiumId) {
@@ -124,19 +126,30 @@ export function GenerateProtocolModal({
   };
 
   // Use contact condominiums first, fallback to all condominiums
-  const availableCondominiums = contactCondominiums.length > 0 
-    ? contactCondominiums 
+  let availableCondominiums = contactCondominiums.length > 0
+    ? contactCondominiums
     : allCondominiums;
 
+  // Ensure participant's entity is in the list if it exists
+  if (participant?.entity && !availableCondominiums.find(c => c.id === participant.entity?.id)) {
+    availableCondominiums = [
+      { id: participant.entity.id, name: participant.entity.name },
+      ...availableCondominiums
+    ];
+  }
+
   useEffect(() => {
-    if (activeCondominiumId) {
+    // Priority: Participant's registered entity > activeCondominiumId > Fuzzy Match > available[0]
+    if (participant?.entity?.id) {
+      setCondominiumId(participant.entity.id);
+    } else if (activeCondominiumId) {
       setCondominiumId(activeCondominiumId);
     } else if (entityMatchedCondo) {
       setCondominiumId(entityMatchedCondo.id);
     } else if (availableCondominiums.length === 1) {
       setCondominiumId(availableCondominiums[0].id);
     }
-  }, [activeCondominiumId, availableCondominiums, entityMatchedCondo]);
+  }, [activeCondominiumId, availableCondominiums, entityMatchedCondo, participant]);
 
   const handleCreateCondominium = async () => {
     if (!newCondoName.trim()) {
@@ -147,8 +160,11 @@ export function GenerateProtocolModal({
     setCreatingCondo(true);
     try {
       const { data, error } = await supabase
-        .from('condominiums')
-        .insert({ name: newCondoName.trim() })
+        .from('entities')
+        .insert({
+          name: newCondoName.trim(),
+          type: 'condominio'
+        })
         .select()
         .single();
 
@@ -190,14 +206,27 @@ export function GenerateProtocolModal({
 
     setLoading(true);
     try {
+      // Verify user session first
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+
+      if (sessionError || !session) {
+        throw new Error('Sessão expirada. Por favor, faça login novamente.');
+      }
+
       // Get current user id
-      const resolvedUserId = currentUserId ?? (await supabase.auth.getUser()).data.user?.id ?? null;
+      const resolvedUserId = currentUserId ?? session.user.id;
       if (!resolvedUserId) {
         throw new Error('Usuário não autenticado');
       }
 
       // Get condominium name for notification
       const selectedCondo = availableCondominiums.find(c => c.id === condominiumId);
+
+      console.log('[GenerateProtocolModal] Calling create-protocol with:', {
+        conversation_id: conversationId,
+        condominium_id: condominiumId,
+        participant_id: participant?.id,
+      });
 
       // Call backend to create protocol with idempotency
       const { data, error } = await supabase.functions.invoke('create-protocol', {
@@ -238,7 +267,7 @@ export function GenerateProtocolModal({
       const nowIso = new Date().toISOString();
       const { error: conversationUpdateError } = await supabase
         .from('conversations')
-        .update({ 
+        .update({
           assigned_to: resolvedUserId,
           assigned_at: nowIso,
           assigned_by: resolvedUserId,
@@ -276,8 +305,21 @@ export function GenerateProtocolModal({
       onProtocolCreated?.(protocolCode);
       onOpenChange(false);
     } catch (error) {
-      console.error('Error creating protocol:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Erro ao criar protocolo';
+      console.error('[GenerateProtocolModal] Error creating protocol:', error);
+
+      let errorMessage = 'Erro ao criar protocolo';
+
+      if (error instanceof Error) {
+        errorMessage = error.message;
+      } else if (typeof error === 'object' && error !== null) {
+        const err = error as any;
+        if (err.message) {
+          errorMessage = err.message;
+        } else if (err.error) {
+          errorMessage = err.error;
+        }
+      }
+
       toast.error(errorMessage);
     } finally {
       setLoading(false);
@@ -325,7 +367,7 @@ export function GenerateProtocolModal({
           {/* Condomínio */}
           <div className="grid gap-2">
             <Label htmlFor="condominium">Condomínio *</Label>
-            
+
             {/* Entity suggestion when no condominium matched */}
             {showEntitySuggestion && (
               <div className="flex items-center gap-2 p-2 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-md text-sm">
@@ -376,9 +418,9 @@ export function GenerateProtocolModal({
                     )}
                   </SelectContent>
                 </Select>
-                <Button 
-                  variant="outline" 
-                  size="icon" 
+                <Button
+                  variant="outline"
+                  size="icon"
                   onClick={() => setShowNewCondoForm(true)}
                   title="Cadastrar novo condomínio"
                 >

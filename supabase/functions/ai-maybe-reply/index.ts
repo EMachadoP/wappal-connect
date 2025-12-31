@@ -17,16 +17,63 @@ serve(async (req) => {
 
     console.log('[ai-maybe-reply] Processando:', conversation_id);
 
-    // 1. Carregar dados da conversa e configurações
+    // 1. Debounce Logic: Aguardar mensagens seguidas
+    console.log('[ai-maybe-reply] Iniciando debounce de 5 segundos...');
+
+    const { data: initialLatest } = await supabase
+      .from('messages')
+      .select('id')
+      .eq('conversation_id', conversation_id)
+      .eq('sender_type', 'contact')
+      .order('sent_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const initialId = initialLatest?.id;
+
+    await new Promise(r => setTimeout(r, 5000));
+
+    const { data: checkLatest } = await supabase
+      .from('messages')
+      .select('id')
+      .eq('conversation_id', conversation_id)
+      .eq('sender_type', 'contact')
+      .order('sent_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (checkLatest && checkLatest.id !== initialId) {
+      console.log('[ai-maybe-reply] Debounce: Nova mensagem detectada. Abortando.');
+      return new Response(JSON.stringify({ success: false, reason: 'Debounced' }));
+    }
+
+    // 2. Carregar dados da conversa e configurações
     const { data: conv } = await supabase
       .from('conversations')
       .select('*, contacts(*)')
       .eq('id', conversation_id)
       .single();
 
-    if (!conv || conv.ai_mode === 'OFF') return new Response(JSON.stringify({ success: false, reason: 'IA OFF' }));
+    if (!conv || conv.ai_mode === 'OFF') {
+      return new Response(JSON.stringify({ success: false, reason: 'IA OFF' }));
+    }
 
-    // 2. Buscar histórico de mensagens
+    // 3. Checar papel do participante (Fornecedor)
+    const { data: participantState } = await supabase
+      .from('conversation_participant_state')
+      .select('current_participant_id, participants(name, role_type, entity_id, entities(name))')
+      .eq('conversation_id', conversation_id)
+      .maybeSingle();
+
+    if (participantState?.participants) {
+      const participant = participantState.participants as any;
+      if (participant.role_type === 'fornecedor') {
+        console.log('[ai-maybe-reply] Bloqueando resposta automática para Fornecedor');
+        return new Response(JSON.stringify({ success: false, reason: 'Role: fornecedor' }));
+      }
+    }
+
+    // 4. Buscar histórico de mensagens
     const { data: msgs } = await supabase
       .from('messages')
       .select('content, sender_type')
@@ -39,20 +86,67 @@ serve(async (req) => {
       content: m.content || '',
     }));
 
-    // 3. Buscar prompt e configurações globais
-    const { data: settings } = await supabase.from('ai_settings').select('*').single();
-    
+    // 5. Buscar prompt e configurações globais
+    const { data: settings } = await supabase.from('ai_settings').select('*').maybeSingle();
     let systemPrompt = settings?.base_system_prompt || "Você é um assistente virtual.";
+    let contextInfo = '';
+
+    if (participantState?.participants) {
+      const participant = participantState.participants as any;
+      const roleLabels: Record<string, string> = {
+        'sindico': 'Síndico',
+        'subsindico': 'Subsíndico',
+        'porteiro': 'Porteiro',
+        'zelador': 'Zelador',
+        'morador': 'Morador',
+        'administrador': 'Administrador',
+        'conselheiro': 'Conselheiro',
+        'funcionario': 'Funcionário',
+        'supervisor_condominial': 'Supervisor Condominial',
+        'visitante': 'Visitante',
+        'prestador': 'Prestador de Serviço',
+        'fornecedor': 'Fornecedor',
+        'outro': 'Outro'
+      };
+
+      const roleLabel = roleLabels[participant.role_type] || participant.role_type;
+      const condoName = participant.entities?.name || 'não especificado';
+
+      contextInfo += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+      contextInfo += `\n📋 DADOS DO REMETENTE (JÁ IDENTIFICADOS)`;
+      contextInfo += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+      contextInfo += `\n👤 Nome: ${participant.name}`;
+      if (participant.role_type) contextInfo += `\n💼 Função: ${roleLabel}`;
+      if (participant.entities?.name) contextInfo += `\n🏢 Condomínio: ${condoName}`;
+      contextInfo += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+      contextInfo += `\n\n⚠️ INSTRUÇÕES CRÍTICAS:`;
+      contextInfo += `\n1. NUNCA pergunte o nome do remetente - você JÁ SABE que é "${participant.name}"`;
+      if (participant.role_type) contextInfo += `\n2. NUNCA pergunte a função - você JÁ SABE que é "${roleLabel}"`;
+      if (participant.entities?.name) contextInfo += `\n3. NUNCA pergunte o condomínio - você JÁ SABE que é "${condoName}"`;
+      contextInfo += `\n4. Use essas informações DIRETAMENTE ao criar protocolos`;
+    }
+
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('pt-BR', {
+      timeZone: settings?.timezone || 'America/Recife',
+      dateStyle: 'full',
+      timeStyle: 'medium',
+    });
+    const currentTimeStr = formatter.format(now);
+
     const variables: Record<string, string> = {
       '{{customer_name}}': conv.contacts?.name || 'Cliente',
-      '{{timezone}}': settings?.timezone || 'America/Recife',
+      '{{current_time}}': currentTimeStr,
     };
 
     for (const [key, value] of Object.entries(variables)) {
       systemPrompt = systemPrompt.replace(new RegExp(key, 'g'), value);
     }
 
-    // 4. Chamar geração da resposta
+    systemPrompt += contextInfo;
+
+    // 6. Gerar resposta
     console.log('[ai-maybe-reply] Chamando geração...');
     const aiResponse = await fetch(`${supabaseUrl}/functions/v1/ai-generate-reply`, {
       method: 'POST',
@@ -61,15 +155,16 @@ serve(async (req) => {
         'Authorization': `Bearer ${supabaseServiceKey}`,
       },
       body: JSON.stringify({
-        messages: messages,
-        systemPrompt: systemPrompt,
+        messages,
+        systemPrompt,
+        conversation_id,
       }),
     });
 
     const aiData = await aiResponse.json();
     if (!aiData.text) throw new Error('IA não gerou texto');
 
-    // 5. Enviar via Z-API
+    // 7. Enviar via Z-API
     console.log('[ai-maybe-reply] Enviando resposta via Z-API');
     await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
       method: 'POST',
@@ -87,7 +182,7 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('[ai-maybe-reply] Erro:', error);
     return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }

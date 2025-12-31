@@ -1,0 +1,18 @@
+{
+    "name": "wappal-connect-tests",
+    "version": "1.0.0",
+    "description": "Automated tests for Wappal Connect",
+    "scripts": {
+        "test": "npm run test:unit && npm run test:integration",
+        "test:unit": "node tests/unit/create-ticket.test.js",
+        "test:integration": "node tests/integration/ticket-creation.test.js",
+        "test:watch": "nodemon --watch tests --watch supabase/functions --exec npm test"
+    },
+    "devDependencies": {
+        "nodemon": "^3.0.2"
+    },
+    "dependencies": {
+        "@supabase/supabase-js": "^2.89.0",
+        "dotenv": "^17.2.3"
+    }
+}

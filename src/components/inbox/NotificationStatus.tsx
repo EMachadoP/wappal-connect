@@ -30,7 +30,7 @@ export function NotificationStatus({ conversationId }: NotificationStatusProps) 
         .select('*')
         .eq('conversation_id', conversationId)
         .eq('notification_type', 'ticket_created')
-        .single();
+        .maybeSingle();
 
       if (!error && data) {
         setNotification(data);
