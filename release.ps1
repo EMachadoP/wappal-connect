@@ -26,7 +26,7 @@ Write-Host ""
 # 2. Git Commit
 # ============================================
 Write-Host "💾 Fazendo commit..." -ForegroundColor Yellow
-git commit -m $CommitMessage
+git commit -m "$CommitMessage"
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "⚠️  Nenhuma mudança para commit ou erro" -ForegroundColor Yellow
