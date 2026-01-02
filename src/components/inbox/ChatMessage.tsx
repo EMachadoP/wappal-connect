@@ -49,7 +49,7 @@ export function ChatMessage({
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [localContent, setLocalContent] = useState(content);
   const [isDeleted, setIsDeleted] = useState(false);
-  
+
   const time = format(new Date(sentAt), 'HH:mm');
 
   const handleDelete = async () => {
@@ -105,7 +105,16 @@ export function ChatMessage({
       case 'audio':
         return (
           <div className="flex flex-col gap-2 mb-2">
-            <audio src={mediaUrl} controls className="max-w-xs" />
+            <audio
+              src={mediaUrl}
+              controls
+              className="max-w-xs"
+              crossOrigin="anonymous"
+              onError={(e) => {
+                console.error('Audio playback error:', e);
+                console.log('Audio URL:', mediaUrl);
+              }}
+            />
             {transcript && (
               <div className={cn(
                 "text-xs p-2 rounded-md max-w-xs",
@@ -168,13 +177,13 @@ export function ChatMessage({
             {senderName}
           </p>
         )}
-        
+
         {renderMedia()}
-        
+
         {localContent && (
           <p className="text-sm whitespace-pre-wrap break-words">{localContent}</p>
         )}
-        
+
         <div className={cn('flex items-center gap-1 mt-1', isOutgoing ? 'justify-end' : 'justify-start')}>
           <span className={cn('text-[10px]', isOutgoing ? 'text-primary-foreground/70' : 'text-muted-foreground')}>
             {time}
