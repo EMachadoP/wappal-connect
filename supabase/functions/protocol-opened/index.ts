@@ -166,7 +166,17 @@ serve(async (req) => {
     let asanaTaskGid: string | null = null;
 
     // Formatar dados para exibição
-    const formattedCondominiumName = titleCasePtBR(condominium_name) || "Não identificado";
+    // Tentar extrair nome do condomínio do summary se não fornecido
+    let extractedCondominiumName = condominium_name;
+    if (!extractedCondominiumName && summary) {
+      // Procurar padrões como "Condomínio X", "Cond. X", "Edifício X"
+      const condMatch = summary.match(/(?:Condomínio|Cond\.|Edifício|Ed\.)\s+([A-Za-zÀ-ÿ\s]+?)(?:\.|,|$|\s-|\sS)/i);
+      if (condMatch) {
+        extractedCondominiumName = condMatch[1].trim();
+      }
+    }
+
+    const formattedCondominiumName = titleCasePtBR(extractedCondominiumName) || "Não Identificado";
     const formattedRequesterName = requester_name || "Não identificado";
     const formattedRequesterRole = translateRole(requester_role);
     const formattedCategory = translateCategory(category || "operational");

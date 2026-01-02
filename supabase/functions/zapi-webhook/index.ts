@@ -140,10 +140,16 @@ serve(async (req) => {
     let msgType: "text" | "image" | "video" | "audio" | "document" | "system" = "text";
     const pType = (payload.type || "").toLowerCase();
 
-    if (pType === "audio" || pType === "ptt" || pType === "voice" || payload.audio || payload.audioUrl) msgType = "audio";
-    else if (pType === "image" || payload.image || payload.imageUrl) msgType = "image";
-    else if (pType === "video" || payload.video || payload.videoUrl) msgType = "video";
-    else if (pType === "document" || payload.document || payload.documentUrl) msgType = "document";
+    // Detectar tipo por campos de mídia no payload (prioridade)
+    if (payload.audio || payload.audioUrl || payload.audio?.url || payload.audio?.audioUrl) msgType = "audio";
+    else if (payload.image || payload.imageUrl || payload.image?.url || payload.image?.imageUrl) msgType = "image";
+    else if (payload.video || payload.videoUrl || payload.video?.url || payload.video?.videoUrl) msgType = "video";
+    else if (payload.document || payload.documentUrl || payload.document?.url || payload.document?.documentUrl) msgType = "document";
+    // Fallback: detectar por type string
+    else if (pType === "audio" || pType === "ptt" || pType === "voice") msgType = "audio";
+    else if (pType === "image") msgType = "image";
+    else if (pType === "video") msgType = "video";
+    else if (pType === "document") msgType = "document";
 
     if (!content && msgType !== "text") {
       const fileName = payload.fileName || payload.document?.fileName || payload.image?.fileName || "";
