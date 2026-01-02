@@ -176,11 +176,26 @@ git push origin v1.2.0
 
 Se você alterou Edge Functions no Supabase:
 
+#### Opção 1: Script Automático (Recomendado) ⭐
+
+```bash
+# Deploy de TODAS as funções de uma vez
+.\deploy-functions.ps1
+```
+
+**Vantagens:**
+- ✅ Faz deploy de todas as funções automaticamente
+- ✅ Mostra progresso de cada uma
+- ✅ Não precisa lembrar quais alterou
+- ✅ Resumo no final
+
+#### Opção 2: Deploy Manual
+
 ```bash
 # Deploy de função específica
 npx supabase functions deploy nome-da-funcao
 
-# Ou deploy de todas
+# Ou deploy de todas manualmente
 npx supabase functions deploy
 ```
 
@@ -190,6 +205,9 @@ npx supabase functions deploy
 - `ai-maybe-reply` - Respostas automáticas da IA
 - `assign-conversation` - Atribuição de conversas
 - `transcribe-audio` - Transcrição de áudios
+
+> [!TIP]
+> Use o script `deploy-functions.ps1` para garantir que tudo está atualizado!
 
 ### Passo 6: Verificar Deployment no Vercel
 
