@@ -126,6 +126,28 @@ serve(async (req) => {
       }
     }
 
+    // 5.5. IDEMPOTENCY CHECK - Verificar se já existe protocolo aberto para esta conversa
+    log(`[create-protocol] Checking for existing protocol...`);
+    const { data: existingProtocol } = await supabaseClient
+      .from('protocols')
+      .select('*')
+      .eq('conversation_id', conversation_id)
+      .eq('status', 'open')
+      .maybeSingle();
+
+    if (existingProtocol) {
+      log(`[create-protocol] Protocol already exists: ${existingProtocol.protocol_code}`);
+      return new Response(JSON.stringify({
+        success: true,
+        already_existed: true,
+        protocol_code: existingProtocol.protocol_code,
+        protocol: existingProtocol
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
     // 6. Criar Protocolo com código sequencial
     const now = new Date();
     const yearMonth = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
