@@ -26,7 +26,7 @@ interface ConversationListProps {
   isMobile?: boolean;
 }
 
-type TabValue = 'mine' | 'unassigned' | 'all' | 'resolved';
+type TabValue = 'mine' | 'inbox' | 'resolved';
 
 export function ConversationList({
   conversations,
@@ -36,22 +36,20 @@ export function ConversationList({
   isMobile = false,
 }: ConversationListProps) {
   const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState<TabValue>('all');
+  const [activeTab, setActiveTab] = useState<TabValue>('inbox');
 
   const filteredConversations = conversations
     .filter((conv) => {
       if (!conv.contact) return false;
       const contactName = conv.contact.name || "";
       const matchesSearch = contactName.toLowerCase().includes(search.toLowerCase());
-      
+
       if (!matchesSearch) return false;
 
       switch (activeTab) {
         case 'mine':
           return conv.status === 'open' && conv.assigned_to === userId;
-        case 'unassigned':
-          return conv.status === 'open' && !conv.assigned_to;
-        case 'all':
+        case 'inbox':
           return conv.status === 'open';
         case 'resolved':
           return conv.status === 'resolved';
@@ -62,13 +60,12 @@ export function ConversationList({
 
   const countByTab = {
     mine: conversations.filter(c => c.status === 'open' && c.assigned_to === userId).length,
-    unassigned: conversations.filter(c => c.status === 'open' && !c.assigned_to).length,
-    all: conversations.filter(c => c.status === 'open').length,
+    inbox: conversations.filter(c => c.status === 'open').length,
     resolved: conversations.filter(c => c.status === 'resolved').length,
   };
 
   return (
-    <div className={`${isMobile ? 'w-full' : 'w-80'} border-r border-border flex flex-col bg-card h-full overflow-hidden`}>
+    <div className={`w-full border-r border-border flex flex-col bg-card h-full overflow-hidden`}>
       <div className="shrink-0 p-3 border-b border-border">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -82,11 +79,10 @@ export function ConversationList({
       </div>
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabValue)} className="shrink-0 border-b border-border">
-        <TabsList className="w-full h-auto p-0 bg-transparent grid grid-cols-4">
-          <TabsTrigger value="mine" className="text-[10px] px-1 py-3 h-auto">Minhas ({countByTab.mine})</TabsTrigger>
-          <TabsTrigger value="unassigned" className="text-[10px] px-1 py-3 h-auto">Fila ({countByTab.unassigned})</TabsTrigger>
-          <TabsTrigger value="all" className="text-[10px] px-1 py-3 h-auto">Todos ({countByTab.all})</TabsTrigger>
-          <TabsTrigger value="resolved" className="text-[10px] px-1 py-3 h-auto">OK</TabsTrigger>
+        <TabsList className="w-full h-auto p-0 bg-transparent grid grid-cols-3">
+          <TabsTrigger value="mine" className="text-xs px-2 py-3 h-auto">Minhas ({countByTab.mine})</TabsTrigger>
+          <TabsTrigger value="inbox" className="text-xs px-2 py-3 h-auto">Entrada ({countByTab.inbox})</TabsTrigger>
+          <TabsTrigger value="resolved" className="text-xs px-2 py-3 h-auto">Resolvidos ({countByTab.resolved})</TabsTrigger>
         </TabsList>
       </Tabs>
 

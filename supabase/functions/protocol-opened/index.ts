@@ -118,6 +118,7 @@ serve(async (req) => {
       conversation_id,
       contact_id,
       condominium_id,
+      apartment,  // Added apartment parameter
       // Novos campos de auditoria
       created_by_type,
       created_by_agent_id,
@@ -216,6 +217,10 @@ serve(async (req) => {
 
     console.log("Due date calculated:", dueDate, "priority:", priority);
 
+    // Define priority emoji for use in WhatsApp and Asana
+    const priorityEmoji = isCritical ? "🔴 CRÍTICO" : "🟢 Normal";
+    const priorityText = isCritical ? "Resolver HOJE" : `Resolver até ${dueDate}`;
+
     // ========== 1. Send WhatsApp Group Message ==========
     if (settings.whatsapp_notifications_enabled && settings.whatsapp_group_id) {
       try {
@@ -226,27 +231,21 @@ serve(async (req) => {
         const zapiClientToken = Deno.env.get("ZAPI_CLIENT_TOKEN") || zapiSettings?.zapi_security_token;
 
         if (zapiInstanceId && zapiToken) {
-          const priorityEmoji = isCritical ? "🔴 CRÍTICO" : "🟢 Normal";
-          const priorityText = isCritical ? "Resolver HOJE" : `Resolver até ${dueDate}`;
+          // Format date for display
+          const displayDate = new Date().toLocaleDateString('pt-BR');
+          const yearMonthDay = protocol_code.split('-')[0]; // Get YYYYMM from protocol code
 
-          const whatsappMessage = `📋 *NOVO PROTOCOLO*
+          const whatsappMessage = `*G7 Serv | Abertura de Chamado*
+📅 ${displayDate} | 🧾 Seq.: ${protocol_code}
 
-🔖 *Protocolo:* ${protocol_code}
+✅ *Protocolo:* G7-${protocol_code}
 🏢 *Condomínio:* ${formattedCondominiumName}
-👤 *Solicitante:* ${formattedRequesterName}
-📌 *Função:* ${formattedRequesterRole}
-📂 *Categoria:* ${formattedCategory}
+👤 *Solicitante:* ${formattedRequesterName}${formattedRequesterRole ? ` (${formattedRequesterRole})` : ''}
+📝 *Resumo:* ${summary || "Sem descrição"}
+${priorityEmoji} *Prioridade:* ${priorityText}
 
-📝 *Resumo:*
-${summary || "Sem descrição"}
-
-${priorityEmoji}
-⏰ *Prazo:* ${priorityText}
-
-━━━━━━━━━━━━━━━━━━━━
-✅ Para encerrar, digite:
-*${protocol_code} - Resolvido*
-━━━━━━━━━━━━━━━━━━━━`;
+➡️ *Para encerrar, responda:*
+G7-${protocol_code} - Resolvido`;
 
           const zapiUrl = `https://api.z-api.io/instances/${zapiInstanceId}/token/${zapiToken}/send-text`;
 
@@ -288,6 +287,7 @@ ${priorityEmoji}
 🔖 *Número:* G7-${protocol_code}
 📍 *Condomínio:* ${formattedCondominiumName}
 📂 *Categoria:* ${formattedCategory}
+📝 *Chamado:* ${summary || 'Sem descrição'}
 ⏰ *Prazo para solução:* ${dueDateHumanized}
 
 O protocolo foi aberto em nosso sistema e o responsável fará a tratativa.`;
@@ -333,24 +333,23 @@ O protocolo foi aberto em nosso sistema e o responsável fará a tratativa.`;
           }
 
           // ===== TÍTULO PADRONIZADO =====
-          // Formato: [G7-YYYYMMDD-NNNN] Nome do Condomínio
-          const asanaTaskName = `[${protocol_code}] ${formattedCondominiumName}`;
+          // Formato: {Condomínio} - G7-{AAAAMM}-{SEQUÊNCIA}
+          const asanaTaskName = `${formattedCondominiumName} - G7-${protocol_code}`;
 
-          // ===== DESCRIÇÃO PADRONIZADA EM PORTUGUÊS =====
-          const asanaNotes = `📋 Protocolo: ${protocol_code}
-🏢 Condomínio: ${formattedCondominiumName}
-👤 Solicitante: ${formattedRequesterName}
-📌 Função: ${formattedRequesterRole}
-📂 Categoria: ${formattedCategory}
-⚡ Prioridade: ${formattedPriority}
+          // ===== DESCRIÇÃO PADRONIZADA =====
+          const asanaNotes = `**Resumo da IA:**
+Condomínio: ${formattedCondominiumName}
+Contato: ${apartment ? `Apto ${apartment}` : formattedRequesterName}
+Problema: ${summary || 'Sem descrição'}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**Dados do Cliente:**
+- Condomínio: ${formattedCondominiumName}
+- Apartamento: ${apartment || 'Não informado'}
+- Telefone: ${contact_id ? 'Registrado no sistema' : 'Não informado'}
+- Solicitante: ${formattedRequesterName}${formattedRequesterRole ? ` (${formattedRequesterRole})` : ''}
+- Horário: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
 
-📝 Resumo do Chamado:
-${summary || "Sem descrição"}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ Para encerrar: "${protocol_code} - Resolvido"`;
+**Prioridade:** ${priorityEmoji}`;
 
           const taskData: Record<string, unknown> = {
             data: {

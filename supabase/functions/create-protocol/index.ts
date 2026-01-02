@@ -44,6 +44,7 @@ serve(async (req) => {
       conversation_id,
       condominium_id,
       participant_id,
+      contact_id,
       category,
       priority,
       summary,
@@ -69,7 +70,7 @@ serve(async (req) => {
     log(`[create-protocol] Buscando conversa ${conversation_id}...`);
     const { data: conv, error: convError } = await supabaseClient
       .from('conversations')
-      .select('id, active_condominium_id, contact_id, contacts(name, role, condominium_id)')
+      .select('id, active_condominium_id, contact_id, contacts(name)')
       .eq('id', conversation_id)
       .maybeSingle();
 
@@ -82,16 +83,35 @@ serve(async (req) => {
     let resolvedCondoId = null;
     let source = 'none';
 
+    // Try direct input first
     if (condominium_id && isValidUUID(condominium_id)) {
       resolvedCondoId = condominium_id;
       source = 'input_direct';
     }
 
+    // Try conversation's active_condominium_id
     if (!resolvedCondoId) {
-      resolvedCondoId = conv.active_condominium_id || contact?.condominium_id;
-      if (resolvedCondoId) source = 'conversation_or_contact';
+      resolvedCondoId = conv.active_condominium_id;
+      if (resolvedCondoId) source = 'conversation';
     }
 
+    // Try participant's entity_id (if participant_id is provided)
+    if (!resolvedCondoId && participant_id && isValidUUID(participant_id)) {
+      log(`[create-protocol] Looking up participant ${participant_id} for entity_id...`);
+      const { data: participant } = await supabaseClient
+        .from('participants')
+        .select('entity_id, entity:entities(name)')
+        .eq('id', participant_id)
+        .maybeSingle();
+
+      if (participant?.entity_id && isValidUUID(participant.entity_id)) {
+        resolvedCondoId = participant.entity_id;
+        source = 'participant_entity';
+        log(`[create-protocol] Resolved condominium from participant: ${participant.entity_id}`);
+      }
+    }
+
+    // Fallback: Try conversation_participant_state
     if (!resolvedCondoId) {
       const { data: partState } = await supabaseClient
         .from('conversation_participant_state')
@@ -106,15 +126,110 @@ serve(async (req) => {
       }
     }
 
-    // 6. Criar Protocolo
-    const protocolCode = `PROT-${Date.now()}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
+    // 6. Criar Protocolo com código sequencial
+    const now = new Date();
+    const yearMonth = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+    // Get next sequence from database
+    const { data: seqData, error: seqError } = await supabaseClient
+      .rpc('get_next_protocol_sequence', { year_month_param: yearMonth });
+
+    if (seqError) {
+      log(`[create-protocol] Erro ao obter sequência: ${seqError.message}`);
+      throw new Error(`Erro ao gerar código do protocolo: ${seqError.message}`);
+    }
+
+    const sequence = String(seqData).padStart(4, '0');
+    const suffix = Math.random().toString(36).substring(2, 5).toUpperCase();
+    const protocolCode = `${yearMonth}-${sequence}-${suffix}`;
     log(`[create-protocol] Criando ${protocolCode} via ${source}...`);
+    log(`[create-protocol] Data: conv=${conversation_id}, condo=${resolvedCondoId}, contact=${contact_id}, summary=${summary}`);
+
+    // Validate foreign keys before insertion
+    log(`[create-protocol] Validating foreign keys...`);
+
+    // Validate conversation_id (required)
+    if (!conversation_id || !isValidUUID(conversation_id)) {
+      throw new Error(`Invalid conversation_id: ${conversation_id}`);
+    }
+
+    // Validate contact_id if provided
+    if (contact_id && isValidUUID(contact_id)) {
+      const { data: contactExists } = await supabaseClient
+        .from('contacts')
+        .select('id')
+        .eq('id', contact_id)
+        .maybeSingle();
+
+      if (!contactExists) {
+        log(`[create-protocol] WARNING: contact_id ${contact_id} does not exist, setting to null`);
+        contact_id = null;
+      }
+    } else {
+      contact_id = null;
+    }
+
+    // Validate condominium_id if provided
+    if (resolvedCondoId && isValidUUID(resolvedCondoId)) {
+      const { data: condoExists } = await supabaseClient
+        .from('condominiums')
+        .select('id')
+        .eq('id', resolvedCondoId)
+        .maybeSingle();
+
+      if (!condoExists) {
+        log(`[create-protocol] WARNING: condominium_id ${resolvedCondoId} does not exist, setting to null`);
+        resolvedCondoId = null;
+      }
+    } else {
+      resolvedCondoId = null;
+    }
+
+    // Validate participant_id if provided
+    if (participant_id && isValidUUID(participant_id)) {
+      const { data: partExists } = await supabaseClient
+        .from('participants')
+        .select('id')
+        .eq('id', participant_id)
+        .maybeSingle();
+
+      if (!partExists) {
+        log(`[create-protocol] WARNING: participant_id ${participant_id} does not exist, setting to null`);
+        participant_id = null;
+      }
+    } else {
+      participant_id = null;
+    }
+
+    log(`[create-protocol] Validated IDs: contact=${contact_id}, condo=${resolvedCondoId}, participant=${participant_id}`);
 
     const { data: protocolRecord, error: protocolError } = await supabaseClient
       .from('protocols')
       .insert({
         protocol_code: protocolCode,
         conversation_id,
+        contact_id: isValidUUID(contact_id) ? contact_id : null,
+        condominium_id: isValidUUID(resolvedCondoId) ? resolvedCondoId : null,
+        participant_id: isValidUUID(participant_id) ? participant_id : null,
+        category: category || 'operational',
+        priority: priority || 'normal',
+        summary: summary || 'Gerado via sistema',
+        status: 'open',
+        created_by_agent_id: isValidUUID(created_by_agent_id) ? created_by_agent_id : null,
+        created_by_type: created_by_agent_id ? 'agent' : 'ai',
+        requester_name: requester_name || contact?.name || 'Não informado',
+        requester_role: requester_role || 'Morador',
+        apartment: apartment
+      })
+      .select()
+      .single();
+
+    if (protocolError) {
+      log(`[create-protocol] ERRO INSERT: ${JSON.stringify(protocolError)}`);
+      log(`[create-protocol] Data sent: ${JSON.stringify({
+        protocol_code: protocolCode,
+        conversation_id,
+        contact_id,
         condominium_id: resolvedCondoId,
         participant_id: isValidUUID(participant_id) ? participant_id : null,
         category: category || 'operational',
@@ -124,13 +239,12 @@ serve(async (req) => {
         created_by_agent_id: isValidUUID(created_by_agent_id) ? created_by_agent_id : null,
         created_by_type: created_by_agent_id ? 'agent' : 'ai',
         requester_name: requester_name || contact?.name || 'Não informado',
-        requester_role: requester_role || contact?.role || 'Morador',
+        requester_role: requester_role || 'Morador',
         apartment: apartment
-      })
-      .select()
-      .single();
+      })}`);
+      throw new Error(`Erro ao inserir protocolo: ${protocolError.message} | Details: ${protocolError.details} | Hint: ${protocolError.hint}`);
+    }
 
-    if (protocolError) throw new Error(`Erro ao inserir protocolo: ${protocolError.message}`);
 
     // 7. Ações Pós-Criação
     try {
@@ -166,7 +280,7 @@ serve(async (req) => {
             conversation_id: conversation_id,
             contact_id: conv.contact_id,
             requester_name: requester_name || contact?.name || 'Não informado',
-            requester_role: requester_role || contact?.role || 'Morador'
+            requester_role: requester_role || 'Morador'
           })
         });
       } catch (e) { log(`Falha protocol-opened: ${e.message}`); }

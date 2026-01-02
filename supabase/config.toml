@@ -16,7 +16,7 @@ verify_jwt = true
 verify_jwt = false
 
 [functions.create-agent]
-verify_jwt = true
+verify_jwt = false
 
 [functions.ai-generate-reply]
 verify_jwt = false

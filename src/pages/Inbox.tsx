@@ -10,6 +10,7 @@ import { ChatArea } from '@/components/inbox/ChatArea';
 import { useRealtimeMessages } from '@/hooks/useRealtimeMessages';
 import { ChatSkeleton } from '@/components/inbox/ChatSkeleton';
 import { useRealtimeInbox } from '@/hooks/useRealtimeInbox';
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 
 export default function InboxPage() {
   const { id: conversationIdParam } = useParams<{ id?: string }>();
@@ -21,6 +22,7 @@ export default function InboxPage() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(conversationIdParam || null);
   const [activeContact, setActiveContact] = useState<any>(null);
   const [activeConvData, setActiveConvData] = useState<any>(null);
+  const [agents, setAgents] = useState<{ id: string; name: string }[]>([]);
 
   // Hook customizado para gerenciar a lista e realtime global
   const { conversations, loading: loadingConversations } = useRealtimeInbox({
@@ -56,6 +58,24 @@ export default function InboxPage() {
       fetchActiveConversationDetails(activeConversationId);
     }
   }, [activeConversationId, fetchActiveConversationDetails]);
+
+  // Fetch agents for assignment
+  useEffect(() => {
+    const fetchAgents = async () => {
+      if (!user) return;
+
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, name')
+        .order('name');
+
+      if (data) {
+        setAgents(data);
+      }
+    };
+
+    fetchAgents();
+  }, [user]);
 
   // Sincronizar parâmetro da URL com estado local
   useEffect(() => {
@@ -113,50 +133,144 @@ export default function InboxPage() {
     }
   };
 
+  const handleResolveConversation = async () => {
+    if (!activeConversationId) return;
+
+    try {
+      const { error } = await supabase
+        .from('conversations')
+        .update({ status: 'resolved' })
+        .eq('id', activeConversationId);
+
+      if (error) throw error;
+
+      // Optionally show success message
+      console.log('Conversa marcada como resolvida');
+    } catch (error: any) {
+      console.error('Erro ao resolver conversa:', error);
+      alert(`Erro ao concluir conversa: ${error.message || 'Erro desconhecido'}`);
+    }
+  };
+
+  const handleAssignAgent = async (agentId: string) => {
+    if (!activeConversationId) return;
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      if (!token) throw new Error('Sessão perdida. Faça login novamente.');
+
+      const { error } = await supabase.functions.invoke('assign-conversation', {
+        body: {
+          conversation_id: activeConversationId,
+          agent_id: agentId,
+        },
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (error) {
+        console.error('Erro ao atribuir agente:', error);
+        alert(`Erro ao atribuir agente: ${error.message || 'Erro desconhecido'}`);
+      } else {
+        console.log('Agente atribuído com sucesso');
+      }
+    } catch (error: any) {
+      console.error('Erro ao atribuir agente:', error);
+      alert(`Erro ao atribuir agente: ${error.message || 'Erro desconhecido'}`);
+    }
+  };
+
   if (authLoading) return null;
   if (!user) return <Navigate to="/auth" replace />;
 
   return (
     <AppLayout>
-      <div className="flex h-full overflow-hidden bg-background">
-        <ConversationList
-          conversations={conversations}
-          activeConversationId={activeConversationId}
-          userId={user.id}
-          onSelectConversation={handleSelectConversation}
-          isMobile={isMobile}
-        />
-
-        {!isMobile && (
-          <div className="flex-1 flex flex-col min-w-0">
-            {activeConversationId ? (
-              loadingMessages && !messages.length ? (
+      <div className="h-full overflow-hidden bg-background">
+        {isMobile ? (
+          activeConversationId ? (
+            <div className="flex-1 flex flex-col min-w-0 h-full">
+              {loadingMessages && !messages.length ? (
                 <ChatSkeleton />
               ) : (
                 <ChatArea
                   key={activeConversationId}
                   contact={activeContact}
                   messages={messages as any}
-                  profiles={[]}
+                  profiles={agents}
                   conversationId={activeConversationId}
                   conversationStatus={activeConvData?.status}
                   onSendMessage={handleSendMessage}
+                  onResolveConversation={handleResolveConversation}
+                  onAssignAgent={handleAssignAgent}
                   aiMode={activeConvData?.ai_mode}
                   humanControl={activeConvData?.human_control}
                   loading={loadingMessages}
                   currentUserId={user.id}
+                  isMobile={true}
+                  onBack={() => navigate('/inbox')}
                 />
-              )
-            ) : (
-              <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground bg-muted/10">
-                <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mb-4">
-                  <ChatSkeleton /> {/* Apenas como placeholder visual */}
-                </div>
-                <p className="text-lg font-medium">Suas conversas aparecem aqui</p>
-                <p className="text-sm">Selecione um contato na lista para iniciar o atendimento.</p>
+              )}
+            </div>
+          ) : (
+            <ConversationList
+              conversations={conversations}
+              activeConversationId={activeConversationId}
+              userId={user.id}
+              onSelectConversation={handleSelectConversation}
+              isMobile={isMobile}
+            />
+          )
+        ) : (
+          <PanelGroup direction="horizontal" className="h-full">
+            <Panel defaultSize={30} minSize={20} maxSize={50}>
+              <ConversationList
+                conversations={conversations}
+                activeConversationId={activeConversationId}
+                userId={user.id}
+                onSelectConversation={handleSelectConversation}
+                isMobile={isMobile}
+              />
+            </Panel>
+
+            <PanelResizeHandle className="w-1 bg-border hover:bg-primary/50 transition-colors cursor-col-resize" />
+
+            <Panel defaultSize={70} minSize={50}>
+              <div className="flex-1 flex flex-col min-w-0 h-full">
+                {activeConversationId ? (
+                  loadingMessages && !messages.length ? (
+                    <ChatSkeleton />
+                  ) : (
+                    <ChatArea
+                      key={activeConversationId}
+                      contact={activeContact}
+                      messages={messages as any}
+                      profiles={agents}
+                      conversationId={activeConversationId}
+                      conversationStatus={activeConvData?.status}
+                      onSendMessage={handleSendMessage}
+                      onResolveConversation={handleResolveConversation}
+                      onAssignAgent={handleAssignAgent}
+                      aiMode={activeConvData?.ai_mode}
+                      humanControl={activeConvData?.human_control}
+                      loading={loadingMessages}
+                      currentUserId={user.id}
+                    />
+                  )
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground bg-muted/10">
+                    <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mb-4">
+                      <ChatSkeleton /> {/* Apenas como placeholder visual */}
+                    </div>
+                    <p className="text-lg font-medium">Suas conversas aparecem aqui</p>
+                    <p className="text-sm">Selecione um contato na lista para iniciar o atendimento.</p>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </Panel>
+          </PanelGroup>
         )}
       </div>
     </AppLayout>

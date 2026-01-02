@@ -228,6 +228,23 @@ serve(async (req) => {
       }
     }
 
+    // 8. Group Resolution Handler (for group messages)
+    // Check if this is a group message and might be a resolution message
+    if (!fromMe && isGroup && !msgError && msgResult && !existingMsg && msgType === 'text') {
+      console.log('[Webhook] Checking for protocol resolution in group message');
+      await fetch(`${supabaseUrl}/functions/v1/group-resolution-handler`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
+        body: JSON.stringify({
+          message_id: msgResult.id,
+          conversation_id: conv.id,
+          message_text: content,
+          sender_phone: contactLid,
+          sender_name: senderName || 'Desconhecido',
+        }),
+      }).catch(err => console.error('[Webhook] Failed to trigger group resolution handler:', err));
+    }
+
     return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
 
   } catch (error: any) {

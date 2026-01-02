@@ -1,7 +1,7 @@
 "use client";
 
 import React from 'react';
-import { Users, FileText } from 'lucide-react';
+import { Users, FileText, ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ConversationAvatar } from './ConversationAvatar';
 import { ConversationActionsMenu } from './ConversationActionsMenu';
@@ -24,6 +24,7 @@ interface ChatHeaderProps {
   onAssignTeam?: (teamId: string) => void;
   onAddLabel?: (labelId: string) => void;
   onGenerateProtocol?: () => void;
+  onBack?: () => void;
 }
 
 export function ChatHeader({
@@ -44,12 +45,17 @@ export function ChatHeader({
   onAssignTeam,
   onAddLabel,
   onGenerateProtocol,
+  onBack,
 }: ChatHeaderProps) {
-  if (isMobile) return null;
 
   return (
     <div className="h-14 shrink-0 border-b border-border flex items-center justify-between px-4">
       <div className="flex items-center gap-3">
+        {isMobile && onBack && (
+          <Button variant="ghost" size="icon" className="-ml-2 h-8 w-8" onClick={onBack}>
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        )}
         {contact.is_group ? (
           <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
             <Users className="w-5 h-5 text-primary" />

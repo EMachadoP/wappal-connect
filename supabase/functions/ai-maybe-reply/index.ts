@@ -146,6 +146,16 @@ serve(async (req) => {
 
     systemPrompt += contextInfo;
 
+    // 5.5. Get participant_id for protocol creation
+    const { data: participantData } = await supabase
+      .from('conversation_participant_state')
+      .select('participant_id, participants(name, role_type, entity_id)')
+      .eq('conversation_id', conversation_id)
+      .maybeSingle();
+
+    const participant_id = participantData?.participant_id;
+    console.log('[ai-maybe-reply] Participant ID:', participant_id);
+
     // 6. Gerar resposta
     console.log('[ai-maybe-reply] Chamando geração...');
     const aiResponse = await fetch(`${supabaseUrl}/functions/v1/ai-generate-reply`, {
@@ -158,6 +168,7 @@ serve(async (req) => {
         messages,
         systemPrompt,
         conversation_id,
+        participant_id,
       }),
     });
 

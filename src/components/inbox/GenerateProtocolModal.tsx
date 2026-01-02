@@ -439,10 +439,9 @@ export function GenerateProtocolModal({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="operational">Suporte / Operacional</SelectItem>
-                <SelectItem value="maintenance">Manutenção Corretiva</SelectItem>
-                <SelectItem value="budget">Orçamento</SelectItem>
                 <SelectItem value="financial">Financeiro</SelectItem>
-                <SelectItem value="administrative">Administrativo</SelectItem>
+                <SelectItem value="support">Suporte</SelectItem>
+                <SelectItem value="admin">Administrativo</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -455,9 +454,7 @@ export function GenerateProtocolModal({
                 <SelectValue placeholder="Selecione a prioridade" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="low">Baixa</SelectItem>
                 <SelectItem value="normal">Normal</SelectItem>
-                <SelectItem value="high">Alta</SelectItem>
                 <SelectItem value="critical">Crítica</SelectItem>
               </SelectContent>
             </Select>

@@ -50,19 +50,22 @@ serve(async (req) => {
       throw new Error("Agente de destino inválido ou inativo");
     }
 
-    // Executar atribuição
+    // Executar atribuição e marcar como resolvida
     await supabaseAdmin
       .from("conversations")
       .update({
         assigned_to: agent_id,
         assigned_at: new Date().toISOString(),
-        assigned_by: user.id, // Quem realizou a ação
+        assigned_by: user.id,
+        status: 'resolved', // Marca como resolvida ao atribuir
+        resolved_at: new Date().toISOString(),
+        resolved_by: user.id,
       })
       .eq("id", conversation_id);
 
     // Registrar evento de sistema
     const { data: actor } = await supabaseAdmin.from("profiles").select("name").eq("id", user.id).single();
-    
+
     await supabaseAdmin.from("messages").insert({
       conversation_id,
       sender_type: "system",

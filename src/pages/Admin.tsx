@@ -306,17 +306,35 @@ export default function AdminPage() {
     const hasNumber = /[0-9]/.test(newAgentPassword);
 
     if (!hasMinLength || !hasLowercase || !hasUppercase || !hasNumber) {
-      toast({ 
-        variant: 'destructive', 
-        title: 'Senha fraca', 
-        description: 'A senha deve ter pelo menos 8 caracteres, incluindo letras maiúsculas, minúsculas e números.' 
+      toast({
+        variant: 'destructive',
+        title: 'Senha fraca',
+        description: 'A senha deve ter pelo menos 8 caracteres, incluindo letras maiúsculas, minúsculas e números.'
       });
       return;
     }
 
     setCreatingAgent(true);
     try {
+      console.log('[CREATE AGENT] Starting agent creation...');
+      console.log('[CREATE AGENT] Email:', newAgentEmail.trim());
+      console.log('[CREATE AGENT] Name:', newAgentName.trim());
+      console.log('[CREATE AGENT] Team ID:', newAgentTeamId !== 'none' ? newAgentTeamId : null);
+
+      // Get current session to verify authentication
+      const { data: { session } } = await supabase.auth.getSession();
+      console.log('[CREATE AGENT] Current session:', session ? 'Active' : 'No session');
+      console.log('[CREATE AGENT] User ID:', session?.user?.id);
+      console.log('[CREATE AGENT] User email:', session?.user?.email);
+
+      if (!session?.access_token) {
+        toast({ variant: 'destructive', title: 'Erro', description: 'Sessão inválida. Faça login novamente.' });
+        return;
+      }
+
       // Create user via edge function (doesn't log in)
+      console.log('[CREATE AGENT] Invoking create-agent function...');
+      console.log('[CREATE AGENT] Access token present:', !!session.access_token);
       const { data, error } = await supabase.functions.invoke('create-agent', {
         body: {
           email: newAgentEmail.trim(),
@@ -324,22 +342,33 @@ export default function AdminPage() {
           name: newAgentName.trim(),
           team_id: newAgentTeamId !== 'none' ? newAgentTeamId : null,
         },
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
       });
 
+      console.log('[CREATE AGENT] Function response - data:', data);
+      console.log('[CREATE AGENT] Function response - error:', error);
+
       if (error) {
+        console.error('[CREATE AGENT] Error object:', JSON.stringify(error, null, 2));
         toast({ variant: 'destructive', title: 'Erro ao criar agente', description: error.message });
         return;
       }
 
       if (data?.error) {
+        console.error('[CREATE AGENT] Data error:', data.error);
         toast({ variant: 'destructive', title: 'Erro ao criar agente', description: data.error });
         return;
       }
 
+      console.log('[CREATE AGENT] Agent created successfully!');
       toast({ title: 'Agente criado com sucesso!', description: 'O novo agente pode fazer login com o email e senha informados.' });
       setDialogOpen(null);
       fetchData();
     } catch (err) {
+      console.error('[CREATE AGENT] Unexpected error:', err);
+      console.error('[CREATE AGENT] Error details:', JSON.stringify(err, null, 2));
       toast({ variant: 'destructive', title: 'Erro', description: 'Falha ao criar agente' });
     } finally {
       setCreatingAgent(false);
@@ -395,7 +424,7 @@ export default function AdminPage() {
     setSyncing(true);
     try {
       const { data, error } = await supabase.functions.invoke('zapi-sync-contacts');
-      
+
       if (error) {
         toast({
           variant: 'destructive',
@@ -425,7 +454,7 @@ export default function AdminPage() {
       const { data, error } = await supabase.functions.invoke('zapi-sync-history', {
         body: { pageSize: 50, maxPages: 10 }
       });
-      
+
       if (error) {
         toast({
           variant: 'destructive',
@@ -471,16 +500,16 @@ export default function AdminPage() {
         <div className="flex items-center justify-between flex-wrap gap-4">
           <h1 className="text-2xl font-bold">Administração</h1>
           <div className="flex gap-2 flex-wrap">
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               className="gap-2"
               onClick={() => navigate('/admin/duplicates')}
             >
               <Copy className="w-4 h-4" />
               Duplicados
             </Button>
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               className="gap-2"
               onClick={handleSyncHistory}
               disabled={syncingHistory}
@@ -488,8 +517,8 @@ export default function AdminPage() {
               <History className={`w-4 h-4 ${syncingHistory ? 'animate-spin' : ''}`} />
               {syncingHistory ? 'Sincronizando...' : 'Sincronizar Histórico'}
             </Button>
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               className="gap-2"
               onClick={handleSyncContacts}
               disabled={syncing}
@@ -537,7 +566,7 @@ export default function AdminPage() {
                     </CardHeader>
                     <CardContent className="space-y-3">
                       <p className="text-sm text-muted-foreground">{agent.email}</p>
-                      
+
                       <div className="flex flex-wrap gap-2">
                         {userRoles[agent.id]?.includes('admin') && (
                           <Badge>Admin</Badge>
@@ -555,7 +584,7 @@ export default function AdminPage() {
                           </Badge>
                         )}
                       </div>
-                      
+
                       {agent.teams && (
                         <p className="text-sm text-muted-foreground flex items-center gap-1">
                           <Users className="w-3 h-3" />

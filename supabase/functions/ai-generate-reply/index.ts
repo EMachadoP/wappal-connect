@@ -36,16 +36,41 @@ async function executeCreateProtocol(
   supabaseUrl: string,
   supabaseServiceKey: string,
   conversationId: string,
+  participantId: string | undefined,
   args: any
 ) {
+  // Validate conversation_id first
+  if (!conversationId) {
+    console.error('[TICKET] executeCreateProtocol called with empty conversationId');
+    throw new Error('conversation_id is required');
+  }
+
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(conversationId)) {
+    console.error('[TICKET] Invalid conversation_id format:', conversationId);
+    throw new Error(`Invalid conversation_id format: ${conversationId}`);
+  }
+
+  console.log('[TICKET] Starting protocol creation for conversation:', conversationId);
+
   // 1. Deep Condominium Lookup (Critical for Asana/G7)
-  const { data: conv } = await supabase
+  const { data: conv, error: convError } = await supabase
     .from('conversations')
-    .select('contact_id, active_condominium_id, contacts(condominium_id, name, role)')
+    .select('contact_id, active_condominium_id, contacts(name)')
     .eq('id', conversationId)
     .single();
 
-  let condominiumId = conv?.active_condominium_id || conv?.contacts?.condominium_id;
+  if (convError) {
+    console.error('[TICKET] Failed to fetch conversation:', convError);
+    throw new Error(`Failed to fetch conversation: ${convError.message}`);
+  }
+
+  if (!conv) {
+    console.error('[TICKET] Conversation not found:', conversationId);
+    throw new Error(`Conversation not found: ${conversationId}`);
+  }
+
+  let condominiumId = conv?.active_condominium_id;
 
   if (!condominiumId) {
     const { data: part } = await supabase
@@ -61,11 +86,12 @@ async function executeCreateProtocol(
   const bodyObj = {
     conversation_id: conversationId,
     condominium_id: condominiumId,
+    participant_id: participantId, // Pass participant_id for better condominium resolution
     summary: args.summary,
     priority: args.priority || 'normal',
     category: args.category || 'operational',
     requester_name: args.requester_name || (conv?.contacts as any)?.name || 'Não informado',
-    requester_role: args.requester_role || (conv?.contacts as any)?.role || 'Morador',
+    requester_role: args.requester_role || 'Morador',
     apartment: args.apartment,
     notify_group: true // IMPORTANT: Triggers WhatsApp + Asana
   };
@@ -84,10 +110,15 @@ async function executeCreateProtocol(
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Create protocol failed: ${errorText}`);
+    console.error('[TICKET] create-protocol failed with status:', response.status);
+    console.error('[TICKET] Error response:', errorText);
+    console.error('[TICKET] Payload sent:', JSON.stringify(bodyObj, null, 2));
+    throw new Error(`Create protocol failed (${response.status}): ${errorText}`);
   }
 
-  return await response.json();
+  const result = await response.json();
+  console.log('[TICKET] create-protocol SUCCESS:', result);
+  return result;
 }
 
 // --- SERVE ---
@@ -106,6 +137,7 @@ serve(async (req) => {
     const messages = (rawBody.messages || []).slice(0, 50); // Limit to 50
     const conversationIdRaw = rawBody.conversation_id || rawBody.conversationId || rawBody.conversation?.id;
     const conversationId = (typeof conversationIdRaw === 'string') ? conversationIdRaw : undefined;
+    const participant_id = rawBody.participant_id; // Extract participant_id from request
 
     // Dynamically clean passed systemPrompt from negative examples (mimicry prevention)
     let basePrompt = rawBody.systemPrompt || "";
@@ -287,12 +319,19 @@ NUNCA invente preços ou prazos.`;
     // Implementation of Tool call (if triggered by AI or Fallback)
     if (functionCall && (functionCall.name === 'create_protocol' || functionCall.name === 'create_ticket')) {
       try {
-        const ticketData = await executeCreateProtocol(supabase, supabaseUrl, supabaseServiceKey, conversationId!, functionCall.args);
+        const ticketData = await executeCreateProtocol(supabase, supabaseUrl, supabaseServiceKey, conversationId!, participant_id, functionCall.args);
         const protocolCode = ticketData.protocol?.protocol_code || ticketData.protocol_code;
         generatedText = `Certo. Já registrei o chamado sob o protocolo **${protocolCode}** e encaminhei para a equipe operacional. Vamos dar sequência por aqui.`;
       } catch (e) {
         console.error('Tool call failed:', e);
-        generatedText = "Puxa, tive um probleminha técnico ao tentar abrir o protocolo automaticamente agora. Mas não se preocupe, eu já anotei tudo e vou passar agora mesmo para a equipe manual. Qual o seu nome por favor?";
+        console.error('Tool call error details:', {
+          conversationId,
+          functionCall,
+          error: e instanceof Error ? e.message : String(e),
+          stack: e instanceof Error ? e.stack : undefined
+        });
+        // Improved fallback message - don't ask for name if we already have participant info
+        generatedText = "Puxa, tive um probleminha técnico ao tentar abrir o protocolo automaticamente agora. Mas não se preocupe, eu já anotei tudo e vou passar agora mesmo para a equipe manual. Eles vão entrar em contato em breve!";
       }
     }
 

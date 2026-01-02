@@ -45,6 +45,7 @@ interface ChatAreaProps {
   onProtocolCreated?: (code: string) => void;
   loading?: boolean;
   isMobile?: boolean;
+  onBack?: () => void;
 }
 
 export function ChatArea(props: ChatAreaProps) {
@@ -90,6 +91,7 @@ export function ChatArea(props: ChatAreaProps) {
         onAssignTeam={props.onAssignTeam}
         onAddLabel={props.onAddLabel}
         onGenerateProtocol={() => setProtocolModalOpen(true)}
+        onBack={props.onBack}
       />
 
       {conversationId && (

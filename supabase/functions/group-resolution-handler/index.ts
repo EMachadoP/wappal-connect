@@ -11,11 +11,17 @@ const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
 // Regex patterns to detect resolution messages
 const RESOLUTION_PATTERNS = [
-  // G7-20251223-0005 - Resolvido (with various dash types and spaces)
+  // G7-202512-0003-ABC - Resolvido (new format with suffix)
+  /(G7-\d{6}-\d{4}-[A-Z0-9]{3})\s*[-–—]?\ s*resolvido/i,
+  // 202512-0003-ABC - Resolvido (new format with suffix)
+  /(\d{6}-\d{4}-[A-Z0-9]{3})\s*[-–—]?\s*resolvido/i,
+  // G7-20251223-0005 - Resolvido (old format, 8 digits)
   /(G7-\d{8}-\d{4,})\s*[-–—]?\s*resolvido/i,
-  // Protocolo G7-20251223-0005 Resolvido
-  /protocolo[:\s]*(G7-\d{8}-\d{4,}).*resolvido/i,
-  // 202512-0007 - Resolvido (YYYYMM-NNNN format with spaces and dashes)
+  // Protocolo G7-202512-0003-ABC Resolvido
+  /protocolo[:\s]*(G7-\d{6}-\d{4}-[A-Z0-9]{3}).*resolvido/i,
+  // Protocolo 202512-0003-ABC Resolvido
+  /protocolo[:\s]*(\d{6}-\d{4}-[A-Z0-9]{3}).*resolvido/i,
+  // 202512-0007 - Resolvido (YYYYMM-NNNN format without suffix, for backwards compatibility)
   /(\d{6}-\d{4,})\s*[-–—]?\s*resolvido/i,
   // Protocolo 202512-0007 Resolvido
   /protocolo[:\s]*(\d{6}-\d{4,}).*resolvido/i,
@@ -28,7 +34,7 @@ serve(async (req) => {
 
   try {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
-    
+
     const {
       message_content,
       participant_phone,
@@ -93,11 +99,11 @@ serve(async (req) => {
     // Helper function to send WhatsApp message
     async function sendGroupMessage(message: string): Promise<void> {
       if (!targetGroupId) return;
-      
+
       try {
         const zapiInstanceId = Deno.env.get('ZAPI_INSTANCE_ID');
         const zapiToken = Deno.env.get('ZAPI_TOKEN');
-        
+
         if (zapiInstanceId && zapiToken) {
           const zapiUrl = `https://api.z-api.io/instances/${zapiInstanceId}/token/${zapiToken}/send-text`;
           await fetch(zapiUrl, {
@@ -119,9 +125,9 @@ serve(async (req) => {
       await sendGroupMessage(`⚠️ Apenas técnicos autorizados podem encerrar protocolos.
 
 Telefone não autorizado: ${participant_phone || 'Desconhecido'}`);
-      
-      return new Response(JSON.stringify({ 
-        success: false, 
+
+      return new Response(JSON.stringify({
+        success: false,
         reason: 'Not authorized',
         phone: normalizedPhone,
       }), {
@@ -139,9 +145,9 @@ Telefone não autorizado: ${participant_phone || 'Desconhecido'}`);
     if (protocolError || !protocol) {
       console.log('Protocol not found:', protocolCode);
       await sendGroupMessage(`❌ Protocolo ${protocolCode} não encontrado no sistema.`);
-      
-      return new Response(JSON.stringify({ 
-        success: false, 
+
+      return new Response(JSON.stringify({
+        success: false,
         reason: 'Protocol not found',
         protocol_code: protocolCode,
       }), {
@@ -153,9 +159,9 @@ Telefone não autorizado: ${participant_phone || 'Desconhecido'}`);
     if (protocol.status === 'resolved') {
       console.log('Protocol already resolved:', protocolCode);
       await sendGroupMessage(`ℹ️ Protocolo ${protocolCode} já estava resolvido anteriormente.`);
-      
-      return new Response(JSON.stringify({ 
-        success: true, 
+
+      return new Response(JSON.stringify({
+        success: true,
         already_resolved: true,
         protocol_code: protocolCode,
       }), {
@@ -165,7 +171,7 @@ Telefone não autorizado: ${participant_phone || 'Desconhecido'}`);
 
     // ========== 1. Update protocol status ==========
     const resolverName = agentRecord?.name || participant_name || 'Desconhecido';
-    
+
     const { error: updateError } = await supabase
       .from('protocols')
       .update({
@@ -188,7 +194,7 @@ Telefone não autorizado: ${participant_phone || 'Desconhecido'}`);
     if (protocol.asana_task_gid) {
       try {
         const asanaToken = Deno.env.get('ASANA_ACCESS_TOKEN');
-        
+
         if (asanaToken) {
           const asanaResponse = await fetch(`https://app.asana.com/api/1.0/tasks/${protocol.asana_task_gid}`, {
             method: 'PUT',
@@ -239,20 +245,20 @@ Telefone não autorizado: ${participant_phone || 'Desconhecido'}`);
           .select('contact_id, contacts(phone, chat_lid)')
           .eq('id', protocol.conversation_id)
           .single();
-          
+
         // deno-lint-ignore no-explicit-any
         const contactData = originalConv?.contacts as any;
         if (contactData) {
           const zapiInstanceId = Deno.env.get('ZAPI_INSTANCE_ID');
           const zapiToken = Deno.env.get('ZAPI_TOKEN');
-          
+
           if (zapiInstanceId && zapiToken) {
             const contactIdentifier = contactData.chat_lid || contactData.phone;
             if (contactIdentifier) {
               const clientMessage = `✅ Seu chamado (Protocolo ${protocolCode}) foi resolvido! 
 
 Agradecemos o contato. Se precisar de algo mais, é só enviar uma mensagem.`;
-              
+
               const zapiUrl = `https://api.z-api.io/instances/${zapiInstanceId}/token/${zapiToken}/send-text`;
               await fetch(zapiUrl, {
                 method: 'POST',
