@@ -144,6 +144,26 @@ serve(async (req) => {
       systemPrompt = systemPrompt.replace(new RegExp(key, 'g'), value);
     }
 
+    // Add message variation instructions
+    systemPrompt += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    systemPrompt += `\n📝 REGRAS DE VARIAÇÃO DE MENSAGENS`;
+    systemPrompt += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    systemPrompt += `\n\n⚠️ NUNCA REPITA A MESMA MENSAGEM!`;
+    systemPrompt += `\n\n1. **Varie a estrutura das frases** - Use diferentes formas de expressar a mesma ideia`;
+    systemPrompt += `\n2. **Use sinônimos** - Alterne palavras e expressões`;
+    systemPrompt += `\n3. **Mude a ordem** - Reorganize as informações de forma diferente`;
+    systemPrompt += `\n4. **Varie saudações** - Use diferentes formas de cumprimentar`;
+    systemPrompt += `\n5. **Personalize** - Adapte o tom conforme o contexto`;
+    systemPrompt += `\n\n✅ EXEMPLOS DE VARIAÇÃO:`;
+    systemPrompt += `\n\nMensagem 1: "Olá! Registrei seu chamado sob o protocolo #123. Vamos resolver isso rapidamente!"`;
+    systemPrompt += `\nMensagem 2: "Tudo certo! Criei o protocolo #124 para você. Nossa equipe já está ciente."`;
+    systemPrompt += `\nMensagem 3: "Perfeito! Anotei tudo no protocolo #125. Em breve daremos retorno."`;
+    systemPrompt += `\n\n❌ NUNCA faça:`;
+    systemPrompt += `\n- Repetir exatamente a mesma estrutura de frase`;
+    systemPrompt += `\n- Usar sempre as mesmas palavras de abertura`;
+    systemPrompt += `\n- Copiar o formato da mensagem anterior`;
+    systemPrompt += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
     systemPrompt += contextInfo;
 
     // 5.5. Get participant_id for protocol creation
