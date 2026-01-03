@@ -110,11 +110,14 @@ export function ChatMessage({
                 src={mediaUrl}
                 controls
                 className="max-w-xs"
-                crossOrigin="anonymous"
-                preload="metadata"
+                preload="auto"
                 onError={(e) => {
                   console.error('Audio playback error:', e);
                   console.log('Audio URL:', mediaUrl);
+                  console.log('Error details:', (e.target as HTMLAudioElement).error);
+                }}
+                onLoadedMetadata={() => {
+                  console.log('Audio metadata loaded successfully');
                 }}
               />
               {mediaUrl && (
