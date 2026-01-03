@@ -29,6 +29,8 @@ interface ChatAreaProps {
   humanControl?: boolean;
   activeCondominiumId?: string | null;
   activeCondominiumSetBy?: string | null;
+  audioEnabled?: boolean;
+  audioAutoTranscribe?: boolean;
   currentUserId?: string;
   onSendMessage: (content: string) => void;
   onSendFile?: (file: File) => void;
@@ -43,6 +45,7 @@ interface ChatAreaProps {
   onAiModeChange?: (mode: 'AUTO' | 'COPILOT' | 'OFF') => void;
   onSelectCondominium?: (condominiumId: string) => void;
   onProtocolCreated?: (code: string) => void;
+  onAudioSettingsChange?: () => void;
   loading?: boolean;
   isMobile?: boolean;
   onBack?: () => void;
@@ -74,10 +77,13 @@ export function ChatArea(props: ChatAreaProps) {
   return (
     <div className="flex-1 flex flex-col bg-background h-full overflow-hidden">
       <ChatHeader
+        conversationId={conversationId || ''}
         contact={contact}
         isMobile={!!isMobile}
         isResolved={isResolved}
         conversationPriority={props.conversationPriority || 'normal'}
+        audioEnabled={props.audioEnabled}
+        audioAutoTranscribe={props.audioAutoTranscribe}
         profiles={props.profiles}
         teams={props.teams || []}
         labels={props.labels || []}
@@ -91,6 +97,7 @@ export function ChatArea(props: ChatAreaProps) {
         onAssignTeam={props.onAssignTeam}
         onAddLabel={props.onAddLabel}
         onGenerateProtocol={() => setProtocolModalOpen(true)}
+        onAudioSettingsChange={props.onAudioSettingsChange}
         onBack={props.onBack}
       />
 

@@ -5,12 +5,16 @@ import { Users, FileText, ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ConversationAvatar } from './ConversationAvatar';
 import { ConversationActionsMenu } from './ConversationActionsMenu';
+import { AudioSettingsMenu } from './AudioSettingsMenu';
 
 interface ChatHeaderProps {
+  conversationId: string;
   contact: any;
   isMobile: boolean;
   isResolved: boolean;
   conversationPriority: string;
+  audioEnabled?: boolean;
+  audioAutoTranscribe?: boolean;
   profiles: any[];
   teams: any[];
   labels: any[];
@@ -24,14 +28,18 @@ interface ChatHeaderProps {
   onAssignTeam?: (teamId: string) => void;
   onAddLabel?: (labelId: string) => void;
   onGenerateProtocol?: () => void;
+  onAudioSettingsChange?: () => void;
   onBack?: () => void;
 }
 
 export function ChatHeader({
+  conversationId,
   contact,
   isMobile,
   isResolved,
   conversationPriority,
+  audioEnabled = true,
+  audioAutoTranscribe = true,
   profiles,
   teams,
   labels,
@@ -45,6 +53,7 @@ export function ChatHeader({
   onAssignTeam,
   onAddLabel,
   onGenerateProtocol,
+  onAudioSettingsChange,
   onBack,
 }: ChatHeaderProps) {
 
@@ -88,6 +97,13 @@ export function ChatHeader({
             Gerar Protocolo
           </Button>
         )}
+
+        <AudioSettingsMenu
+          conversationId={conversationId}
+          audioEnabled={audioEnabled}
+          audioAutoTranscribe={audioAutoTranscribe}
+          onSettingsChange={onAudioSettingsChange}
+        />
 
         <ConversationActionsMenu
           isResolved={isResolved}
