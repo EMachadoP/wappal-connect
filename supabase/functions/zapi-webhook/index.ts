@@ -198,7 +198,43 @@ serve(async (req) => {
       console.log('[Webhook] Mensagem duplicada ignorada (já existe):', providerMsgId);
     }
 
+
     if (msgError) throw new Error(`Falha ao salvar mensagem: ${msgError.message}`);
+
+    // 6.5. Store media files (audio/video) in Supabase Storage for permanent URLs
+    if (msgResult && (msgType === 'audio' || msgType === 'video')) {
+      const mediaUrl = payload.audioUrl || payload.videoUrl ||
+        payload.audio?.url || payload.video?.url ||
+        payload.audio?.audioUrl || payload.video?.videoUrl || null;
+
+      if (mediaUrl) {
+        console.log(`[Webhook] Storing ${msgType} in Supabase Storage for message:`, msgResult.id);
+
+        // Call store-media function asynchronously (don't wait for it)
+        fetch(`${supabaseUrl}/functions/v1/store-media`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${supabaseServiceKey}`
+          },
+          body: JSON.stringify({
+            messageId: msgResult.id,
+            mediaUrl: mediaUrl,
+            mediaType: msgType,
+          }),
+        }).then(async r => {
+          if (r.ok) {
+            const result = await r.json();
+            console.log(`[Webhook] ${msgType} stored successfully:`, result.publicUrl);
+          } else {
+            console.error(`[Webhook] Failed to store ${msgType}:`, await r.text());
+          }
+        }).catch(err => {
+          console.error(`[Webhook] Error storing ${msgType}:`, err);
+          // Don't fail the webhook if storage fails - original URL is still saved
+        });
+      }
+    }
 
     // 7. IA (opcional, só para chats privados)
     // CRÍTICO: Só disparar se for uma nova mensagem (não duplicada)
