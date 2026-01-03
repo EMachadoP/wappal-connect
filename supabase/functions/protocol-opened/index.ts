@@ -168,11 +168,16 @@ serve(async (req) => {
     // Formatar dados para exibição
     // Tentar extrair nome do condomínio do summary se não fornecido
     let extractedCondominiumName = condominium_name;
-    if (!extractedCondominiumName && summary) {
-      // Procurar padrões como "Condomínio X", "Cond. X", "Edifício X"
-      const condMatch = summary.match(/(?:Condomínio|Cond\.|Edifício|Ed\.)\s+([A-Za-zÀ-ÿ\s]+?)(?:\.|,|$|\s-|\sS)/i);
-      if (condMatch) {
-        extractedCondominiumName = condMatch[1].trim();
+
+    // Tratar string vazia como null
+    if (!extractedCondominiumName || extractedCondominiumName.trim() === '') {
+      if (summary) {
+        // Procurar padrões como "Condomínio X", "Cond. X", "Edifício X", "Ed. X"
+        const condMatch = summary.match(/(?:Condomínio|Cond\.|Edifício|Ed\.|Prédio)\s+([A-Za-zÀ-ÿ0-9\s]+?)(?:\.|,|$|:|\s-|\sS)/i);
+        if (condMatch) {
+          extractedCondominiumName = condMatch[1].trim();
+          console.log('[Protocol] Extracted condominium name from summary:', extractedCondominiumName);
+        }
       }
     }
 
