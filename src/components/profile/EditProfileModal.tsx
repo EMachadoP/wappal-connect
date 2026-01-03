@@ -5,6 +5,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { ChangePasswordModal } from './ChangePasswordModal';
+import { Key } from 'lucide-react';
 
 interface EditProfileModalProps {
   open: boolean;
@@ -26,11 +28,12 @@ export function EditProfileModal({
 }: EditProfileModalProps) {
   const [displayName, setDisplayName] = useState(profile?.display_name || '');
   const [isSaving, setIsSaving] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
   const { toast } = useToast();
 
   const handleSave = async () => {
     if (!profile) return;
-    
+
     setIsSaving(true);
     try {
       const { error } = await supabase
@@ -44,7 +47,7 @@ export function EditProfileModal({
         title: 'Perfil atualizado',
         description: 'Suas configurações foram salvas.',
       });
-      
+
       onProfileUpdated();
       onOpenChange(false);
     } catch (error) {
@@ -73,7 +76,7 @@ export function EditProfileModal({
         <DialogHeader>
           <DialogTitle>Editar Perfil</DialogTitle>
         </DialogHeader>
-        
+
         <div className="space-y-4 py-4">
           <div className="space-y-2">
             <Label htmlFor="realName">Nome real</Label>
@@ -100,6 +103,18 @@ export function EditProfileModal({
               Este nome será exibido nas mensagens e no sistema.
             </p>
           </div>
+
+          <div className="border-t pt-4">
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full gap-2"
+              onClick={() => setShowChangePassword(true)}
+            >
+              <Key className="w-4 h-4" />
+              Alterar Senha
+            </Button>
+          </div>
         </div>
 
         <div className="flex justify-end gap-2">
@@ -111,6 +126,11 @@ export function EditProfileModal({
           </Button>
         </div>
       </DialogContent>
+
+      <ChangePasswordModal
+        open={showChangePassword}
+        onOpenChange={setShowChangePassword}
+      />
     </Dialog>
   );
 }
