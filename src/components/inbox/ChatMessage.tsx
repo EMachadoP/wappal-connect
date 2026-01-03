@@ -105,16 +105,29 @@ export function ChatMessage({
       case 'audio':
         return (
           <div className="flex flex-col gap-2 mb-2">
-            <audio
-              src={mediaUrl}
-              controls
-              className="max-w-xs"
-              crossOrigin="anonymous"
-              onError={(e) => {
-                console.error('Audio playback error:', e);
-                console.log('Audio URL:', mediaUrl);
-              }}
-            />
+            <div className="flex flex-col gap-1">
+              <audio
+                src={mediaUrl}
+                controls
+                className="max-w-xs"
+                crossOrigin="anonymous"
+                preload="metadata"
+                onError={(e) => {
+                  console.error('Audio playback error:', e);
+                  console.log('Audio URL:', mediaUrl);
+                }}
+              />
+              {mediaUrl && (
+                <a
+                  href={mediaUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-primary hover:underline"
+                >
+                  🔗 Abrir áudio em nova aba
+                </a>
+              )}
+            </div>
             {transcript && (
               <div className={cn(
                 "text-xs p-2 rounded-md max-w-xs",
