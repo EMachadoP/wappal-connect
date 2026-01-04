@@ -210,7 +210,10 @@ export default function InboxPage() {
                   loading={loadingMessages}
                   currentUserId={user.id}
                   isMobile={true}
-                  onBack={() => navigate('/inbox')}
+                  onBack={() => {
+                    setActiveConversationId(null);
+                    navigate('/inbox');
+                  }}
                 />
               )}
             </div>
