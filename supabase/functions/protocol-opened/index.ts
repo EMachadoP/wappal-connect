@@ -71,18 +71,41 @@ function translateRole(role: string): string {
   return map[role?.toLowerCase()] || role || "Não informada";
 }
 
-// Calculate next business day (skip weekends)
-function getNextBusinessDay(date: Date, daysToAdd: number): Date {
-  const result = new Date(date);
-  let addedDays = 0;
+// Brazilian holidays 2026 (add more years as needed)
+const HOLIDAYS_2026 = [
+  '2026-01-01', // Ano Novo
+  '2026-02-16', // Carnaval
+  '2026-02-17', // Carnaval
+  '2026-04-03', // Sexta-feira Santa
+  '2026-04-21', // Tiradentes
+  '2026-05-01', // Dia do Trabalho
+  '2026-06-04', // Corpus Christi
+  '2026-09-07', // Independência
+  '2026-10-12', // Nossa Senhora Aparecida
+  '2026-11-02', // Finados
+  '2026-11-15', // Proclamação da República
+  '2026-12-25', // Natal
+];
 
-  while (addedDays < daysToAdd) {
+// Check if date is a holiday
+function isHoliday(date: Date): boolean {
+  const dateStr = date.toISOString().split('T')[0];
+  return HOLIDAYS_2026.includes(dateStr);
+}
+
+// Check if date is weekend
+function isWeekend(date: Date): boolean {
+  const day = date.getDay();
+  return day === 0 || day === 6; // Sunday or Saturday
+}
+
+// Get same day or next business day if weekend/holiday
+function getBusinessDay(date: Date = new Date()): Date {
+  const result = new Date(date);
+
+  // Move to next day until we find a business day
+  while (isWeekend(result) || isHoliday(result)) {
     result.setDate(result.getDate() + 1);
-    const dayOfWeek = result.getDay();
-    // Skip Saturday (6) and Sunday (0)
-    if (dayOfWeek !== 0 && dayOfWeek !== 6) {
-      addedDays++;
-    }
   }
 
   return result;
@@ -93,9 +116,33 @@ function formatDateForAsana(date: Date): string {
   return date.toISOString().split("T")[0];
 }
 
-// Get today in YYYY-MM-DD
-function getTodayForAsana(): string {
-  return new Date().toISOString().split("T")[0];
+// Get SLA message based on priority
+function getSLAMessage(priority: string): string {
+  const slaMessages = {
+    critical: [
+      "Vamos resolver isso hoje mesmo!",
+      "Nossa equipe está priorizando seu atendimento para hoje.",
+      "Atendimento urgente - resolveremos no mesmo dia.",
+    ],
+    high: [
+      "Vamos resolver isso hoje mesmo!",
+      "Nossa equipe está priorizando seu atendimento para hoje.",
+      "Atendimento prioritário - resolveremos no mesmo dia.",
+    ],
+    normal: [
+      "Daremos retorno em até 2 dias úteis.",
+      "Você terá uma resposta em até 2 dias úteis.",
+      "Resolveremos em até 2 dias úteis.",
+    ],
+    low: [
+      "Daremos retorno em até 2 dias úteis.",
+      "Você terá uma resposta em até 2 dias úteis.",
+      "Atenderemos em até 2 dias úteis.",
+    ],
+  };
+
+  const messages = slaMessages[priority] || slaMessages.normal;
+  return messages[Math.floor(Math.random() * messages.length)];
 }
 
 serve(async (req) => {
@@ -127,7 +174,22 @@ serve(async (req) => {
       participant_id,
     } = await req.json();
 
-    console.log("Protocol opened:", { protocol_code, priority, category, condominium_name, requester_name });
+    console.log("Protocol opened:", { protocol_code, priority, category, condominium_name, requester_name, participant_id });
+
+    // Fetch participant with entity if participant_id is provided
+    let participantEntity: any = null;
+    if (participant_id) {
+      const { data: participantData } = await supabase
+        .from('participants')
+        .select('*, entities(name)')
+        .eq('id', participant_id)
+        .maybeSingle();
+
+      if (participantData) {
+        participantEntity = participantData;
+        console.log('[Protocol] Participant entity:', participantEntity?.entities?.name);
+      }
+    }
 
     // Check if protocol already has Asana task (idempotency)
     const { data: existingProtocol } = await supabase
@@ -166,11 +228,16 @@ serve(async (req) => {
     let asanaTaskGid: string | null = null;
 
     // Formatar dados para exibição
-    // Tentar extrair nome do condomínio do summary se não fornecido
+    // Priorizar entity do participante, depois tentar extrair do summary
     let extractedCondominiumName = condominium_name;
 
-    // Tratar string vazia como null
-    if (!extractedCondominiumName || extractedCondominiumName.trim() === '') {
+    // 1. Tentar pegar do participante identificado
+    if (participantEntity?.entities?.name) {
+      extractedCondominiumName = participantEntity.entities.name;
+      console.log('[Protocol] Using condominium from participant entity:', extractedCondominiumName);
+    }
+    // 2. Tratar string vazia como null e tentar extrair do summary
+    else if (!extractedCondominiumName || extractedCondominiumName.trim() === '') {
       if (summary) {
         // Procurar padrões como "Condomínio X", "Cond. X", "Edifício X", "Ed. X"
         const condMatch = summary.match(/(?:Condomínio|Cond\.|Edifício|Ed\.|Prédio)\s+([A-Za-zÀ-ÿ0-9\s]+?)(?:\.|,|$|:|\s-|\sS)/i);
@@ -225,16 +292,10 @@ serve(async (req) => {
       protocolId = existingProtocol.id;
     }
 
-    // Calculate due date
-    const now = new Date();
-    const isCritical = priority === "critical";
-    const dueDate = isCritical ? getTodayForAsana() : formatDateForAsana(getNextBusinessDay(now, 1));
+    // Calculate due date - always same day or next business day if weekend/holiday
+    const dueDate = formatDateForAsana(getBusinessDay(new Date()));
 
     console.log("Due date calculated:", dueDate, "priority:", priority);
-
-    // Define priority emoji for use in WhatsApp and Asana
-    const priorityEmoji = isCritical ? "🔴 CRÍTICO" : "🟢 Normal";
-    const priorityText = isCritical ? "Resolver HOJE" : `Resolver até ${dueDate}`;
 
     // ========== 1. Send WhatsApp Group Message ==========
     if (settings.whatsapp_notifications_enabled && settings.whatsapp_group_id) {
@@ -250,6 +311,9 @@ serve(async (req) => {
           const displayDate = new Date().toLocaleDateString('pt-BR');
           const yearMonthDay = protocol_code.split('-')[0]; // Get YYYYMM from protocol code
 
+          // Priority emoji for group message
+          const priorityEmoji = priority === 'critical' || priority === 'high' ? '🔴 CRÍTICO' : '🟢 Normal';
+
           const whatsappMessage = `*G7 Serv | Abertura de Chamado*
 📅 ${displayDate} | 🧾 Seq.: ${protocol_code}
 
@@ -257,7 +321,8 @@ serve(async (req) => {
 🏢 *Condomínio:* ${formattedCondominiumName}
 👤 *Solicitante:* ${formattedRequesterName}${formattedRequesterRole ? ` (${formattedRequesterRole})` : ''}
 📝 *Resumo:* ${summary || "Sem descrição"}
-${priorityEmoji} *Prioridade:* ${priorityText}
+${priorityEmoji} *Prioridade:* ${priority || 'normal'}
+⏰ *Vencimento:* ${dueDate}
 
 ➡️ *Para encerrar, responda:*
 G7-${protocol_code} - Resolvido`;
@@ -294,16 +359,17 @@ G7-${protocol_code} - Resolvido`;
     // ========== 2. Send WhatsApp message to client ==========
     if (conversation_id) {
       try {
-        // Calcular prazo humanizado
-        const dueDateHumanized = isCritical ? "Um dia útil" : "Dois dias úteis";
+        // Get SLA message based on priority
+        const slaMessage = getSLAMessage(priority || 'normal');
 
         const clientMessage = `📋 *Protocolo aberto*
 
 🔖 *Número:* G7-${protocol_code}
-📍 *Condomínio:* ${formattedCondominiumName}
+🏢 *Condomínio:* ${formattedCondominiumName}
 📂 *Categoria:* ${formattedCategory}
 📝 *Chamado:* ${summary || 'Sem descrição'}
-⏰ *Prazo para solução:* ${dueDateHumanized}
+
+${slaMessage}
 
 O protocolo foi aberto em nosso sistema e o responsável fará a tratativa.`;
 
@@ -364,7 +430,7 @@ Problema: ${summary || 'Sem descrição'}
 - Solicitante: ${formattedRequesterName}${formattedRequesterRole ? ` (${formattedRequesterRole})` : ''}
 - Horário: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
 
-**Prioridade:** ${priorityEmoji}`;
+**Prioridade:** ${priority || 'normal'}`;
 
           const taskData: Record<string, unknown> = {
             data: {
