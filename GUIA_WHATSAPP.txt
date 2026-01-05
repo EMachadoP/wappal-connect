@@ -1,0 +1,39 @@
+📱 *G7 CLIENT CONNECTOR - GUIA RÁPIDO*
+
+🔗 *Link:* https://wappal-connect.vercel.app
+
+━━━━━━━━━━━━━━━━━━━━
+
+*1️⃣ ATENDER*
+• Inbox → Clique na conversa
+• Digite e aperte Enter
+
+*2️⃣ IDENTIFICAR CLIENTE*
+• Clique "Editar" (topo)
+• Preencha: Nome, Função, Condomínio
+• Salvar ✅
+
+*3️⃣ GERAR PROTOCOLO*
+• Clique "Gerar Protocolo"
+• Preencha categoria e descrição
+• Cliente recebe número automático!
+
+*4️⃣ CONTROLAR IA*
+• Botão verde "IA Auto" (topo)
+• 🟢 AUTO = IA responde sozinha
+• 🟡 SUGERIR = IA sugere, você aprova
+• 🔴 OFF = Sem IA
+
+*5️⃣ FINALIZAR*
+• Menu (⋮) → "Resolver"
+
+━━━━━━━━━━━━━━━━━━━━
+
+💡 *DICAS*
+✅ Buscar: Barra no topo
+✅ Áudio: Clique Play
+✅ Filtros: Minhas | Entrada | Resolvidos
+
+🆘 *Dúvidas?* Fale com admin
+
+v1.0 | 05/01/2026
