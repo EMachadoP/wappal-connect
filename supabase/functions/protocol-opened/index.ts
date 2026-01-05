@@ -240,7 +240,8 @@ serve(async (req) => {
     else if (!extractedCondominiumName || extractedCondominiumName.trim() === '') {
       if (summary) {
         // Procurar padrões como "Condomínio X", "Cond. X", "Edifício X", "Ed. X"
-        const condMatch = summary.match(/(?:Condomínio|Cond\.|Edifício|Ed\.|Prédio)\s+([A-Za-zÀ-ÿ0-9\s]+?)(?:\.|,|$|:|\s-|\sS)/i);
+        // Captura até encontrar ponto final ou fim de linha
+        const condMatch = summary.match(/(?:Condomínio|Cond\.|Edifício|Ed\.|Prédio)\s+([A-Za-zÀ-ÿ0-9\s]+?)(?:\.|$)/i);
         if (condMatch) {
           extractedCondominiumName = condMatch[1].trim();
           console.log('[Protocol] Extracted condominium name from summary:', extractedCondominiumName);
