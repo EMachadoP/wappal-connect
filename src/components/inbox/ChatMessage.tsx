@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { format } from 'date-fns';
 import { Check, CheckCheck, FileText, Camera, Video, Mic, File } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { AudioPlayer } from './AudioPlayer';
 import { MessageFeedback } from './MessageFeedback';
 import { MessageActionsMenu } from './MessageActionsMenu';
 import { EditMessageModal } from './EditMessageModal';
