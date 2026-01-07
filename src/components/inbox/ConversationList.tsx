@@ -69,7 +69,7 @@ export function ConversationList({
 
   return (
     <div className={`w-full border-r border-border flex flex-col bg-card h-full overflow-hidden`}>
-      <div className="shrink-0 p-3 border-b border-border space-y-3">
+      <div className="shrink-0 p-4 border-b border-border space-y-4 bg-muted/5">
         <div className="flex items-center justify-between">
           <h2 className="font-semibold text-lg px-1">Mensagens</h2>
           <Button

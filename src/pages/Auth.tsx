@@ -146,7 +146,7 @@ export default function AuthPage() {
       <Card className="w-full max-w-md">
         <CardHeader className="text-center pb-2">
           <div className="mx-auto mb-6 w-32 h-32">
-            <img src="/logo.jpg" alt="G7" className="w-full h-full object-contain" />
+            <img src="/icon-512x512.png" alt="G7" className="w-full h-full object-contain" />
           </div>
           <CardTitle className="text-2xl">G7 Client Connector</CardTitle>
           <CardDescription>

@@ -34,7 +34,7 @@ export function Header() {
         <div className="flex items-center gap-6">
           <Link to="/inbox" className="flex items-center gap-2">
             <div className="w-10 h-10">
-              <img src="/logo.jpg" alt="G7" className="w-full h-full object-contain" />
+              <img src="/icon-192x192.png" alt="G7" className="w-full h-full object-contain" />
             </div>
             <span className="font-semibold text-foreground">G7 Client Connector</span>
           </Link>

@@ -5,6 +5,7 @@ import { Send, Paperclip } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { EmojiPicker } from './EmojiPicker';
+import { cn } from '@/lib/utils';
 
 interface ChatInputAreaProps {
   onSendMessage: (content: string) => void;
@@ -66,7 +67,13 @@ export function ChatInputArea({ onSendMessage, onSendFile, isResolved, isMobile 
           className="flex-1"
           autoComplete="off"
         />
-        <Button onClick={handleSend} disabled={!message.trim()} className="shrink-0">
+        <Button
+          onClick={handleSend}
+          className={cn(
+            "shrink-0 transition-opacity",
+            !message.trim() && "opacity-50 pointer-events-none"
+          )}
+        >
           <Send className="w-5 h-5" />
         </Button>
       </div>
