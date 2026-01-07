@@ -36,140 +36,148 @@ export function AudioPlayer({ audioUrl, className }: AudioPlayerProps) {
         setError(null);
 
         try {
-            // Fetch audio with proper headers
+            // First attempt: Fetch audio with proper headers to create a blob URL
+            // This is better for custom player controls and UI
             const response = await fetch(audioUrl, {
                 method: 'GET',
-                // Don't send credentials for Z-API URLs
-                credentials: audioUrl.includes('supabase') ? 'include' : 'omit',
+                // Simplify credentials - only include if it's explicitly a Supabase private URL
+                credentials: audioUrl.includes('supabase') && !audioUrl.includes('public') ? 'include' : 'omit',
             });
 
             if (!response.ok) {
-                throw new Error(`Falha ao carregar áudio: ${response.status}`);
+                console.warn(`Fetch failed with status ${response.status}. Falling back to direct src.`);
+                return setupDirectAudio(audioUrl);
             }
 
-            // Convert to blob
             const blob = await response.blob();
-
-            // Create blob URL
             const blobUrl = URL.createObjectURL(blob);
             blobUrlRef.current = blobUrl;
 
-            // Create audio element
-            if (!audioRef.current) {
-                audioRef.current = new Audio(blobUrl);
-
-                // Setup event listeners
-                audioRef.current.addEventListener('loadedmetadata', () => {
-                    setDuration(audioRef.current?.duration || 0);
-                });
-
-                audioRef.current.addEventListener('timeupdate', () => {
-                    setCurrentTime(audioRef.current?.currentTime || 0);
-                });
-
-                audioRef.current.addEventListener('ended', () => {
-                    setIsPlaying(false);
-                    setCurrentTime(0);
-                });
-
-                audioRef.current.addEventListener('error', (e) => {
-                    console.error('Audio playback error:', e);
-                    setError('Erro ao reproduzir áudio');
-                    setIsPlaying(false);
-                });
-            }
-
-            setIsLoading(false);
-            return blobUrl;
+            return setupAudioElement(blobUrl);
         } catch (err: any) {
-            console.error('Error loading audio:', err);
-            setError(err.message || 'Erro ao carregar áudio');
-            setIsLoading(false);
-            return null;
+            console.warn('Fetch failed due to CORS or network. Falling back to direct src:', err);
+            return setupDirectAudio(audioUrl);
         }
     };
 
-    const togglePlay = async () => {
-        try {
-            if (!audioRef.current) {
-                await loadAudio();
-            }
+    const setupAudioElement = (url: string) => {
+        if (!audioRef.current) {
+            audioRef.current = new Audio(url);
 
-            if (audioRef.current) {
-                if (isPlaying) {
-                    audioRef.current.pause();
-                    setIsPlaying(false);
-                } else {
-                    await audioRef.current.play();
-                    setIsPlaying(true);
-                }
-            }
-        } catch (err: any) {
-            console.error('Error playing audio:', err);
-            setError('Erro ao reproduzir áudio');
+            audioRef.current.addEventListener('loadedmetadata', () => {
+                setDuration(audioRef.current?.duration || 0);
+            });
+
+            audioRef.current.addEventListener('timeupdate', () => {
+                setCurrentTime(audioRef.current?.currentTime || 0);
+            });
+
+            audioRef.current.addEventListener('ended', () => {
+                setIsPlaying(false);
+                setCurrentTime(0);
+            });
+
+            audioRef.current.addEventListener('error', (e) => {
+                console.error('Audio playback error:', e);
+                setError('Erro ao reproduzir áudio');
+                setIsPlaying(false);
+            });
+        } else {
+            audioRef.current.src = url;
+            audioRef.current.load();
         }
+        setIsLoading(false);
+        return url;
     };
 
-    const formatTime = (seconds: number) => {
-        const mins = Math.floor(seconds / 60);
-        const secs = Math.floor(seconds % 60);
-        return `${mins}:${secs.toString().padStart(2, '0')}`;
+    const setupDirectAudio = (url: string) => {
+        setIsLoading(true);
+        // If direct loading also fails, we'll see it in the 'error' event listener
+        return setupAudioElement(url);
     };
+};
 
-    const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
-        if (!audioRef.current || !duration) return;
+const togglePlay = async () => {
+    try {
+        if (!audioRef.current) {
+            await loadAudio();
+        }
 
-        const rect = e.currentTarget.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const percentage = x / rect.width;
-        const newTime = percentage * duration;
-
-        audioRef.current.currentTime = newTime;
-        setCurrentTime(newTime);
-    };
-
-    if (error) {
-        return (
-            <div className={cn("flex items-center gap-2 p-2 bg-destructive/10 rounded-md", className)}>
-                <Volume2 className="w-4 h-4 text-destructive" />
-                <span className="text-xs text-destructive">{error}</span>
-            </div>
-        );
+        if (audioRef.current) {
+            if (isPlaying) {
+                audioRef.current.pause();
+                setIsPlaying(false);
+            } else {
+                await audioRef.current.play();
+                setIsPlaying(true);
+            }
+        }
+    } catch (err: any) {
+        console.error('Error playing audio:', err);
+        setError('Erro ao reproduzir áudio');
     }
+};
 
+const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+};
+
+const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!audioRef.current || !duration) return;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const percentage = x / rect.width;
+    const newTime = percentage * duration;
+
+    audioRef.current.currentTime = newTime;
+    setCurrentTime(newTime);
+};
+
+if (error) {
     return (
-        <div className={cn("flex items-center gap-2 bg-muted/50 rounded-md p-2 max-w-xs", className)}>
-            <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 shrink-0"
-                onClick={togglePlay}
-                disabled={isLoading}
-            >
-                {isLoading ? (
-                    <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                ) : isPlaying ? (
-                    <Pause className="w-4 h-4" />
-                ) : (
-                    <Play className="w-4 h-4" />
-                )}
-            </Button>
-
-            <div className="flex-1 flex flex-col gap-1">
-                <div
-                    className="h-1 bg-muted rounded-full cursor-pointer"
-                    onClick={handleSeek}
-                >
-                    <div
-                        className="h-full bg-primary rounded-full transition-all"
-                        style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
-                    />
-                </div>
-                <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>{formatTime(currentTime)}</span>
-                    <span>{formatTime(duration)}</span>
-                </div>
-            </div>
+        <div className={cn("flex items-center gap-2 p-2 bg-destructive/10 rounded-md", className)}>
+            <Volume2 className="w-4 h-4 text-destructive" />
+            <span className="text-xs text-destructive">{error}</span>
         </div>
     );
+}
+
+return (
+    <div className={cn("flex items-center gap-2 bg-muted/50 rounded-md p-2 max-w-xs", className)}>
+        <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            onClick={togglePlay}
+            disabled={isLoading}
+        >
+            {isLoading ? (
+                <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+            ) : isPlaying ? (
+                <Pause className="w-4 h-4" />
+            ) : (
+                <Play className="w-4 h-4" />
+            )}
+        </Button>
+
+        <div className="flex-1 flex flex-col gap-1">
+            <div
+                className="h-1 bg-muted rounded-full cursor-pointer"
+                onClick={handleSeek}
+            >
+                <div
+                    className="h-full bg-primary rounded-full transition-all"
+                    style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+                />
+            </div>
+            <div className="flex justify-between text-xs text-muted-foreground">
+                <span>{formatTime(currentTime)}</span>
+                <span>{formatTime(duration)}</span>
+            </div>
+        </div>
+    </div>
+);
 }

@@ -113,7 +113,7 @@ Write-Host "  Vercel: Deploy automatico em andamento" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "Links uteis:" -ForegroundColor White
 Write-Host "  Vercel: https://vercel.com/eldons-projects-3194802d/wappal-connect/deployments" -ForegroundColor Cyan
-Write-Host "  Producao: https://wappal-connect.vercel.app" -ForegroundColor Cyan
+Write-Host "  Producao: https://wappal-connect.vercel.app/inbox" -ForegroundColor Cyan
 Write-Host "  Supabase: https://supabase.com/dashboard/project/qoolzhzdcfnyblymdvbq/functions" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Proximos passos:" -ForegroundColor White
