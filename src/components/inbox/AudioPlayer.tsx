@@ -95,89 +95,87 @@ export function AudioPlayer({ audioUrl, className }: AudioPlayerProps) {
         // If direct loading also fails, we'll see it in the 'error' event listener
         return setupAudioElement(url);
     };
-};
-
-const togglePlay = async () => {
-    try {
-        if (!audioRef.current) {
-            await loadAudio();
-        }
-
-        if (audioRef.current) {
-            if (isPlaying) {
-                audioRef.current.pause();
-                setIsPlaying(false);
-            } else {
-                await audioRef.current.play();
-                setIsPlaying(true);
+    const togglePlay = async () => {
+        try {
+            if (!audioRef.current) {
+                await loadAudio();
             }
+
+            if (audioRef.current) {
+                if (isPlaying) {
+                    audioRef.current.pause();
+                    setIsPlaying(false);
+                } else {
+                    await audioRef.current.play();
+                    setIsPlaying(true);
+                }
+            }
+        } catch (err: any) {
+            console.error('Error playing audio:', err);
+            setError('Erro ao reproduzir áudio');
         }
-    } catch (err: any) {
-        console.error('Error playing audio:', err);
-        setError('Erro ao reproduzir áudio');
+    };
+
+    const formatTime = (seconds: number) => {
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
+    };
+
+    const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+        if (!audioRef.current || !duration) return;
+
+        const rect = e.currentTarget.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const percentage = x / rect.width;
+        const newTime = percentage * duration;
+
+        audioRef.current.currentTime = newTime;
+        setCurrentTime(newTime);
+    };
+
+    if (error) {
+        return (
+            <div className={cn("flex items-center gap-2 p-2 bg-destructive/10 rounded-md", className)}>
+                <Volume2 className="w-4 h-4 text-destructive" />
+                <span className="text-xs text-destructive">{error}</span>
+            </div>
+        );
     }
-};
 
-const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-};
-
-const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!audioRef.current || !duration) return;
-
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const percentage = x / rect.width;
-    const newTime = percentage * duration;
-
-    audioRef.current.currentTime = newTime;
-    setCurrentTime(newTime);
-};
-
-if (error) {
     return (
-        <div className={cn("flex items-center gap-2 p-2 bg-destructive/10 rounded-md", className)}>
-            <Volume2 className="w-4 h-4 text-destructive" />
-            <span className="text-xs text-destructive">{error}</span>
+        <div className={cn("flex items-center gap-2 bg-muted/50 rounded-md p-2 max-w-xs", className)}>
+            <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0"
+                onClick={togglePlay}
+                disabled={isLoading}
+            >
+                {isLoading ? (
+                    <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                ) : isPlaying ? (
+                    <Pause className="w-4 h-4" />
+                ) : (
+                    <Play className="w-4 h-4" />
+                )}
+            </Button>
+
+            <div className="flex-1 flex flex-col gap-1">
+                <div
+                    className="h-1 bg-muted rounded-full cursor-pointer"
+                    onClick={handleSeek}
+                >
+                    <div
+                        className="h-full bg-primary rounded-full transition-all"
+                        style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+                    />
+                </div>
+                <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>{formatTime(currentTime)}</span>
+                    <span>{formatTime(duration)}</span>
+                </div>
+            </div>
         </div>
     );
-}
-
-return (
-    <div className={cn("flex items-center gap-2 bg-muted/50 rounded-md p-2 max-w-xs", className)}>
-        <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 shrink-0"
-            onClick={togglePlay}
-            disabled={isLoading}
-        >
-            {isLoading ? (
-                <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-            ) : isPlaying ? (
-                <Pause className="w-4 h-4" />
-            ) : (
-                <Play className="w-4 h-4" />
-            )}
-        </Button>
-
-        <div className="flex-1 flex flex-col gap-1">
-            <div
-                className="h-1 bg-muted rounded-full cursor-pointer"
-                onClick={handleSeek}
-            >
-                <div
-                    className="h-full bg-primary rounded-full transition-all"
-                    style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
-                />
-            </div>
-            <div className="flex justify-between text-xs text-muted-foreground">
-                <span>{formatTime(currentTime)}</span>
-                <span>{formatTime(duration)}</span>
-            </div>
-        </div>
-    </div>
-);
 }
