@@ -1,8 +1,7 @@
 import { useState } from 'react';
-import { Search } from 'lucide-react';
+import { Search, Plus } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Plus } from 'lucide-react';
 import { ConversationItem } from './ConversationItem';
 import { NewMessageModal } from './NewMessageModal';
 import { Button } from '@/components/ui/button';
@@ -74,13 +73,13 @@ export function ConversationList({
         <div className="flex items-center justify-between">
           <h2 className="font-semibold text-lg px-1">Mensagens</h2>
           <Button
-            variant="ghost"
-            size="icon"
+            variant="default"
+            size="sm"
             onClick={() => setNewMessageModalOpen(true)}
-            title="Nova Mensagem"
-            className="h-8 w-8 hover:bg-primary/10 hover:text-primary transition-colors"
+            className="gap-2 h-8 px-3"
           >
-            <Plus className="w-5 h-5" />
+            <Plus className="w-4 h-4" />
+            Nova Conversa
           </Button>
         </div>
         <div className="relative">

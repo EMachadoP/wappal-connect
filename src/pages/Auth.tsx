@@ -12,7 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
-import logo from '@/assets/logo.png';
+import logo from '@/assets/logo.jpg';
 
 const passwordSchema = z.string()
   .min(8, 'Senha deve ter pelo menos 8 caracteres')

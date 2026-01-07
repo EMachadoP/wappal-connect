@@ -7,7 +7,7 @@ import { useProfile } from '@/hooks/useProfile';
 import { useUserRole } from '@/hooks/useUserRole';
 import { cn } from '@/lib/utils';
 import { EditProfileModal } from '@/components/profile/EditProfileModal';
-import logo from '@/assets/logo.png';
+import logo from '@/assets/logo.jpg';
 
 const navItems = [
   { path: '/inbox', label: 'Conversas', icon: MessageSquare },
@@ -43,7 +43,7 @@ export function Header() {
             {visibleNavItems.map((item) => {
               const Icon = item.icon;
               const isActive = location.pathname.startsWith(item.path);
-              
+
               return (
                 <Link key={item.path} to={item.path}>
                   <Button
