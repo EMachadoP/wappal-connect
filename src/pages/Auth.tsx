@@ -12,7 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
-import logo from '@/assets/logo.jpg';
+
 
 const passwordSchema = z.string()
   .min(8, 'Senha deve ter pelo menos 8 caracteres')
@@ -146,7 +146,7 @@ export default function AuthPage() {
       <Card className="w-full max-w-md">
         <CardHeader className="text-center pb-2">
           <div className="mx-auto mb-6 w-32 h-32">
-            <img src={logo} alt="G7" className="w-full h-full object-contain" />
+            <img src="/logo.jpg" alt="G7" className="w-full h-full object-contain" />
           </div>
           <CardTitle className="text-2xl">G7 Client Connector</CardTitle>
           <CardDescription>
