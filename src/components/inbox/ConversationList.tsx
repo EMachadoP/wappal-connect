@@ -2,7 +2,10 @@ import { useState } from 'react';
 import { Search } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Plus } from 'lucide-react';
 import { ConversationItem } from './ConversationItem';
+import { NewMessageModal } from './NewMessageModal';
+import { Button } from '@/components/ui/button';
 
 interface Conversation {
   id: string;
@@ -37,6 +40,7 @@ export function ConversationList({
 }: ConversationListProps) {
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState<TabValue>('inbox');
+  const [newMessageModalOpen, setNewMessageModalOpen] = useState(false);
 
   const filteredConversations = conversations
     .filter((conv) => {
@@ -66,7 +70,19 @@ export function ConversationList({
 
   return (
     <div className={`w-full border-r border-border flex flex-col bg-card h-full overflow-hidden`}>
-      <div className="shrink-0 p-3 border-b border-border">
+      <div className="shrink-0 p-3 border-b border-border space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold text-lg px-1">Mensagens</h2>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setNewMessageModalOpen(true)}
+            title="Nova Mensagem"
+            className="h-8 w-8 hover:bg-primary/10 hover:text-primary transition-colors"
+          >
+            <Plus className="w-5 h-5" />
+          </Button>
+        </div>
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
@@ -77,6 +93,12 @@ export function ConversationList({
           />
         </div>
       </div>
+
+      <NewMessageModal
+        open={newMessageModalOpen}
+        onOpenChange={setNewMessageModalOpen}
+        onSelectConversation={onSelectConversation}
+      />
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabValue)} className="shrink-0 border-b border-border">
         <TabsList className="w-full h-auto p-0 bg-transparent grid grid-cols-3">
