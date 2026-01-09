@@ -191,16 +191,47 @@ serve(async (req) => {
       contact_id = null;
     }
 
-    // Validate condominium_id if provided
+    // Validate condominium_id if provided (check entities table first, then condominiums)
     if (resolvedCondoId && isValidUUID(resolvedCondoId)) {
-      const { data: condoExists } = await supabaseClient
-        .from('condominiums')
-        .select('id')
-        .eq('id', resolvedCondoId)
-        .maybeSingle();
+      let condoIsValid = false;
 
-      if (!condoExists) {
-        log(`[create-protocol] WARNING: condominium_id ${resolvedCondoId} does not exist, setting to null`);
+      // First check if it's in entities table (where Identificar Remetente saves)
+      try {
+        const { data: entityExists, error: entityError } = await supabaseClient
+          .from('entities')
+          .select('id')
+          .eq('id', resolvedCondoId)
+          .eq('type', 'condominio')
+          .maybeSingle();
+
+        if (!entityError && entityExists) {
+          condoIsValid = true;
+          log(`[create-protocol] Condominium found in entities table`);
+        }
+      } catch (e) {
+        log(`[create-protocol] Error checking entities table: ${e.message}`);
+      }
+
+      // Then check condominiums table as fallback
+      if (!condoIsValid) {
+        try {
+          const { data: condoExists, error: condoError } = await supabaseClient
+            .from('condominiums')
+            .select('id')
+            .eq('id', resolvedCondoId)
+            .maybeSingle();
+
+          if (!condoError && condoExists) {
+            condoIsValid = true;
+            log(`[create-protocol] Condominium found in condominiums table`);
+          }
+        } catch (e) {
+          log(`[create-protocol] Error checking condominiums table: ${e.message}`);
+        }
+      }
+
+      if (!condoIsValid) {
+        log(`[create-protocol] WARNING: condominium_id ${resolvedCondoId} not found in entities or condominiums, setting to null`);
         resolvedCondoId = null;
       }
     } else {
@@ -280,8 +311,33 @@ serve(async (req) => {
 
         let condoName = 'Não identificado';
         if (resolvedCondoId) {
-          const { data: condoData } = await supabaseClient.from('condominiums').select('name').eq('id', resolvedCondoId).maybeSingle();
-          if (condoData) condoName = condoData.name;
+          try {
+            // First try entities table (where Identificar Remetente saves)
+            const { data: entityData, error: entityError } = await supabaseClient
+              .from('entities')
+              .select('name')
+              .eq('id', resolvedCondoId)
+              .eq('type', 'condominio')
+              .maybeSingle();
+
+            if (!entityError && entityData) {
+              condoName = entityData.name;
+            } else {
+              // Fallback to condominiums table
+              const { data: condoData, error: condoError } = await supabaseClient
+                .from('condominiums')
+                .select('name')
+                .eq('id', resolvedCondoId)
+                .maybeSingle();
+
+              if (!condoError && condoData) {
+                condoName = condoData.name;
+              }
+            }
+          } catch (e) {
+            log(`[create-protocol] Error fetching condominium name: ${e.message}`);
+            // Keep default 'Não identificado'
+          }
         }
 
         await fetch(`${supabaseUrl}/functions/v1/protocol-opened`, {

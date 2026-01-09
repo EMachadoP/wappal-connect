@@ -388,34 +388,92 @@ export function GenerateProtocolModal({
                   value={newCondoName}
                   onChange={(e) => setNewCondoName(e.target.value)}
                   className="flex-1"
+                  autoFocus
                 />
                 <Button onClick={handleCreateCondominium} disabled={creatingCondo} size="sm">
                   {creatingCondo ? 'Salvando...' : 'Salvar'}
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => setShowNewCondoForm(false)}>
+                <Button variant="ghost" size="sm" onClick={() => {
+                  setShowNewCondoForm(false);
+                  setNewCondoName('');
+                }}>
                   Cancelar
                 </Button>
               </div>
             ) : (
               <div className="flex gap-2">
-                <Select value={condominiumId} onValueChange={setCondominiumId} disabled={loadingCondominiums}>
+                <Select
+                  value={condominiumId}
+                  onValueChange={setCondominiumId}
+                  disabled={loadingCondominiums}
+                >
                   <SelectTrigger className="flex-1">
-                    <SelectValue placeholder={loadingCondominiums ? 'Carregando...' : 'Selecione o condomínio'} />
+                    <SelectValue placeholder={loadingCondominiums ? 'Carregando...' : 'Selecione ou busque o condomínio'} />
                   </SelectTrigger>
                   <SelectContent>
-                    {availableCondominiums.map((condo) => (
-                      <SelectItem key={condo.id} value={condo.id}>
-                        <div className="flex items-center gap-2">
-                          <Building2 className="w-4 h-4" />
-                          {condo.name}
-                        </div>
-                      </SelectItem>
-                    ))}
-                    {availableCondominiums.length === 0 && !loadingCondominiums && (
-                      <div className="px-2 py-1.5 text-sm text-muted-foreground">
-                        Nenhum condomínio cadastrado
-                      </div>
-                    )}
+                    {/* Search input inside dropdown */}
+                    <div className="px-2 py-1.5 border-b sticky top-0 bg-background z-10">
+                      <Input
+                        placeholder="🔍 Buscar condomínio..."
+                        value={newCondoName}
+                        onChange={(e) => setNewCondoName(e.target.value)}
+                        className="h-8 text-sm"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </div>
+
+                    {(() => {
+                      // Filter condominiums based on search
+                      const searchTerm = newCondoName.toLowerCase().trim();
+                      const filtered = searchTerm
+                        ? availableCondominiums.filter(c =>
+                          c.name.toLowerCase().includes(searchTerm)
+                        )
+                        : availableCondominiums;
+
+                      if (filtered.length === 0 && searchTerm) {
+                        // No results found - show option to create
+                        return (
+                          <div className="p-3 text-center">
+                            <p className="text-sm text-muted-foreground mb-2">
+                              Nenhum resultado para "<strong>{newCondoName}</strong>"
+                            </p>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="w-full"
+                              onClick={() => {
+                                setShowNewCondoForm(true);
+                              }}
+                            >
+                              <Plus className="w-4 h-4 mr-2" />
+                              Cadastrar "{newCondoName}"
+                            </Button>
+                          </div>
+                        );
+                      }
+
+                      if (filtered.length === 0 && !searchTerm) {
+                        return (
+                          <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                            Nenhum condomínio cadastrado
+                          </div>
+                        );
+                      }
+
+                      return filtered.map((condo) => (
+                        <SelectItem
+                          key={condo.id}
+                          value={condo.id}
+                          onClick={() => setNewCondoName('')}
+                        >
+                          <div className="flex items-center gap-2">
+                            <Building2 className="w-4 h-4" />
+                            {condo.name}
+                          </div>
+                        </SelectItem>
+                      ));
+                    })()}
                   </SelectContent>
                 </Select>
                 <Button

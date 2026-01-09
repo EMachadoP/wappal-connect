@@ -2,6 +2,8 @@
 
 import React, { useRef, useEffect, useCallback, memo } from 'react';
 import { ChatMessage } from './ChatMessage';
+import { format, isToday, isYesterday, isSameDay } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 
 interface MessageListProps {
   messages: any[];
@@ -19,6 +21,31 @@ const isPhoneNumber = (str: string | null | undefined): boolean => {
   const digitsOnly = str.replace(/\D/g, '');
   return digitsOnly.length >= 8 && /^\d+$/.test(digitsOnly);
 };
+
+// Função para formatar a data do separador
+const formatDateSeparator = (date: Date): string => {
+  if (isToday(date)) {
+    return 'Hoje';
+  }
+  if (isYesterday(date)) {
+    return 'Ontem';
+  }
+  // Para datas mais antigas, mostra o dia da semana e a data
+  const dayOfWeek = format(date, 'EEEE', { locale: ptBR });
+  const formattedDate = format(date, 'dd/MM/yyyy');
+  return `${dayOfWeek.charAt(0).toUpperCase() + dayOfWeek.slice(1)}, ${formattedDate}`;
+};
+
+// Componente de separador de data
+const DateSeparator = ({ date }: { date: Date }) => (
+  <div className="flex items-center justify-center my-4">
+    <div className="flex-1 border-t border-border"></div>
+    <span className="px-4 text-xs text-muted-foreground font-medium bg-background">
+      {formatDateSeparator(date)}
+    </span>
+    <div className="flex-1 border-t border-border"></div>
+  </div>
+);
 
 export function MessageList({ messages, loading, conversationId, profiles, contactName }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -54,15 +81,42 @@ export function MessageList({ messages, loading, conversationId, profiles, conta
     );
   }
 
+  // Agrupar mensagens por data
+  const messagesWithDateSeparators: (any | { type: 'date-separator', date: Date })[] = [];
+  let lastDate: Date | null = null;
+
+  messages.forEach((msg) => {
+    const msgDate = new Date(msg.sent_at);
+
+    // Se é um novo dia, adiciona o separador
+    if (!lastDate || !isSameDay(msgDate, lastDate)) {
+      messagesWithDateSeparators.push({
+        type: 'date-separator',
+        date: msgDate,
+        id: `separator-${msg.sent_at}` // Unique key for separator
+      });
+      lastDate = msgDate;
+    }
+
+    messagesWithDateSeparators.push(msg);
+  });
+
   return (
-    <div 
+    <div
       ref={containerRef}
       className="flex-1 overflow-y-auto p-4 scrollbar-thin"
     >
       <div className="flex flex-col">
-        {messages.map((msg) => {
+        {messagesWithDateSeparators.map((item) => {
+          // Renderizar separador de data
+          if (item.type === 'date-separator') {
+            return <DateSeparator key={item.id} date={item.date} />;
+          }
+
+          // Renderizar mensagem normal
+          const msg = item;
           const isOutgoing = msg.sender_type === 'agent';
-          
+
           let name: string | null = null;
 
           if (isOutgoing) {
