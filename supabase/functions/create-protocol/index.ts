@@ -194,17 +194,19 @@ serve(async (req) => {
     // Validate condominium_id if provided (check entities table first, then condominiums)
     if (resolvedCondoId && isValidUUID(resolvedCondoId)) {
       let condoIsValid = false;
+      let entityData = null;
 
       // First check if it's in entities table (where Identificar Remetente saves)
       try {
         const { data: entityExists, error: entityError } = await supabaseClient
           .from('entities')
-          .select('id')
+          .select('id, name, created_at, updated_at')
           .eq('id', resolvedCondoId)
           .eq('type', 'condominio')
           .maybeSingle();
 
         if (!entityError && entityExists) {
+          entityData = entityExists;
           condoIsValid = true;
           log(`[create-protocol] Condominium found in entities table`);
         }
@@ -212,8 +214,8 @@ serve(async (req) => {
         log(`[create-protocol] Error checking entities table: ${e.message}`);
       }
 
-      // Then check condominiums table as fallback
-      if (!condoIsValid) {
+      // Then check condominiums table
+      if (condoIsValid) {
         try {
           const { data: condoExists, error: condoError } = await supabaseClient
             .from('condominiums')
@@ -221,8 +223,35 @@ serve(async (req) => {
             .eq('id', resolvedCondoId)
             .maybeSingle();
 
-          if (!condoError && condoExists) {
-            condoIsValid = true;
+          if (condoError || !condoExists) {
+            // CRITICAL FIX: Condominium exists in entities but not in condominiums
+            // This should not happen with the trigger, but we'll auto-sync as fallback
+            log(`[create-protocol] WARNING: Condominium exists in entities but not in condominiums. Auto-syncing...`);
+
+            if (entityData) {
+              try {
+                const { error: syncError } = await supabaseClient
+                  .from('condominiums')
+                  .insert({
+                    id: entityData.id,
+                    name: entityData.name,
+                    created_at: entityData.created_at,
+                    updated_at: entityData.updated_at
+                  });
+
+                if (syncError) {
+                  log(`[create-protocol] ERROR syncing to condominiums table: ${syncError.message}`);
+                  // If sync fails, the protocol insert will also fail, so set to null
+                  condoIsValid = false;
+                } else {
+                  log(`[create-protocol] Successfully synced condominium to condominiums table`);
+                }
+              } catch (e) {
+                log(`[create-protocol] EXCEPTION during sync: ${e.message}`);
+                condoIsValid = false;
+              }
+            }
+          } else {
             log(`[create-protocol] Condominium found in condominiums table`);
           }
         } catch (e) {
