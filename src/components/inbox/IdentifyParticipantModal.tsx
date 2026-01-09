@@ -114,6 +114,7 @@ export function IdentifyParticipantModal({
 
       // Create new entity if requested
       if (createNewEntity && newEntityName.trim()) {
+        // Create in entities table first
         const { data: newEntity, error: entityError } = await supabase
           .from('entities')
           .insert({ name: newEntityName.trim(), type: 'condominio' })
@@ -121,6 +122,21 @@ export function IdentifyParticipantModal({
           .single();
 
         if (entityError) throw entityError;
+
+        // CRITICAL: Also create in condominiums table to satisfy foreign key constraint
+        // This is needed because protocols table has FK to condominiums table
+        const { error: condoError } = await supabase
+          .from('condominiums')
+          .insert({
+            id: newEntity.id, // Use same ID from entities table
+            name: newEntityName.trim(),
+          });
+
+        if (condoError) {
+          console.warn('[IdentifyParticipantModal] Error creating in condominiums table:', condoError);
+          // Continue anyway - entity was created successfully
+        }
+
         finalEntityId = newEntity.id;
       }
 

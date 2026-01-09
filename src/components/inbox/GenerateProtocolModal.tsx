@@ -159,7 +159,8 @@ export function GenerateProtocolModal({
 
     setCreatingCondo(true);
     try {
-      const { data, error } = await supabase
+      // Create in entities table first (where Identificar Remetente looks)
+      const { data: entityData, error: entityError } = await supabase
         .from('entities')
         .insert({
           name: newCondoName.trim(),
@@ -168,19 +169,33 @@ export function GenerateProtocolModal({
         .select()
         .single();
 
-      if (error) throw error;
+      if (entityError) throw entityError;
+
+      // CRITICAL: Also create in condominiums table to satisfy foreign key constraint
+      // This is needed because protocols table has FK to condominiums table
+      const { error: condoError } = await supabase
+        .from('condominiums')
+        .insert({
+          id: entityData.id, // Use same ID from entities table
+          name: newCondoName.trim(),
+        });
+
+      if (condoError) {
+        console.warn('[GenerateProtocolModal] Error creating in condominiums table:', condoError);
+        // Continue anyway - entity was created successfully
+      }
 
       // Link to contact if we have one
-      if (contactId && data) {
+      if (contactId && entityData) {
         await supabase.from('contact_condominiums').insert({
           contact_id: contactId,
-          condominium_id: data.id,
+          condominium_id: entityData.id,
           is_default: true,
         });
       }
 
       toast.success('Condomínio criado!');
-      setCondominiumId(data.id);
+      setCondominiumId(entityData.id);
       setNewCondoName('');
       setShowNewCondoForm(false);
       await fetchAllCondominiums();
