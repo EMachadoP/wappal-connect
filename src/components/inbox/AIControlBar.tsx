@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Bot, User, Pause, Play, AlertTriangle } from 'lucide-react';
+import { Bot, User, Pause, Play, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/integrations/supabase/client';
@@ -24,6 +24,7 @@ export function AIControlBar({
   const [aiPausedUntil, setAiPausedUntil] = useState(initialPausedUntil);
   const [humanControl, setHumanControl] = useState(initialHumanControl);
   const [loading, setLoading] = useState(false);
+  const [remainingSeconds, setRemainingSeconds] = useState(0);
 
   useEffect(() => {
     setAiMode(initialAiMode);
@@ -32,9 +33,64 @@ export function AIControlBar({
   }, [initialAiMode, initialPausedUntil, initialHumanControl]);
 
   const isPaused = aiPausedUntil && new Date(aiPausedUntil) > new Date();
-  const pauseMinutes = isPaused 
-    ? Math.round((new Date(aiPausedUntil).getTime() - Date.now()) / 60000)
-    : 0;
+
+  // Real-time countdown and auto-resume
+  useEffect(() => {
+    if (!aiPausedUntil) {
+      setRemainingSeconds(0);
+      return;
+    }
+
+    const updateCountdown = () => {
+      const now = Date.now();
+      const pauseEnd = new Date(aiPausedUntil).getTime();
+      const remaining = Math.max(0, Math.floor((pauseEnd - now) / 1000));
+
+      setRemainingSeconds(remaining);
+
+      // Auto-resume if pause expired
+      if (remaining === 0 && isPaused) {
+        console.log('[AIControlBar] Pause expired, auto-resuming AI...');
+        handleAutoResume();
+      }
+    };
+
+    updateCountdown(); // Initial update
+    const interval = setInterval(updateCountdown, 1000);
+
+    return () => clearInterval(interval);
+  }, [aiPausedUntil, isPaused]);
+
+  const handleAutoResume = async () => {
+    try {
+      const { error } = await supabase
+        .from('conversations')
+        .update({
+          ai_mode: 'AUTO',
+          human_control: false,
+          ai_paused_until: null,
+        })
+        .eq('id', conversationId);
+
+      if (error) throw error;
+
+      // Log event
+      await supabase.from('ai_events').insert({
+        conversation_id: conversationId,
+        event_type: 'ai_auto_resumed',
+        message: '🤖 IA retomada automaticamente após timeout.',
+      });
+
+      setAiMode('AUTO');
+      setAiPausedUntil(null);
+      setHumanControl(false);
+      onModeChange?.('AUTO');
+
+      toast.success('IA retomada automaticamente');
+    } catch (error) {
+      console.error('[AIControlBar] Error auto-resuming AI:', error);
+    }
+  };
 
   const handleSetMode = async (mode: 'AUTO' | 'COPILOT' | 'OFF') => {
     setLoading(true);
@@ -59,27 +115,28 @@ export function AIControlBar({
       await supabase.from('ai_events').insert({
         conversation_id: conversationId,
         event_type: 'ai_mode_changed',
-        message: mode === 'AUTO' 
+        message: mode === 'AUTO'
           ? '🤖 IA retomada em modo automático.'
           : mode === 'COPILOT'
-          ? '🧑‍✈️ IA em modo copiloto (apenas sugestões).'
-          : '⏸️ IA desativada manualmente.',
+            ? '🧑‍✈️ IA em modo copiloto (apenas sugestões).'
+            : '⏸️ IA desativada manualmente.',
       });
 
       setAiMode(mode);
       setAiPausedUntil(null);
+      setRemainingSeconds(0);
       if (mode === 'AUTO') {
         setHumanControl(false);
       }
-      
+
       onModeChange?.(mode);
-      
+
       toast.success(
-        mode === 'AUTO' 
-          ? 'IA retomada' 
-          : mode === 'COPILOT' 
-          ? 'Modo copiloto ativado'
-          : 'IA desativada'
+        mode === 'AUTO'
+          ? 'IA retomada'
+          : mode === 'COPILOT'
+            ? 'Modo copiloto ativado'
+            : 'IA desativada'
       );
     } catch (error) {
       console.error('Error updating AI mode:', error);
@@ -113,6 +170,12 @@ export function AIControlBar({
     }
   };
 
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-muted/30">
       <div className="flex items-center gap-2 flex-1">
@@ -128,10 +191,10 @@ export function AIControlBar({
           </Badge>
         )}
 
-        {isPaused && (
+        {isPaused && remainingSeconds > 0 && (
           <Badge variant="outline" className="bg-orange-500/20 text-orange-600 border-orange-500/30 text-xs">
-            <AlertTriangle className="w-3 h-3 mr-1" />
-            Pausado {pauseMinutes}min
+            <Clock className="w-3 h-3 mr-1" />
+            Pausado {formatTime(remainingSeconds)}
           </Badge>
         )}
       </div>

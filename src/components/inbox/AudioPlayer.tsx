@@ -97,22 +97,57 @@ export function AudioPlayer({ audioUrl, className }: AudioPlayerProps) {
     };
     const togglePlay = async () => {
         try {
+            // If audio element doesn't exist yet, load it first
             if (!audioRef.current) {
+                console.log('[AudioPlayer] Loading audio for first time...');
                 await loadAudio();
             }
 
-            if (audioRef.current) {
-                if (isPlaying) {
-                    audioRef.current.pause();
-                    setIsPlaying(false);
-                } else {
-                    await audioRef.current.play();
-                    setIsPlaying(true);
+            // Double-check audio element is ready
+            if (!audioRef.current) {
+                console.error('[AudioPlayer] Audio element still not ready after loading');
+                setError('Erro ao carregar áudio');
+                return;
+            }
+
+            if (isPlaying) {
+                console.log('[AudioPlayer] Pausing audio');
+                audioRef.current.pause();
+                setIsPlaying(false);
+            } else {
+                console.log('[AudioPlayer] Playing audio', { 
+                    src: audioRef.current.src,
+                    readyState: audioRef.current.readyState,
+                    duration: audioRef.current.duration
+                });
+                
+                // Ensure audio is loaded before playing
+                if (audioRef.current.readyState < 2) {
+                    console.log('[AudioPlayer] Audio not ready, loading...');
+                    await audioRef.current.load();
                 }
+                
+                await audioRef.current.play();
+                setIsPlaying(true);
+                console.log('[AudioPlayer] Audio playing successfully');
             }
         } catch (err: any) {
-            console.error('Error playing audio:', err);
-            setError('Erro ao reproduzir áudio');
+            console.error('[AudioPlayer] Error during playback:', {
+                error: err,
+                message: err.message,
+                name: err.name,
+                audioSrc: audioRef.current?.src
+            });
+            
+            // Provide user-friendly error messages
+            const errorMsg = err.name === 'NotAllowedError' 
+                ? 'Reprodução bloqueada. Tente novamente.'
+                : err.name === 'NotSupportedError'
+                ? 'Formato de áudio não suportado'
+                : 'Erro ao reproduzir áudio';
+            
+            setError(errorMsg);
+            setIsPlaying(false);
         }
     };
 

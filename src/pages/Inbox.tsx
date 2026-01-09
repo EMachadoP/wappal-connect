@@ -183,6 +183,29 @@ export default function InboxPage() {
     }
   };
 
+  const handleMarkUnread = async () => {
+    if (!activeConversationId) return;
+
+    try {
+      const { error } = await supabase
+        .from('conversations')
+        .update({ unread_count: 1 })
+        .eq('id', activeConversationId);
+
+      if (error) throw error;
+
+      console.log('Conversa marcada como não lida');
+      // Optionally navigate back to inbox list on mobile
+      if (isMobile) {
+        setActiveConversationId(null);
+        navigate('/inbox');
+      }
+    } catch (error: any) {
+      console.error('Erro ao marcar como não lida:', error);
+      alert(`Erro ao marcar como não lida: ${error.message || 'Erro desconhecido'}`);
+    }
+  };
+
   if (authLoading) return null;
   if (!user) return <Navigate to="/auth" replace />;
 
@@ -205,6 +228,7 @@ export default function InboxPage() {
                   onSendMessage={handleSendMessage}
                   onResolveConversation={handleResolveConversation}
                   onAssignAgent={handleAssignAgent}
+                  onMarkUnread={handleMarkUnread}
                   aiMode={activeConvData?.ai_mode}
                   humanControl={activeConvData?.human_control}
                   loading={loadingMessages}
@@ -256,6 +280,7 @@ export default function InboxPage() {
                       onSendMessage={handleSendMessage}
                       onResolveConversation={handleResolveConversation}
                       onAssignAgent={handleAssignAgent}
+                      onMarkUnread={handleMarkUnread}
                       aiMode={activeConvData?.ai_mode}
                       humanControl={activeConvData?.human_control}
                       loading={loadingMessages}

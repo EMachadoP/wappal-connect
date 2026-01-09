@@ -71,9 +71,12 @@ export function NewMessageModal({ open, onOpenChange, onSelectConversation }: Ne
   }, [search]);
 
   const handleSelectContact = async (contact: Contact) => {
+    console.log('[NewMessageModal] Selecting contact:', { id: contact.id, name: contact.name });
     setLoading(true);
+
     try {
       // 1. Check if an open conversation already exists for this contact
+      console.log('[NewMessageModal] Checking for existing conversation...');
       const { data: existingConv, error: fetchError } = await supabase
         .from('conversations')
         .select('id')
@@ -81,32 +84,67 @@ export function NewMessageModal({ open, onOpenChange, onSelectConversation }: Ne
         .eq('status', 'open')
         .maybeSingle();
 
-      if (fetchError) throw fetchError;
+      if (fetchError) {
+        console.error('[NewMessageModal] Error fetching conversation:', fetchError);
+        throw fetchError;
+      }
 
       if (existingConv) {
+        console.log('[NewMessageModal] Found existing conversation:', existingConv.id);
         onSelectConversation(existingConv.id);
         onOpenChange(false);
         return;
       }
 
       // 2. If not, create a new conversation
+      console.log('[NewMessageModal] Creating new conversation for contact:', contact.id);
       const { data: newConv, error: createError } = await supabase
         .from('conversations')
         .insert({
           contact_id: contact.id,
+          thread_key: `manual-${contact.id}-${Date.now()}`, // Generate unique thread key
           status: 'open',
           unread_count: 0,
         })
         .select()
         .single();
 
-      if (createError) throw createError;
+      if (createError) {
+        console.error('[NewMessageModal] Error creating conversation:', {
+          error: createError,
+          message: createError.message,
+          details: createError.details,
+          hint: createError.hint
+        });
+        throw createError;
+      }
 
+      if (!newConv) {
+        console.error('[NewMessageModal] No conversation returned after insert');
+        throw new Error('Falha ao criar conversa');
+      }
+
+      console.log('[NewMessageModal] Successfully created conversation:', newConv.id);
       onSelectConversation(newConv.id);
       onOpenChange(false);
+      toast.success(`Conversa iniciada com ${contact.name}`);
     } catch (error: any) {
-      console.error('Error starting conversation:', error);
-      toast.error('Erro ao iniciar conversa');
+      console.error('[NewMessageModal] Error in handleSelectContact:', {
+        error,
+        message: error.message,
+        code: error.code,
+        contactId: contact.id
+      });
+
+      // Provide specific error messages
+      let errorMessage = 'Erro ao iniciar conversa';
+      if (error.code === '23505') {
+        errorMessage = 'Conversa duplicada detectada. Tente novamente.';
+      } else if (error.message) {
+        errorMessage = `Erro: ${error.message}`;
+      }
+
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }

@@ -102,7 +102,39 @@ export function ChatMessage({
           />
         );
       case 'video':
-        return <video src={mediaUrl} controls className="max-w-xs rounded-lg mb-2" />;
+        return (
+          <div className="mb-2">
+            <video
+              src={mediaUrl}
+              controls
+              preload="metadata"
+              className="max-w-xs rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
+              onClick={(e) => {
+                // Allow native controls to work, but also provide fallback
+                if (e.target === e.currentTarget) {
+                  window.open(mediaUrl, '_blank');
+                }
+              }}
+              onError={(e) => {
+                console.error('[ChatMessage] Video error:', e);
+                // Show fallback link if video fails to load
+                const videoElement = e.currentTarget;
+                videoElement.style.display = 'none';
+                const fallback = document.createElement('a');
+                fallback.href = mediaUrl;
+                fallback.target = '_blank';
+                fallback.className = 'text-sm text-blue-500 hover:underline';
+                fallback.textContent = '⚠️ Erro ao carregar vídeo. Clique para abrir';
+                videoElement.parentNode?.appendChild(fallback);
+              }}
+            >
+              Seu navegador não suporta reprodução de vídeo.
+              <a href={mediaUrl} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">
+                Baixar vídeo
+              </a>
+            </video>
+          </div>
+        );
       case 'audio':
         return (
           <div className="flex flex-col gap-2 mb-2">
