@@ -37,9 +37,14 @@ export function useConversations() {
   useEffect(() => {
     fetchConversations();
 
+    // Subscribe to both conversations and participants changes
+    // so the list updates when a participant is identified
     const sub = supabase
       .channel('conversations-list')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, () => {
+        fetchConversations();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'participants' }, () => {
         fetchConversations();
       })
       .subscribe();

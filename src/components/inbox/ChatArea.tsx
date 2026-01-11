@@ -74,11 +74,17 @@ export function ChatArea(props: ChatAreaProps) {
 
   const isResolved = props.conversationStatus === 'resolved';
 
+  // Create contact object with participant name prioritized
+  const contactWithParticipantName = {
+    ...contact,
+    name: participant?.name || contact?.name,
+  };
+
   return (
     <div className="flex-1 flex flex-col bg-background h-full overflow-hidden">
       <ChatHeader
         conversationId={conversationId || ''}
-        contact={contact}
+        contact={contactWithParticipantName}
         isMobile={!!isMobile}
         isResolved={isResolved}
         conversationPriority={props.conversationPriority || 'normal'}
