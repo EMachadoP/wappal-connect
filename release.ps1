@@ -1,144 +1,157 @@
 # Script de Release Completo
 # Automatiza todo o processo de atualizacao e deployment
+# Uso: .\release.ps1 "mensagem do commit"
 
 param(
     [Parameter(Mandatory = $true)]
     [string]$CommitMessage
 )
 
-Write-Host "Iniciando processo de release completo..." -ForegroundColor Cyan
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "    RELEASE COMPLETO - WAPPAL CONNECT  " -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # ============================================
 # 1. Git Add
 # ============================================
-Write-Host "Adicionando arquivos ao Git..." -ForegroundColor Yellow
+Write-Host "[1/5] Adicionando arquivos ao Git..." -ForegroundColor Yellow
 git add .
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Erro ao adicionar arquivos" -ForegroundColor Red
     exit 1
 }
-Write-Host "Arquivos adicionados" -ForegroundColor Green
-Write-Host ""
+Write-Host "    Arquivos adicionados" -ForegroundColor Green
 
 # ============================================
 # 2. Git Commit
 # ============================================
-Write-Host "Fazendo commit..." -ForegroundColor Yellow
-git commit -m "$CommitMessage"
+Write-Host "[2/5] Fazendo commit..." -ForegroundColor Yellow
+git commit -m "$CommitMessage" --allow-empty
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Nenhuma mudanca para commit ou erro" -ForegroundColor Yellow
-    Write-Host ""
+    Write-Host "    Aviso: Commit pode estar vazio ou houve erro" -ForegroundColor Yellow
 }
 else {
-    Write-Host "Commit realizado" -ForegroundColor Green
-    Write-Host ""
+    Write-Host "    Commit realizado" -ForegroundColor Green
 }
 
 # ============================================
 # 3. Git Push
 # ============================================
-Write-Host "Enviando para GitHub..." -ForegroundColor Yellow
+Write-Host "[3/5] Enviando para GitHub..." -ForegroundColor Yellow
 git push origin main
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Erro ao fazer push" -ForegroundColor Red
     exit 1
 }
-Write-Host "Push realizado com sucesso" -ForegroundColor Green
-Write-Host ""
+Write-Host "    Push realizado com sucesso" -ForegroundColor Green
 
 # ============================================
-# 4. Deploy Edge Functions (with timeout)
+# 4. Aplicar Migrations (Supabase DB Push)
 # ============================================
-# Check for -SkipFunctions flag
-if ($args -contains "-SkipFunctions") {
-    Write-Host "Pulando deploy das Edge Functions (flag -SkipFunctions)" -ForegroundColor Yellow
-    Write-Host ""
+Write-Host "[4/5] Aplicando migrations no banco..." -ForegroundColor Yellow
+
+$dbJob = Start-Job -ScriptBlock {
+    npx supabase db push --linked 2>&1
+}
+
+$dbCompleted = Wait-Job $dbJob -Timeout 60
+
+if ($dbCompleted) {
+    $dbOutput = Receive-Job $dbJob
+    Remove-Job $dbJob -Force
+    if ($dbOutput -match "error" -or $dbOutput -match "Error") {
+        Write-Host "    Migrations: Aviso - verifique logs" -ForegroundColor Yellow
+    }
+    else {
+        Write-Host "    Migrations aplicadas" -ForegroundColor Green
+    }
 }
 else {
-    Write-Host "Iniciando deploy das Edge Functions..." -ForegroundColor Yellow
-    Write-Host "(Use -SkipFunctions para pular esta etapa)" -ForegroundColor Gray
-    Write-Host ""
+    Stop-Job $dbJob
+    Remove-Job $dbJob -Force
+    Write-Host "    Migrations: Timeout (60s) - verifique manualmente" -ForegroundColor Yellow
+}
 
-    $functions = @(
-        "zapi-webhook",
-        "protocol-opened",
-        "ai-maybe-reply",
-        "assign-conversation",
-        "transcribe-audio",
-        "zapi-send-message",
-        "create-agent",
-        "group-resolution-handler",
-        "create-protocol",
-        "sla-metrics",
-        "ai-auto-reactivate"
-    )
+# ============================================
+# 5. Deploy Edge Functions (com timeout)
+# ============================================
+Write-Host "[5/5] Deploy das Edge Functions..." -ForegroundColor Yellow
 
-    $success = 0
-    $failed = 0
-    $timeoutSeconds = 30
+$functions = @(
+    "zapi-webhook",
+    "zapi-send-message",
+    "ai-maybe-reply",
+    "ai-generate-reply",
+    "ai-auto-reactivate",
+    "create-protocol",
+    "protocol-opened",
+    "sla-metrics",
+    "assign-conversation",
+    "transcribe-audio",
+    "create-agent",
+    "group-resolution-handler",
+    "evolution-health",
+    "evolution-qr",
+    "evolution-session",
+    "notify-open-tickets-group",
+    "queue-stats",
+    "dlq-manager"
+)
 
-    foreach ($func in $functions) {
-        Write-Host "  Deploying $func..." -ForegroundColor Cyan
-        
-        $job = Start-Job -ScriptBlock {
-            param($funcName)
-            npx supabase functions deploy $funcName 2>&1
-        } -ArgumentList $func
-        
-        $completed = Wait-Job $job -Timeout $timeoutSeconds
-        
-        if ($completed) {
-            $output = Receive-Job $job
-            Remove-Job $job -Force
-            Write-Host "  $func deployed" -ForegroundColor Green
-            $success++
-        }
-        else {
-            Stop-Job $job
-            Remove-Job $job -Force
-            Write-Host "  $func TIMEOUT (${timeoutSeconds}s) - pulando" -ForegroundColor Yellow
-            $failed++
-        }
+$success = 0
+$failed = 0
+$timeoutSeconds = 45
+
+foreach ($func in $functions) {
+    # Check if function folder exists
+    $funcPath = "supabase/functions/$func"
+    if (-not (Test-Path $funcPath)) {
+        continue
     }
-
-    Write-Host ""
-    Write-Host "Deploy functions: $success sucesso, $failed timeout/falha" -ForegroundColor $(if ($failed -eq 0) { "Green" } else { "Yellow" })
+    
+    Write-Host "    $func..." -ForegroundColor Gray -NoNewline
+    
+    $job = Start-Job -ScriptBlock {
+        param($funcName)
+        npx supabase functions deploy $funcName 2>&1
+    } -ArgumentList $func
+    
+    $completed = Wait-Job $job -Timeout $timeoutSeconds
+    
+    if ($completed) {
+        $output = Receive-Job $job
+        Remove-Job $job -Force
+        Write-Host " OK" -ForegroundColor Green
+        $success++
+    }
+    else {
+        Stop-Job $job
+        Remove-Job $job -Force
+        Write-Host " TIMEOUT" -ForegroundColor Yellow
+        $failed++
+    }
 }
 
 Write-Host ""
+Write-Host "    Functions: $success sucesso, $failed timeout" -ForegroundColor $(if ($failed -eq 0) { "Green" } else { "Yellow" })
 
 # ============================================
-# 5. Aguardar Vercel
+# Resumo Final
 # ============================================
-Write-Host "Aguardando deployment no Vercel..." -ForegroundColor Yellow
-Write-Host "   (O Vercel faz deploy automatico quando voce faz push)" -ForegroundColor Gray
 Write-Host ""
-Start-Sleep -Seconds 5
-
-# ============================================
-# 6. Resumo Final
-# ============================================
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "RELEASE COMPLETO!" -ForegroundColor Green
-Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Green
+Write-Host "         RELEASE COMPLETO!             " -ForegroundColor Green
+Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "Resumo:" -ForegroundColor White
-Write-Host "  Commit: $CommitMessage" -ForegroundColor Green
-Write-Host "  Push para GitHub: Concluido" -ForegroundColor Green
-Write-Host "  Edge Functions: $success/$($functions.Count) deployadas" -ForegroundColor Green
-Write-Host "  Vercel: Deploy automatico em andamento" -ForegroundColor Yellow
+Write-Host "Commit: $CommitMessage" -ForegroundColor White
 Write-Host ""
-Write-Host "Links uteis:" -ForegroundColor White
-Write-Host "  Vercel: https://vercel.com/eldons-projects-3194802d/wappal-connect/deployments" -ForegroundColor Cyan
-Write-Host "  Producao: https://wappal-connect.vercel.app/inbox" -ForegroundColor Cyan
-Write-Host "  Supabase: https://supabase.com/dashboard/project/qoolzhzdcfnyblymdvbq/functions" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "Proximos passos:" -ForegroundColor White
-Write-Host "  1. Aguarde 1-2 minutos para o Vercel completar o deploy" -ForegroundColor Gray
-Write-Host "  2. Acesse o link de Producao para testar" -ForegroundColor Gray
-Write-Host "  3. Verifique os logs se houver algum problema" -ForegroundColor Gray
+Write-Host "Links:" -ForegroundColor Cyan
+Write-Host "  Producao: https://wappal-connect.vercel.app/inbox"
+Write-Host "  Vercel:   https://vercel.com/eldons-projects-3194802d/wappal-connect"
+Write-Host "  Supabase: https://supabase.com/dashboard/project/qoolzhzdcfnyblymdvbq"
 Write-Host ""
