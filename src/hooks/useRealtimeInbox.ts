@@ -34,8 +34,8 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
       .from('conversations')
       .select(`
         *,
-        contacts (*),
-        contacts!inner (
+        contacts (
+          *,
           participants (
             id,
             name,
