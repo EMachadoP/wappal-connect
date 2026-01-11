@@ -32,21 +32,42 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
     console.log('[RealtimeInbox] Fetching conversations...');
     const { data, error } = await supabase
       .from('conversations')
-      .select(`*, contacts (*)`)
+      .select(`
+        *,
+        contacts (*),
+        contacts!inner (
+          participants (
+            id,
+            name,
+            is_primary
+          )
+        )
+      `)
       .order('last_message_at', { ascending: false });
 
     if (!error && data) {
-      setConversations(data.map((conv: any) => ({
-        id: conv.id,
-        contact: conv.contacts,
-        last_message: conv.last_message_content || 'Nenhuma mensagem',
-        last_message_type: 'text',
-        last_message_at: conv.last_message_at,
-        unread_count: conv.unread_count,
-        assigned_to: conv.assigned_to,
-        status: conv.status,
-        priority: conv.priority,
-      })));
+      setConversations(data.map((conv: any) => {
+        // Get primary participant name if available
+        const participants = conv.contacts?.participants || [];
+        const primaryParticipant = participants.find((p: any) => p.is_primary) || participants[0];
+        const participantName = primaryParticipant?.name;
+
+        return {
+          id: conv.id,
+          contact: {
+            ...conv.contacts,
+            // Prioritize participant name over contact name/phone
+            name: participantName || conv.contacts?.name || conv.contacts?.phone || 'Sem Nome',
+          },
+          last_message: conv.last_message_content || 'Nenhuma mensagem',
+          last_message_type: 'text',
+          last_message_at: conv.last_message_at,
+          unread_count: conv.unread_count,
+          assigned_to: conv.assigned_to,
+          status: conv.status,
+          priority: conv.priority,
+        };
+      }));
     }
     setLoading(false);
   }, []);
@@ -61,6 +82,14 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
         { event: '*', schema: 'public', table: 'conversations' },
         (payload) => {
           console.log('[RealtimeInbox] Conversation record update');
+          fetchConversations();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'participants' },
+        (payload) => {
+          console.log('[RealtimeInbox] Participant updated - refreshing list');
           fetchConversations();
         }
       )
