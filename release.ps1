@@ -51,43 +51,64 @@ Write-Host "Push realizado com sucesso" -ForegroundColor Green
 Write-Host ""
 
 # ============================================
-# 4. Deploy Edge Functions
+# 4. Deploy Edge Functions (with timeout)
 # ============================================
-Write-Host "Iniciando deploy das Edge Functions..." -ForegroundColor Yellow
-Write-Host ""
+# Check for -SkipFunctions flag
+if ($args -contains "-SkipFunctions") {
+    Write-Host "Pulando deploy das Edge Functions (flag -SkipFunctions)" -ForegroundColor Yellow
+    Write-Host ""
+}
+else {
+    Write-Host "Iniciando deploy das Edge Functions..." -ForegroundColor Yellow
+    Write-Host "(Use -SkipFunctions para pular esta etapa)" -ForegroundColor Gray
+    Write-Host ""
 
-$functions = @(
-    "zapi-webhook",
-    "protocol-opened",
-    "ai-maybe-reply",
-    "assign-conversation",
-    "transcribe-audio",
-    "zapi-send-message",
-    "create-agent",
-    "group-resolution-handler",
-    "create-protocol"
-)
+    $functions = @(
+        "zapi-webhook",
+        "protocol-opened",
+        "ai-maybe-reply",
+        "assign-conversation",
+        "transcribe-audio",
+        "zapi-send-message",
+        "create-agent",
+        "group-resolution-handler",
+        "create-protocol",
+        "sla-metrics",
+        "ai-auto-reactivate"
+    )
 
-$success = 0
-$failed = 0
+    $success = 0
+    $failed = 0
+    $timeoutSeconds = 30
 
-foreach ($func in $functions) {
-    Write-Host "  Deploying $func..." -ForegroundColor Cyan
-    
-    npx supabase functions deploy $func 2>&1 | Out-Null
-    
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "  $func deployed" -ForegroundColor Green
-        $success++
+    foreach ($func in $functions) {
+        Write-Host "  Deploying $func..." -ForegroundColor Cyan
+        
+        $job = Start-Job -ScriptBlock {
+            param($funcName)
+            npx supabase functions deploy $funcName 2>&1
+        } -ArgumentList $func
+        
+        $completed = Wait-Job $job -Timeout $timeoutSeconds
+        
+        if ($completed) {
+            $output = Receive-Job $job
+            Remove-Job $job -Force
+            Write-Host "  $func deployed" -ForegroundColor Green
+            $success++
+        }
+        else {
+            Stop-Job $job
+            Remove-Job $job -Force
+            Write-Host "  $func TIMEOUT (${timeoutSeconds}s) - pulando" -ForegroundColor Yellow
+            $failed++
+        }
     }
-    else {
-        Write-Host "  $func failed" -ForegroundColor Red
-        $failed++
-    }
+
+    Write-Host ""
+    Write-Host "Deploy functions: $success sucesso, $failed timeout/falha" -ForegroundColor $(if ($failed -eq 0) { "Green" } else { "Yellow" })
 }
 
-Write-Host ""
-Write-Host "Edge Functions - Sucesso: $success | Falhas: $failed" -ForegroundColor Cyan
 Write-Host ""
 
 # ============================================
