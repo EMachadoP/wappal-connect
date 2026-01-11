@@ -13,6 +13,83 @@ function isValidUUID(uuid: any) {
   return regex.test(uuid);
 }
 
+// AI Classification function
+interface ClassificationResult {
+  category: 'financial' | 'support' | 'admin' | 'operational';
+  tags: string[];
+  confidence: number;
+}
+
+async function classifyProtocolWithAI(summary: string, supabaseUrl: string, serviceKey: string): Promise<ClassificationResult | null> {
+  try {
+    // Get OpenRouter API key from settings
+    const supabaseClient = createClient(supabaseUrl, serviceKey);
+    const { data: settings } = await supabaseClient.from('ai_settings').select('openrouter_api_key').maybeSingle();
+
+    if (!settings?.openrouter_api_key) {
+      console.log('[AI Classification] No OpenRouter API key configured');
+      return null;
+    }
+
+    const classificationPrompt = `Analise o texto abaixo e classifique:
+
+TEXTO: "${summary}"
+
+CATEGORIAS DISPONÍVEIS:
+- financial: cobranças, boletos, pagamentos, orçamentos, taxas
+- support: reclamações, dúvidas, elogios, sugestões, problemas
+- admin: cadastros, documentos, assembleias, comunicados
+- operational: manutenção, reservas, limpeza, portaria
+
+TAGS DISPONÍVEIS:
+orcamento, cobranca, 2via_boleto, pagamento, manutencao, reserva_area, limpeza, portaria, reclamacao, duvida, elogio, sugestao, cadastro, documentos, assembleia, comunicado
+
+Responda APENAS em JSON válido, sem markdown:
+{"category": "categoria", "tags": ["tag1", "tag2"], "confidence": 0.85}`;
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${settings.openrouter_api_key}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://wappal-connect.vercel.app',
+      },
+      body: JSON.stringify({
+        model: 'google/gemini-2.0-flash-001',
+        messages: [{ role: 'user', content: classificationPrompt }],
+        max_tokens: 150,
+        temperature: 0.1,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error('[AI Classification] API error:', await response.text());
+      return null;
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content?.trim();
+
+    if (!content) return null;
+
+    // Parse JSON response
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+
+    const result = JSON.parse(jsonMatch[0]);
+    console.log('[AI Classification] Result:', result);
+
+    return {
+      category: result.category || 'operational',
+      tags: Array.isArray(result.tags) ? result.tags.slice(0, 3) : [],
+      confidence: typeof result.confidence === 'number' ? result.confidence : 0.5,
+    };
+  } catch (error) {
+    console.error('[AI Classification] Error:', error);
+    return null;
+  }
+}
+
 serve(async (req) => {
   // 1. Handle CORS early
   if (req.method === 'OPTIONS') {
@@ -285,6 +362,27 @@ serve(async (req) => {
 
     log(`[create-protocol] Validated IDs: contact=${contact_id}, condo=${resolvedCondoId}, participant=${participant_id}`);
 
+    // 6.5. AI CLASSIFICATION: Auto-classify category and tags if not provided
+    let aiClassification: ClassificationResult | null = null;
+    let finalCategory = category || 'operational';
+    let finalTags: string[] = [];
+    let aiClassified = false;
+
+    if (!category && summary && summary.length > 10) {
+      log(`[create-protocol] Running AI classification for summary...`);
+      try {
+        aiClassification = await classifyProtocolWithAI(summary, supabaseUrl, supabaseServiceKey);
+        if (aiClassification) {
+          finalCategory = aiClassification.category;
+          finalTags = aiClassification.tags;
+          aiClassified = true;
+          log(`[create-protocol] AI classified: category=${finalCategory}, tags=${finalTags.join(',')}, confidence=${aiClassification.confidence}`);
+        }
+      } catch (e) {
+        log(`[create-protocol] AI classification failed, using default category`);
+      }
+    }
+
     const { data: protocolRecord, error: protocolError } = await supabaseClient
       .from('protocols')
       .insert({
@@ -293,7 +391,7 @@ serve(async (req) => {
         contact_id: isValidUUID(contact_id) ? contact_id : null,
         condominium_id: isValidUUID(resolvedCondoId) ? resolvedCondoId : null,
         participant_id: isValidUUID(participant_id) ? participant_id : null,
-        category: category || 'operational',
+        category: finalCategory,
         priority: priority || 'normal',
         summary: summary || 'Gerado via sistema',
         status: 'open',
@@ -301,7 +399,10 @@ serve(async (req) => {
         created_by_type: created_by_agent_id ? 'agent' : 'ai',
         requester_name: requester_name || contact?.name || 'Não informado',
         requester_role: requester_role || 'Morador',
-        apartment: apartment
+        apartment: apartment,
+        tags: finalTags,
+        ai_classified: aiClassified,
+        ai_confidence: aiClassification?.confidence || null,
       })
       .select()
       .single();

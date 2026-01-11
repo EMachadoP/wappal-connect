@@ -176,6 +176,21 @@ serve(async (req) => {
           paused_until: pauseUntil.toISOString(),
         },
       });
+
+      // SLA TRACKING: Register first_response_at on protocols that don't have it yet
+      // This is the first human response after protocol creation
+      const now = new Date().toISOString();
+      const { data: updatedProtocols } = await supabaseAdmin
+        .from('protocols')
+        .update({ first_response_at: now })
+        .eq('conversation_id', conversation_id)
+        .is('first_response_at', null)
+        .select('id, protocol_code');
+
+      if (updatedProtocols && updatedProtocols.length > 0) {
+        console.log(`[SLA] First response recorded for ${updatedProtocols.length} protocol(s):`,
+          updatedProtocols.map(p => p.protocol_code).join(', '));
+      }
     } else {
       // Apenas atualizar timestamp se for IA
       await supabaseAdmin.from('conversations').update({

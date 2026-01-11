@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Navigate } from 'react-router-dom';
-import { MessageSquare, MessageCircle, CheckCircle, Calendar, Bot, Coins, Zap, TrendingUp, Users, ArrowRightLeft } from 'lucide-react';
+import { MessageSquare, MessageCircle, CheckCircle, Calendar, Bot, Coins, Zap, TrendingUp, Users, ArrowRightLeft, Clock, AlertTriangle, Target, Timer } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -41,6 +41,18 @@ interface ModelUsage {
   count: number;
 }
 
+interface SLAMetrics {
+  totalProtocols: number;
+  openProtocols: number;
+  resolvedProtocols: number;
+  avgFirstResponseMinutes: number | null;
+  avgResolutionHours: number | null;
+  slaMetPercentage: number;
+  byCategory: Record<string, { total: number; resolved: number; avgResolutionHours: number | null }>;
+  byAgent: { agentId: string; agentName: string; resolved: number; avgFirstResponseMinutes: number | null; avgResolutionHours: number | null }[];
+  backlog: { id: string; protocolCode: string; category: string; priority: string; ageHours: number; slaStatus: string }[];
+}
+
 // Estimated costs per 1K tokens (input + output average)
 const COST_PER_1K_TOKENS: Record<string, number> = {
   'google/gemini-2.5-flash': 0.00015,
@@ -76,6 +88,7 @@ export default function DashboardPage() {
   });
   const [dailyData, setDailyData] = useState<DailyData[]>([]);
   const [modelUsage, setModelUsage] = useState<ModelUsage[]>([]);
+  const [slaMetrics, setSLAMetrics] = useState<SLAMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<'7d' | '30d' | '90d'>('7d');
 
@@ -93,6 +106,7 @@ export default function DashboardPage() {
       fetchAIStats(),
       fetchDailyData(),
       fetchModelUsage(),
+      fetchSLAMetrics(),
     ]);
     setLoading(false);
   };
@@ -169,8 +183,8 @@ export default function DashboardPage() {
       .gte('created_at', monthStart.toISOString());
 
     const handoffs = new Set((aiEvents || []).map(e => e.conversation_id)).size;
-    const handoffRate = conversationsSet.size > 0 
-      ? (handoffs / conversationsSet.size) * 100 
+    const handoffRate = conversationsSet.size > 0
+      ? (handoffs / conversationsSet.size) * 100
       : 0;
 
     setAIStats({
@@ -218,7 +232,7 @@ export default function DashboardPage() {
       });
 
       dailyStats.push({
-        name: date.toLocaleDateString('pt-BR', { 
+        name: date.toLocaleDateString('pt-BR', {
           weekday: days <= 7 ? 'short' : undefined,
           day: '2-digit',
           month: days > 7 ? '2-digit' : undefined,
@@ -275,6 +289,42 @@ export default function DashboardPage() {
     return `$${value.toFixed(4)}`;
   };
 
+  const fetchSLAMetrics = async () => {
+    try {
+      const days = period === '7d' ? 7 : period === '30d' ? 30 : 90;
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - days);
+
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/sla-metrics?start_date=${startDate.toISOString()}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`,
+          },
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        setSLAMetrics(data);
+      }
+    } catch (error) {
+      console.error('Error fetching SLA metrics:', error);
+    }
+  };
+
+  const formatMinutes = (minutes: number | null) => {
+    if (minutes === null) return 'N/A';
+    if (minutes < 60) return `${Math.round(minutes)} min`;
+    return `${(minutes / 60).toFixed(1)}h`;
+  };
+
+  const formatHours = (hours: number | null) => {
+    if (hours === null) return 'N/A';
+    if (hours < 24) return `${hours.toFixed(1)}h`;
+    return `${(hours / 24).toFixed(1)} dias`;
+  };
+
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -329,6 +379,7 @@ export default function DashboardPage() {
           <Tabs defaultValue="overview">
             <TabsList>
               <TabsTrigger value="overview">Visão Geral</TabsTrigger>
+              <TabsTrigger value="sla">SLA & Protocolos</TabsTrigger>
               <TabsTrigger value="ai">Uso de IA</TabsTrigger>
             </TabsList>
 
@@ -380,6 +431,176 @@ export default function DashboardPage() {
               </Card>
             </TabsContent>
 
+            <TabsContent value="sla" className="space-y-6 mt-6">
+              {/* SLA KPI Cards */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <Card>
+                  <CardHeader className="flex flex-row items-center justify-between pb-2">
+                    <CardTitle className="text-sm font-medium text-muted-foreground">Tempo Primeira Resposta</CardTitle>
+                    <Timer className="w-5 h-5 text-blue-500" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold">{formatMinutes(slaMetrics?.avgFirstResponseMinutes ?? null)}</div>
+                    <p className="text-xs text-muted-foreground">Média FRT</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="flex flex-row items-center justify-between pb-2">
+                    <CardTitle className="text-sm font-medium text-muted-foreground">Tempo Resolução</CardTitle>
+                    <Clock className="w-5 h-5 text-green-500" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold">{formatHours(slaMetrics?.avgResolutionHours ?? null)}</div>
+                    <p className="text-xs text-muted-foreground">Média resolução</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="flex flex-row items-center justify-between pb-2">
+                    <CardTitle className="text-sm font-medium text-muted-foreground">SLA Cumprido</CardTitle>
+                    <Target className="w-5 h-5 text-primary" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold">{slaMetrics?.slaMetPercentage ?? 0}%</div>
+                    <p className="text-xs text-muted-foreground">Meta: {'>'} 90%</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="flex flex-row items-center justify-between pb-2">
+                    <CardTitle className="text-sm font-medium text-muted-foreground">Backlog em Risco</CardTitle>
+                    <AlertTriangle className="w-5 h-5 text-orange-500" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold">{slaMetrics?.backlog?.length ?? 0}</div>
+                    <p className="text-xs text-muted-foreground">Protocolos atrasados</p>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Protocols Summary */}
+              <div className="grid grid-cols-3 gap-4">
+                <Card>
+                  <CardContent className="pt-6 text-center">
+                    <div className="text-3xl font-bold">{slaMetrics?.totalProtocols ?? 0}</div>
+                    <p className="text-muted-foreground">Total Protocolos</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-6 text-center">
+                    <div className="text-3xl font-bold text-yellow-500">{slaMetrics?.openProtocols ?? 0}</div>
+                    <p className="text-muted-foreground">Abertos</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-6 text-center">
+                    <div className="text-3xl font-bold text-green-500">{slaMetrics?.resolvedProtocols ?? 0}</div>
+                    <p className="text-muted-foreground">Resolvidos</p>
+                  </CardContent>
+                </Card>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* By Category */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Por Categoria</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="h-[250px]">
+                      {slaMetrics?.byCategory && Object.keys(slaMetrics.byCategory).length > 0 ? (
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={Object.entries(slaMetrics.byCategory).map(([cat, data]) => ({
+                            name: cat === 'financial' ? 'Financeiro' : cat === 'support' ? 'Suporte' : cat === 'admin' ? 'Admin' : 'Operacional',
+                            total: data.total,
+                            resolved: data.resolved,
+                          }))}>
+                            <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                            <XAxis dataKey="name" fontSize={12} />
+                            <YAxis fontSize={12} />
+                            <Tooltip contentStyle={{ backgroundColor: 'hsl(var(--card))', border: '1px solid hsl(var(--border))' }} />
+                            <Bar dataKey="total" name="Total" fill="hsl(var(--muted-foreground))" radius={[4, 4, 0, 0]} />
+                            <Bar dataKey="resolved" name="Resolvidos" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <div className="flex items-center justify-center h-full text-muted-foreground">Sem dados</div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* By Agent */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Por Agente (Top 5)</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-3">
+                      {slaMetrics?.byAgent?.slice(0, 5).map((agent, idx) => (
+                        <div key={agent.agentId} className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                          <div>
+                            <div className="font-medium">{agent.agentName}</div>
+                            <div className="text-xs text-muted-foreground">
+                              FRT: {formatMinutes(agent.avgFirstResponseMinutes)} | Resolução: {formatHours(agent.avgResolutionHours)}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-lg font-bold">{agent.resolved}</div>
+                            <div className="text-xs text-muted-foreground">resolvidos</div>
+                          </div>
+                        </div>
+                      )) || <div className="text-muted-foreground">Sem dados de agentes</div>}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Backlog Table */}
+              {slaMetrics?.backlog && slaMetrics.backlog.length > 0 && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <AlertTriangle className="w-5 h-5 text-orange-500" />
+                      Protocolos em Risco / Atrasados
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b">
+                            <th className="text-left p-2">Protocolo</th>
+                            <th className="text-left p-2">Categoria</th>
+                            <th className="text-left p-2">Prioridade</th>
+                            <th className="text-left p-2">Idade</th>
+                            <th className="text-left p-2">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {slaMetrics.backlog.slice(0, 10).map((item) => (
+                            <tr key={item.id} className="border-b hover:bg-muted/50">
+                              <td className="p-2 font-mono">{item.protocolCode}</td>
+                              <td className="p-2 capitalize">{item.category}</td>
+                              <td className="p-2">
+                                <span className={`px-2 py-1 rounded text-xs ${item.priority === 'critical' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-700'}`}>
+                                  {item.priority}
+                                </span>
+                              </td>
+                              <td className="p-2">{item.ageHours.toFixed(1)}h</td>
+                              <td className="p-2">
+                                <span className={`px-2 py-1 rounded text-xs ${item.slaStatus === 'breached' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>
+                                  {item.slaStatus === 'breached' ? 'Atrasado' : 'Em Risco'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </TabsContent>
+
             <TabsContent value="ai" className="space-y-6 mt-6">
               {/* AI Stats Cards */}
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-4">
@@ -422,10 +643,10 @@ export default function DashboardPage() {
                             }}
                             formatter={(value: number) => [formatNumber(value), 'Tokens']}
                           />
-                          <Line 
-                            type="monotone" 
-                            dataKey="tokens" 
-                            stroke="hsl(var(--primary))" 
+                          <Line
+                            type="monotone"
+                            dataKey="tokens"
+                            stroke="hsl(var(--primary))"
                             strokeWidth={2}
                             dot={false}
                           />
@@ -485,7 +706,7 @@ export default function DashboardPage() {
                                 <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                               ))}
                             </Pie>
-                            <Tooltip 
+                            <Tooltip
                               formatter={(value: number) => [formatNumber(value), 'Tokens']}
                               contentStyle={{
                                 backgroundColor: 'hsl(var(--card))',
