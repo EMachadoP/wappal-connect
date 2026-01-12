@@ -352,17 +352,15 @@ G7-${protocol_code} - Resolvido`;
           // ========== 1.5: Send Daily Pending Summary ==========
           // Query open protocols created TODAY only
           try {
-            const today = new Date();
-            const displayDateSummary = today.toLocaleDateString('pt-BR');
+            const now = new Date();
+            const displayDateSummary = now.toLocaleDateString('pt-BR');
 
-            // Calculate today's date boundaries
-            const todayStart = new Date(today);
-            todayStart.setHours(0, 0, 0, 0);
-            const todayEnd = new Date(today);
-            todayEnd.setHours(23, 59, 59, 999);
+            // ISO date for today (YYYY-MM-DD)
+            const todayISO = now.toISOString().split('T')[0];
+            const todayStart = `${todayISO}T00:00:00.000Z`;
+            const todayEnd = `${todayISO}T23:59:59.999Z`;
 
-            console.log('[Pending Summary] Querying today\'s open protocols...');
-            console.log('[Pending Summary] Date range:', todayStart.toISOString(), 'to', todayEnd.toISOString());
+            console.log(`[Pending Summary] Querying protocols for ${todayISO}...`);
 
             const { data: openProtocols, error: protocolsError } = await supabase
               .from('protocols')
@@ -372,12 +370,11 @@ G7-${protocol_code} - Resolvido`;
                 category,
                 priority,
                 condominium_id,
-                entity_name,
                 condominiums (name)
               `)
               .eq('status', 'open')
-              .gte('created_at', todayStart.toISOString())
-              .lte('created_at', todayEnd.toISOString())
+              .gte('created_at', todayStart)
+              .lte('created_at', todayEnd)
               .order('created_at', { ascending: true });
 
             console.log('[Pending Summary] Query result:', {
@@ -395,10 +392,17 @@ G7-${protocol_code} - Resolvido`;
               const normalItems: string[] = [];
 
               for (const p of openProtocols) {
-                // Try multiple sources for condominium name
-                const condoName = (p.condominiums as any)?.name
-                  || (p as any).entity_name
-                  || 'Não identificado';
+                // Resolution Order: 1. Linked Condo Name -> 2. Regex from Summary -> 3. Fallback
+                let condoName = (p.condominiums as any)?.name;
+
+                if (!condoName && p.summary) {
+                  const condMatch = p.summary.match(/(?:Condomínio|Cond\.|Edifício|Ed\.|Prédio)\s+([A-Za-zÀ-ÿ0-9\s]+?)(?:\.|$)/i);
+                  if (condMatch) {
+                    condoName = condMatch[1].trim();
+                  }
+                }
+
+                if (!condoName) condoName = 'Não identificado';
 
                 // Truncate summary to max 40 chars for cleaner display
                 const shortSummary = p.summary && p.summary.length > 40
