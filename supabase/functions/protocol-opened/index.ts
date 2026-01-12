@@ -350,11 +350,12 @@ G7-${protocol_code} - Resolvido`;
           }
 
           // ========== 1.5: Send Daily Pending Summary ==========
-          // Query all open protocols for today
+          // Query all open protocols
           try {
             const today = new Date();
-            const todayStr = today.toISOString().split('T')[0];
             const displayDateSummary = today.toLocaleDateString('pt-BR');
+
+            console.log('[Pending Summary] Querying open protocols...');
 
             const { data: openProtocols, error: protocolsError } = await supabase
               .from('protocols')
@@ -369,7 +370,16 @@ G7-${protocol_code} - Resolvido`;
               .eq('status', 'open')
               .order('created_at', { ascending: true });
 
-            if (!protocolsError && openProtocols && openProtocols.length > 0) {
+            console.log('[Pending Summary] Query result:', {
+              error: protocolsError?.message,
+              count: openProtocols?.length ?? 0
+            });
+
+            if (protocolsError) {
+              console.error('[Pending Summary] Query error:', protocolsError);
+            }
+
+            if (openProtocols && openProtocols.length > 0) {
               // Group by condominium for better readability
               const criticalItems: string[] = [];
               const normalItems: string[] = [];
@@ -405,8 +415,10 @@ G7-${protocol_code} - Resolvido`;
                 summaryMessage += normalItems.join('\n');
               }
 
+              console.log('[Pending Summary] Sending message with', openProtocols.length, 'items');
+
               // Send the summary message to the group
-              await fetch(zapiUrl, {
+              const summaryResponse = await fetch(zapiUrl, {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/json",
@@ -418,10 +430,13 @@ G7-${protocol_code} - Resolvido`;
                 }),
               });
 
-              console.log("WhatsApp pending summary sent");
+              const summaryResult = await summaryResponse.json();
+              console.log('[Pending Summary] WhatsApp response:', summaryResult);
+            } else {
+              console.log('[Pending Summary] No open protocols found');
             }
           } catch (summaryError) {
-            console.error("Error sending pending summary:", summaryError);
+            console.error('[Pending Summary] Error:', summaryError);
             // Don't fail the operation if summary fails
           }
         } else {
