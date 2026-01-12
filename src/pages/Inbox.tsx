@@ -211,7 +211,26 @@ export default function InboxPage() {
       console.log('Conversa marcada como resolvida');
     } catch (error: any) {
       console.error('Erro ao resolver conversa:', error);
-      alert(`Erro ao concluir conversa: ${error.message || 'Erro desconhecido'}`);
+      toast.error(`Erro ao concluir conversa: ${error.message || 'Erro desconhecido'}`);
+    }
+  };
+
+  const handleReopenConversation = async () => {
+    if (!activeConversationId) return;
+
+    try {
+      const { error } = await supabase
+        .from('conversations')
+        .update({ status: 'open' })
+        .eq('id', activeConversationId);
+
+      if (error) throw error;
+
+      toast.success('Conversa reaberta com sucesso');
+      console.log('Conversa reaberta');
+    } catch (error: any) {
+      console.error('Erro ao reabrir conversa:', error);
+      toast.error(`Erro ao reabrir conversa: ${error.message || 'Erro desconhecido'}`);
     }
   };
 
@@ -291,6 +310,7 @@ export default function InboxPage() {
                   onSendMessage={handleSendMessage}
                   onSendFile={handleSendFile}
                   onResolveConversation={handleResolveConversation}
+                  onReopenConversation={handleReopenConversation}
                   onAssignAgent={handleAssignAgent}
                   onMarkUnread={handleMarkUnread}
                   aiMode={activeConvData?.ai_mode}
@@ -344,6 +364,7 @@ export default function InboxPage() {
                       onSendMessage={handleSendMessage}
                       onSendFile={handleSendFile}
                       onResolveConversation={handleResolveConversation}
+                      onReopenConversation={handleReopenConversation}
                       onAssignAgent={handleAssignAgent}
                       onMarkUnread={handleMarkUnread}
                       aiMode={activeConvData?.ai_mode}
