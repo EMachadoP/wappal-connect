@@ -48,7 +48,7 @@ serve(async (req) => {
         senderName = profile.display_name || profile.name || 'Atendente G7';
       }
     } else {
-      senderName = 'Ana Mônica (IA)';
+      senderName = 'Ana Mônica';
     }
 
     const json = await req.json();
@@ -100,8 +100,11 @@ serve(async (req) => {
     if (message_type === 'text') {
       // Adicionar nome do remetente apenas se não for IA automática (opcional, aqui estamos colocando sempre)
       // Mas para IA (system), às vezes queremos parecer mais natural
-      if (userId !== 'system' || overrideSenderName) {
+      if (userId !== 'system') {
         finalContent = `*${senderName}:*\n${content}`;
+      } else {
+        // Para IA, não colocar prefixo de nome se o conteúdo já tiver formato de protocolo ou se quisermos ser mais limpos
+        finalContent = content;
       }
       body.message = finalContent;
     } else if (message_type === 'image') {

@@ -6,6 +6,18 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Traduzir categoria para português
+function translateCategory(category: string): string {
+  const map: Record<string, string> = {
+    operational: "Operacional",
+    support: "Suporte",
+    financial: "Financeiro",
+    commercial: "Comercial",
+    admin: "Administrativo",
+  };
+  return map[category] || "Operacional";
+}
+
 // Validar UUID para evitar crash do banco
 function isValidUUID(uuid: any) {
   if (typeof uuid !== 'string' || !uuid) return false;
@@ -435,40 +447,39 @@ serve(async (req) => {
     } catch (e) { log(`Falha update conv: ${e.message}`); }
 
     // NOTIFY GROUP (WhatsApp + Asana via protocol-opened)
+    let condoName = 'Não identificado';
+    if (resolvedCondoId) {
+      try {
+        // First try entities table (where Identificar Remetente saves)
+        const { data: entityData, error: entityError } = await supabaseClient
+          .from('entities')
+          .select('name')
+          .eq('id', resolvedCondoId)
+          .eq('type', 'condominio')
+          .maybeSingle();
+
+        if (!entityError && entityData) {
+          condoName = entityData.name;
+        } else {
+          // Fallback to condominiums table
+          const { data: condoData, error: condoError } = await supabaseClient
+            .from('condominiums')
+            .select('name')
+            .eq('id', resolvedCondoId)
+            .maybeSingle();
+
+          if (!condoError && condoData) {
+            condoName = condoData.name;
+          }
+        }
+      } catch (e) {
+        log(`[create-protocol] Error fetching condominium name: ${e.message}`);
+      }
+    }
+
     if (notify_group) {
       try {
         log(`[create-protocol] Disparando protocol-opened para ${protocolCode}...`);
-
-        let condoName = 'Não identificado';
-        if (resolvedCondoId) {
-          try {
-            // First try entities table (where Identificar Remetente saves)
-            const { data: entityData, error: entityError } = await supabaseClient
-              .from('entities')
-              .select('name')
-              .eq('id', resolvedCondoId)
-              .eq('type', 'condominio')
-              .maybeSingle();
-
-            if (!entityError && entityData) {
-              condoName = entityData.name;
-            } else {
-              // Fallback to condominiums table
-              const { data: condoData, error: condoError } = await supabaseClient
-                .from('condominiums')
-                .select('name')
-                .eq('id', resolvedCondoId)
-                .maybeSingle();
-
-              if (!condoError && condoData) {
-                condoName = condoData.name;
-              }
-            }
-          } catch (e) {
-            log(`[create-protocol] Error fetching condominium name: ${e.message}`);
-            // Keep default 'Não identificado'
-          }
-        }
 
         await fetch(`${supabaseUrl}/functions/v1/protocol-opened`, {
           method: 'POST',
@@ -504,7 +515,14 @@ serve(async (req) => {
       } catch (e) { log(`Falha notificacao: ${e.message}`); }
 
       try {
-        const msg = `✅ *Protocolo Gerado*\n\n🔢 *Número:* ${protocolCode}\n\nSeu atendimento foi registrado com sucesso.`;
+        const msg = `📋 *Protocolo aberto*
+
+🔖 *Número:* G7-${protocolCode}
+🏢 *Condomínio:* ${condoName || 'Não identificado'}
+📂 *Categoria:* ${translateCategory(finalCategory)}
+📝 *Chamado:* ${summary || 'Sem descrição'}
+
+O protocolo foi aberto em nosso sistema e o responsável fará a tratativa.`;
         await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
