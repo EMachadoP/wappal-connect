@@ -350,24 +350,34 @@ G7-${protocol_code} - Resolvido`;
           }
 
           // ========== 1.5: Send Daily Pending Summary ==========
-          // Query all open protocols
+          // Query open protocols created TODAY only
           try {
             const today = new Date();
             const displayDateSummary = today.toLocaleDateString('pt-BR');
 
-            console.log('[Pending Summary] Querying open protocols...');
+            // Calculate today's date boundaries
+            const todayStart = new Date(today);
+            todayStart.setHours(0, 0, 0, 0);
+            const todayEnd = new Date(today);
+            todayEnd.setHours(23, 59, 59, 999);
+
+            console.log('[Pending Summary] Querying today\'s open protocols...');
+            console.log('[Pending Summary] Date range:', todayStart.toISOString(), 'to', todayEnd.toISOString());
 
             const { data: openProtocols, error: protocolsError } = await supabase
               .from('protocols')
               .select(`
-                code,
+                protocol_code,
                 summary,
                 category,
                 priority,
                 condominium_id,
+                entity_name,
                 condominiums (name)
               `)
               .eq('status', 'open')
+              .gte('created_at', todayStart.toISOString())
+              .lte('created_at', todayEnd.toISOString())
               .order('created_at', { ascending: true });
 
             console.log('[Pending Summary] Query result:', {
@@ -385,7 +395,11 @@ G7-${protocol_code} - Resolvido`;
               const normalItems: string[] = [];
 
               for (const p of openProtocols) {
-                const condoName = (p.condominiums as any)?.name || 'Não identificado';
+                // Try multiple sources for condominium name
+                const condoName = (p.condominiums as any)?.name
+                  || (p as any).entity_name
+                  || 'Não identificado';
+
                 // Truncate summary to max 40 chars for cleaner display
                 const shortSummary = p.summary && p.summary.length > 40
                   ? p.summary.substring(0, 40) + '...'
@@ -401,9 +415,9 @@ G7-${protocol_code} - Resolvido`;
               }
 
               // Build the summary message
-              let summaryMessage = `📋 *${displayDateSummary} - Lista de Pendências*\n`;
+              let summaryMessage = `📋 *${displayDateSummary} - Chamados do Dia*\n`;
               summaryMessage += `━━━━━━━━━━━━━━━━\n`;
-              summaryMessage += `📊 *Total:* ${openProtocols.length} chamado(s) em aberto\n\n`;
+              summaryMessage += `📊 *Total:* ${openProtocols.length} chamado(s) aberto(s) hoje\n\n`;
 
               if (criticalItems.length > 0) {
                 summaryMessage += `⚠️ *CRÍTICOS (${criticalItems.length}):*\n`;
