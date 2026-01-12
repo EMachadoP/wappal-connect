@@ -10,7 +10,7 @@ verify_jwt = false
 verify_jwt = true
 
 [functions.zapi-send-file]
-verify_jwt = true
+verify_jwt = false
 
 [functions.zapi-sync-history]
 verify_jwt = false
