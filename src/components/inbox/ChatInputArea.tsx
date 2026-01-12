@@ -32,6 +32,30 @@ export function ChatInputArea({ onSendMessage, onSendFile, isResolved, isMobile 
     }
   };
 
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items || !onSendFile) return;
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+
+      // Check if it's an image
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) {
+          // Create a named file with proper extension
+          const extension = item.type.split('/')[1] || 'png';
+          const namedFile = new File([file], `pasted-image-${Date.now()}.${extension}`, {
+            type: file.type
+          });
+          onSendFile(namedFile);
+        }
+        return;
+      }
+    }
+  };
+
   if (isResolved) {
     return (
       <div className={`p-3 border-t border-border bg-card ${isMobile ? 'pb-safe' : ''}`}>
@@ -53,6 +77,7 @@ export function ChatInputArea({ onSendMessage, onSendFile, isResolved, isMobile 
           ref={fileInputRef}
           type="file"
           className="hidden"
+          accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx"
           onChange={(e) => {
             const file = e.target.files?.[0];
             if (file && onSendFile) onSendFile(file);
@@ -60,10 +85,11 @@ export function ChatInputArea({ onSendMessage, onSendFile, isResolved, isMobile 
           }}
         />
         <Input
-          placeholder="Digite uma mensagem..."
+          placeholder="Digite uma mensagem... (Ctrl+V para colar imagem)"
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           className="flex-1"
           autoComplete="off"
         />
