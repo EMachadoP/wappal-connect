@@ -11,6 +11,7 @@ import { useRealtimeMessages } from '@/hooks/useRealtimeMessages';
 import { ChatSkeleton } from '@/components/inbox/ChatSkeleton';
 import { useRealtimeInbox } from '@/hooks/useRealtimeInbox';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { toast } from 'sonner';
 
 export default function InboxPage() {
   const { id: conversationIdParam } = useParams<{ id?: string }>();
@@ -125,11 +126,73 @@ export default function InboxPage() {
       // alert('Mensagem enviada!'); // Opcional, remover em produção
     } catch (error: any) {
       console.error('Erro ao enviar:', error);
-      // Import toast if not available, finding where it is imported or adding import if needed (it is not imported in original snippet, but likely available via sonner or similar in this project based on ChatArea.tsx having toast)
-      // Actually ChatArea receives toast, Inbox.tsx doesn't seem to import it.
-      // I will assume simple alert or console for now, or check imports.
-      // I'll add the import first if I can.
-      alert(`Erro ao enviar: ${error.message || 'Erro desconhecido'}`);
+      toast.error(`Erro ao enviar: ${error.message || 'Erro desconhecido'}`);
+    }
+  };
+
+  const handleSendFile = async (file: File) => {
+    if (!user) { toast.error('Erro: Usuário não logado'); return; }
+    if (!activeConversationId) { toast.error('Erro: Nenhuma conversa selecionada'); return; }
+
+    const loadingToast = toast.loading(`Enviando ${file.name}...`);
+
+    try {
+      // 1. Upload para o Storage
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
+      const filePath = `outbound/${fileName}`;
+
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('media-files')
+        .upload(filePath, file);
+
+      if (uploadError) throw uploadError;
+
+      // 2. Obter URL pública
+      const { data: { publicUrl } } = supabase.storage
+        .from('media-files')
+        .getPublicUrl(filePath);
+
+      // 3. Obter nome do atendente para o registro
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('name, display_name')
+        .eq('id', user.id)
+        .single();
+
+      const senderName = profile?.display_name || profile?.name || 'Atendente G7';
+
+      // 4. Chamar Edge Function para enviar via Z-API
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      if (!token) throw new Error("Sessão perdida. Faça login novamente.");
+
+      const response = await fetch('https://qoolzhzdcfnyblymdvbq.supabase.co/functions/v1/zapi-send-file', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          conversation_id: activeConversationId,
+          file_url: publicUrl,
+          file_name: file.name,
+          file_type: file.type,
+          sender_id: user.id,
+          sender_name: senderName
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Erro ao enviar arquivo: ${errorText}`);
+      }
+
+      toast.success('Arquivo enviado com sucesso', { id: loadingToast });
+    } catch (error: any) {
+      console.error('Erro no upload/envio:', error);
+      toast.error(`Erro: ${error.message || 'Falha ao enviar arquivo'}`, { id: loadingToast });
     }
   };
 

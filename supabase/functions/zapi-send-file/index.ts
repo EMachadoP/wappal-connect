@@ -17,9 +17,9 @@ serve(async (req) => {
 
   try {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
-    
-    const { conversation_id, file_url, file_name, file_type, caption, sender_id } = await req.json();
-    
+
+    const { conversation_id, file_url, file_name, file_type, caption, sender_id, sender_name } = await req.json();
+
     console.log('Sending file via Z-API:', { conversation_id, file_type, file_name });
 
     if (!conversation_id || !file_url) {
@@ -78,7 +78,7 @@ serve(async (req) => {
     // Determine Z-API endpoint based on file type
     let endpoint = 'send-document';
     let messageType: 'image' | 'video' | 'audio' | 'document' = 'document';
-    
+
     if (file_type?.startsWith('image/')) {
       endpoint = 'send-image';
       messageType = 'image';
@@ -91,7 +91,7 @@ serve(async (req) => {
     }
 
     const zapiUrl = `https://api.z-api.io/instances/${instanceId}/token/${token}/${endpoint}`;
-    
+
     const zapiPayload: Record<string, string> = {
       phone: recipientPhone,
     };
@@ -135,11 +135,15 @@ serve(async (req) => {
         conversation_id,
         sender_type: 'agent',
         sender_id,
+        agent_name: sender_name || 'Atendente G7',
         message_type: messageType,
         content: caption || file_name || null,
         media_url: file_url,
         whatsapp_message_id: zapiResult.messageId || zapiResult.zapiMessageId,
         sent_at: new Date().toISOString(),
+        direction: 'outbound',
+        status: 'sent',
+        provider: 'zapi'
       })
       .select()
       .single();
@@ -157,8 +161,8 @@ serve(async (req) => {
 
     console.log('File message saved:', message.id);
 
-    return new Response(JSON.stringify({ 
-      success: true, 
+    return new Response(JSON.stringify({
+      success: true,
       message_id: message.id,
       zapi_message_id: zapiResult.messageId || zapiResult.zapiMessageId,
     }), {
