@@ -17,9 +17,7 @@ serve(async (req) => {
 
     console.log('[ai-maybe-reply] Processando:', conversation_id);
 
-    // 1. Debounce Logic: Aguardar mensagens seguidas
-    console.log('[ai-maybe-reply] Iniciando debounce de 5 segundos...');
-
+    // 1. Debounce Logic: Aguardar para agregar mensagens (4s + 2s verificação)
     const { data: initialLatest } = await supabase
       .from('messages')
       .select('id')
@@ -30,10 +28,13 @@ serve(async (req) => {
       .maybeSingle();
 
     const initialId = initialLatest?.id;
+    console.log('[ai-maybe-reply] Debounce: Msg inicial:', initialId);
 
-    await new Promise(r => setTimeout(r, 5000));
+    // Espera 4 segundos
+    await new Promise(r => setTimeout(r, 4000));
 
-    const { data: checkLatest } = await supabase
+    // Check 1: Verificar se chegou nova mensagem
+    const { data: check1 } = await supabase
       .from('messages')
       .select('id')
       .eq('conversation_id', conversation_id)
@@ -42,10 +43,30 @@ serve(async (req) => {
       .limit(1)
       .maybeSingle();
 
-    if (checkLatest && checkLatest.id !== initialId) {
-      console.log('[ai-maybe-reply] Debounce: Nova mensagem detectada. Abortando.');
-      return new Response(JSON.stringify({ success: false, reason: 'Debounced' }));
+    if (check1 && check1.id !== initialId) {
+      console.log('[ai-maybe-reply] Debounce: Nova msg após 4s. Abortando.');
+      return new Response(JSON.stringify({ success: false, reason: 'Debounced at 4s' }));
     }
+
+    // Espera mais 2 segundos (total: 6s)
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Check 2: Verificação final
+    const { data: check2 } = await supabase
+      .from('messages')
+      .select('id')
+      .eq('conversation_id', conversation_id)
+      .eq('sender_type', 'contact')
+      .order('sent_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (check2 && check2.id !== initialId) {
+      console.log('[ai-maybe-reply] Debounce: Nova msg após 6s. Abortando.');
+      return new Response(JSON.stringify({ success: false, reason: 'Debounced at 6s' }));
+    }
+
+    console.log('[ai-maybe-reply] Debounce OK após 6s. Processando...');
 
     // 2. Carregar dados da conversa e configurações
     const { data: conv } = await supabase
