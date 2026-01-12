@@ -348,6 +348,82 @@ G7-${protocol_code} - Resolvido`;
           if (zapiResult.zapiMessageId || zapiResult.messageId) {
             whatsappMessageId = zapiResult.zapiMessageId || zapiResult.messageId;
           }
+
+          // ========== 1.5: Send Daily Pending Summary ==========
+          // Query all open protocols for today
+          try {
+            const today = new Date();
+            const todayStr = today.toISOString().split('T')[0];
+            const displayDateSummary = today.toLocaleDateString('pt-BR');
+
+            const { data: openProtocols, error: protocolsError } = await supabase
+              .from('protocols')
+              .select(`
+                code,
+                summary,
+                category,
+                priority,
+                condominium_id,
+                condominiums (name)
+              `)
+              .eq('status', 'open')
+              .order('created_at', { ascending: true });
+
+            if (!protocolsError && openProtocols && openProtocols.length > 0) {
+              // Group by condominium for better readability
+              const criticalItems: string[] = [];
+              const normalItems: string[] = [];
+
+              for (const p of openProtocols) {
+                const condoName = (p.condominiums as any)?.name || 'Não identificado';
+                // Truncate summary to max 40 chars for cleaner display
+                const shortSummary = p.summary && p.summary.length > 40
+                  ? p.summary.substring(0, 40) + '...'
+                  : (p.summary || 'Sem descrição');
+
+                const line = `• ${condoName} - ${shortSummary}`;
+
+                if (p.priority === 'critical' || p.priority === 'high') {
+                  criticalItems.push(`🔴 ${line}`);
+                } else {
+                  normalItems.push(`🟢 ${line}`);
+                }
+              }
+
+              // Build the summary message
+              let summaryMessage = `📋 *${displayDateSummary} - Lista de Pendências*\n`;
+              summaryMessage += `━━━━━━━━━━━━━━━━\n`;
+              summaryMessage += `📊 *Total:* ${openProtocols.length} chamado(s) em aberto\n\n`;
+
+              if (criticalItems.length > 0) {
+                summaryMessage += `⚠️ *CRÍTICOS (${criticalItems.length}):*\n`;
+                summaryMessage += criticalItems.join('\n') + '\n\n';
+              }
+
+              if (normalItems.length > 0) {
+                summaryMessage += `📌 *Normais (${normalItems.length}):*\n`;
+                summaryMessage += normalItems.join('\n');
+              }
+
+              // Send the summary message to the group
+              await fetch(zapiUrl, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "Client-Token": zapiClientToken,
+                },
+                body: JSON.stringify({
+                  phone: settings.whatsapp_group_id,
+                  message: summaryMessage,
+                }),
+              });
+
+              console.log("WhatsApp pending summary sent");
+            }
+          } catch (summaryError) {
+            console.error("Error sending pending summary:", summaryError);
+            // Don't fail the operation if summary fails
+          }
         } else {
           console.log("Z-API credentials not configured (need ZAPI_INSTANCE_ID, ZAPI_TOKEN, ZAPI_CLIENT_TOKEN)");
         }
