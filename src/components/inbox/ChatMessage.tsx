@@ -8,6 +8,7 @@ import { AudioPlayer } from './AudioPlayer';
 import { MessageFeedback } from './MessageFeedback';
 import { MessageActionsMenu } from './MessageActionsMenu';
 import { EditMessageModal } from './EditMessageModal';
+import { ForwardMessageModal } from './ForwardMessageModal';
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -48,6 +49,7 @@ export function ChatMessage({
   onMessageUpdated,
 }: ChatMessageProps) {
   const [editModalOpen, setEditModalOpen] = useState(false);
+  const [forwardModalOpen, setForwardModalOpen] = useState(false);
   const [localContent, setLocalContent] = useState(content);
   const [isDeleted, setIsDeleted] = useState(false);
 
@@ -175,12 +177,30 @@ export function ChatMessage({
   };
 
   const canEditDelete = isOutgoing && messageType === 'text';
+  const canForward = messageType !== 'system' && (localContent || mediaUrl);
 
   return (
     <div className={cn('flex mb-2 group', isOutgoing ? 'justify-end' : 'justify-start')}>
-      {canEditDelete && isOutgoing && (
+      {(canEditDelete || canForward) && isOutgoing && (
         <div className="flex items-center mr-1">
-          <MessageActionsMenu onEdit={() => setEditModalOpen(true)} onDelete={handleDelete} />
+          <MessageActionsMenu
+            onEdit={() => setEditModalOpen(true)}
+            onDelete={handleDelete}
+            onForward={canForward ? () => setForwardModalOpen(true) : undefined}
+            canEdit={canEditDelete}
+          />
+        </div>
+      )}
+
+      {/* Forward button for incoming messages */}
+      {canForward && !isOutgoing && (
+        <div className="flex items-center ml-1 order-2">
+          <MessageActionsMenu
+            onEdit={() => { }}
+            onDelete={() => { }}
+            onForward={() => setForwardModalOpen(true)}
+            canEdit={false}
+          />
         </div>
       )}
 
@@ -227,6 +247,18 @@ export function ChatMessage({
         currentContent={localContent || ''}
         onSaved={handleEditSaved}
       />
+
+      {conversationId && (
+        <ForwardMessageModal
+          open={forwardModalOpen}
+          onOpenChange={setForwardModalOpen}
+          messageId={messageId}
+          messageContent={localContent}
+          messageType={messageType}
+          mediaUrl={mediaUrl}
+          currentConversationId={conversationId}
+        />
+      )}
     </div>
   );
 }

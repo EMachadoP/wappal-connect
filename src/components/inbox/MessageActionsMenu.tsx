@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { MoreVertical, Pencil, Trash2 } from 'lucide-react';
+import { MoreVertical, Pencil, Trash2, Forward } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,9 +21,11 @@ import { Button } from '@/components/ui/button';
 interface MessageActionsMenuProps {
   onEdit: () => void;
   onDelete: () => void;
+  onForward?: () => void;
+  canEdit?: boolean;
 }
 
-export function MessageActionsMenu({ onEdit, onDelete }: MessageActionsMenuProps) {
+export function MessageActionsMenu({ onEdit, onDelete, onForward, canEdit = true }: MessageActionsMenuProps) {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   const handleDelete = () => {
@@ -35,20 +37,28 @@ export function MessageActionsMenu({ onEdit, onDelete }: MessageActionsMenuProps
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button 
-            variant="ghost" 
-            size="icon" 
+          <Button
+            variant="ghost"
+            size="icon"
             className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
           >
             <MoreVertical className="h-4 w-4" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuItem onClick={onEdit}>
-            <Pencil className="h-4 w-4 mr-2" />
-            Editar
-          </DropdownMenuItem>
-          <DropdownMenuItem 
+          {onForward && (
+            <DropdownMenuItem onClick={onForward}>
+              <Forward className="h-4 w-4 mr-2" />
+              Encaminhar
+            </DropdownMenuItem>
+          )}
+          {canEdit && (
+            <DropdownMenuItem onClick={onEdit}>
+              <Pencil className="h-4 w-4 mr-2" />
+              Editar
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuItem
             onClick={() => setDeleteDialogOpen(true)}
             className="text-destructive focus:text-destructive"
           >

@@ -66,6 +66,7 @@ serve(async (req) => {
     // Get Z-API credentials
     const instanceId = Deno.env.get('ZAPI_INSTANCE_ID');
     const token = Deno.env.get('ZAPI_TOKEN');
+    const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN');
 
     if (!instanceId || !token) {
       console.error('Z-API credentials not configured');
@@ -112,9 +113,18 @@ serve(async (req) => {
 
     console.log('Calling Z-API:', { endpoint, payload: zapiPayload });
 
+    const zapiHeaders: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+
+    // Add client-token if configured
+    if (clientToken) {
+      zapiHeaders['client-token'] = clientToken;
+    }
+
     const zapiResponse = await fetch(zapiUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: zapiHeaders,
       body: JSON.stringify(zapiPayload),
     });
 
