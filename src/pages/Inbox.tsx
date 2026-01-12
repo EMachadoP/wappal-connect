@@ -207,7 +207,10 @@ export default function InboxPage() {
 
       if (error) throw error;
 
-      // Optionally show success message
+      // Refetch to update local state
+      await fetchActiveConversationDetails(activeConversationId);
+
+      toast.success('Conversa marcada como resolvida');
       console.log('Conversa marcada como resolvida');
     } catch (error: any) {
       console.error('Erro ao resolver conversa:', error);
@@ -225,6 +228,9 @@ export default function InboxPage() {
         .eq('id', activeConversationId);
 
       if (error) throw error;
+
+      // Refetch to update local state
+      await fetchActiveConversationDetails(activeConversationId);
 
       toast.success('Conversa reaberta com sucesso');
       console.log('Conversa reaberta');
