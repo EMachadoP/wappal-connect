@@ -289,6 +289,7 @@ export default function InboxPage() {
                   conversationId={activeConversationId}
                   conversationStatus={activeConvData?.status}
                   onSendMessage={handleSendMessage}
+                  onSendFile={handleSendFile}
                   onResolveConversation={handleResolveConversation}
                   onAssignAgent={handleAssignAgent}
                   onMarkUnread={handleMarkUnread}
@@ -341,6 +342,7 @@ export default function InboxPage() {
                       conversationId={activeConversationId}
                       conversationStatus={activeConvData?.status}
                       onSendMessage={handleSendMessage}
+                      onSendFile={handleSendFile}
                       onResolveConversation={handleResolveConversation}
                       onAssignAgent={handleAssignAgent}
                       onMarkUnread={handleMarkUnread}
