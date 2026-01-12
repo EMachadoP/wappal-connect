@@ -50,16 +50,14 @@ serve(async (req) => {
       throw new Error("Agente de destino inválido ou inativo");
     }
 
-    // Executar atribuição e marcar como resolvida
+    // Executar atribuição (mantém status 'open' para aparecer em "Minhas" do agente)
     await supabaseAdmin
       .from("conversations")
       .update({
         assigned_to: agent_id,
         assigned_at: new Date().toISOString(),
         assigned_by: user.id,
-        status: 'resolved', // Marca como resolvida ao atribuir
-        resolved_at: new Date().toISOString(),
-        resolved_by: user.id,
+        // NÃO mudar o status - a conversa deve continuar aberta
       })
       .eq("id", conversation_id);
 
