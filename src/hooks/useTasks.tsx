@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -48,85 +48,113 @@ export function useTasks(filters?: TaskFilters) {
     const [error, setError] = useState<string | null>(null);
     const { user } = useAuth();
 
-    const fetchTasks = useCallback(async (retries = 2) => {
-        let lastErr: any;
+    // Track if component is mounted to prevent state updates after unmount
+    const mountedRef = useRef(true);
 
-        for (let attempt = 0; attempt <= retries; attempt++) {
-            try {
-                setLoading(true);
-                let query = supabase
-                    .from('tasks')
-                    .select('*, assignee:profiles!assignee_id(name)')
-                    .order('due_at', { ascending: true, nullsFirst: false });
+    // Stabilize filters to prevent unnecessary refetches
+    const stableFilters = useMemo(() => ({
+        status: filters?.status,
+        assignee_id: filters?.assignee_id,
+        overdue: filters?.overdue,
+    }), [
+        // Convert array to string for stable comparison
+        Array.isArray(filters?.status) ? filters.status.join(',') : filters?.status,
+        filters?.assignee_id,
+        filters?.overdue
+    ]);
 
-                // Apply status filter
-                if (filters?.status && filters.status !== 'all') {
-                    if (Array.isArray(filters.status)) {
-                        query = query.in('status', filters.status);
-                    } else {
-                        query = query.eq('status', filters.status);
-                    }
-                }
+    // Fetch tasks - NO RETRIES to prevent loops
+    const fetchTasks = useCallback(async () => {
+        if (!mountedRef.current) return;
 
-                // Apply assignee filter
-                if (filters?.assignee_id) {
-                    if (filters.assignee_id === 'me' && user) {
-                        query = query.eq('assignee_id', user.id);
-                    } else if (filters.assignee_id === 'unassigned') {
-                        query = query.is('assignee_id', null);
-                    } else if (filters.assignee_id !== 'all') {
-                        query = query.eq('assignee_id', filters.assignee_id);
-                    }
-                }
+        try {
+            setLoading(true);
+            setError(null);
 
-                // Apply overdue filter
-                if (filters?.overdue) {
-                    query = query.lt('due_at', new Date().toISOString());
-                    query = query.not('status', 'in', '("done","cancelled")');
-                }
+            let query = supabase
+                .from('tasks')
+                .select('*, assignee:profiles!assignee_id(name)')
+                .order('due_at', { ascending: true, nullsFirst: false });
 
-                const { data, error: fetchError } = await query;
-
-                if (fetchError) throw fetchError;
-                setTasks((data as Task[]) || []);
-                setError(null);
-                setLoading(false);
-                return; // Success, exit retry loop
-            } catch (err) {
-                lastErr = err;
-                console.warn(`[useTasks] Attempt ${attempt + 1}/${retries + 1} failed:`, err);
-
-                if (attempt < retries) {
-                    // Wait before retrying (exponential backoff)
-                    await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+            // Apply status filter
+            if (stableFilters.status && stableFilters.status !== 'all') {
+                if (Array.isArray(stableFilters.status)) {
+                    query = query.in('status', stableFilters.status);
+                } else {
+                    query = query.eq('status', stableFilters.status);
                 }
             }
+
+            // Apply assignee filter
+            if (stableFilters.assignee_id) {
+                if (stableFilters.assignee_id === 'me' && user) {
+                    query = query.eq('assignee_id', user.id);
+                } else if (stableFilters.assignee_id === 'unassigned') {
+                    query = query.is('assignee_id', null);
+                } else if (stableFilters.assignee_id !== 'all') {
+                    query = query.eq('assignee_id', stableFilters.assignee_id);
+                }
+            }
+
+            // Apply overdue filter
+            if (stableFilters.overdue) {
+                query = query.lt('due_at', new Date().toISOString());
+                query = query.not('status', 'in', '("done","cancelled")');
+            }
+
+            const { data, error: fetchError } = await query;
+
+            // Check if still mounted before updating state
+            if (!mountedRef.current) return;
+
+            if (fetchError) {
+                console.error('[useTasks] Fetch error:', fetchError.message);
+                setError(fetchError.message);
+            } else {
+                setTasks((data as Task[]) || []);
+            }
+        } catch (err) {
+            if (!mountedRef.current) return;
+            console.error('[useTasks] Exception:', err);
+            setError(err instanceof Error ? err.message : 'Failed to fetch tasks');
+        } finally {
+            if (mountedRef.current) {
+                setLoading(false);
+            }
         }
+    }, [stableFilters.status, stableFilters.assignee_id, stableFilters.overdue, user?.id]);
 
-        // All retries failed
-        console.error('[useTasks] All retries failed:', lastErr);
-        setError(lastErr instanceof Error ? lastErr.message : 'Failed to fetch tasks');
-        setLoading(false);
-    }, [filters, user]);
-
-    // Subscribe to realtime updates
+    // Initial fetch + realtime subscription
     useEffect(() => {
+        mountedRef.current = true;
+
+        // Initial fetch
         fetchTasks();
 
+        // Debounce realtime refetches to prevent rapid-fire requests
+        let debounceTimer: NodeJS.Timeout | null = null;
+
         const channel = supabase
-            .channel('tasks-realtime')
+            .channel(`tasks-realtime-${Date.now()}`) // Unique channel name
             .on(
                 'postgres_changes',
                 { event: '*', schema: 'public', table: 'tasks' },
-                (payload) => {
-                    console.log('[useTasks] Realtime update:', payload);
-                    // Refetch to get joined data
-                    fetchTasks();
+                () => {
+                    // Debounce: wait 500ms before refetching
+                    if (debounceTimer) clearTimeout(debounceTimer);
+                    debounceTimer = setTimeout(() => {
+                        if (mountedRef.current) {
+                            console.log('[useTasks] Realtime update, refetching...');
+                            fetchTasks();
+                        }
+                    }, 500);
                 }
             )
             .subscribe();
 
         return () => {
+            mountedRef.current = false;
+            if (debounceTimer) clearTimeout(debounceTimer);
             supabase.removeChannel(channel);
         };
     }, [fetchTasks]);
@@ -168,33 +196,54 @@ export function useTasks(filters?: TaskFilters) {
 export function useTaskMetrics() {
     const [metrics, setMetrics] = useState<TaskMetrics | null>(null);
     const [loading, setLoading] = useState(true);
+    const mountedRef = useRef(true);
 
     useEffect(() => {
-        const fetchMetrics = async () => {
-            const { data, error } = await supabase
-                .from('task_metrics_dashboard')
-                .select('*')
-                .single();
+        mountedRef.current = true;
 
-            if (!error && data) {
-                setMetrics(data as TaskMetrics);
+        const fetchMetrics = async () => {
+            try {
+                const { data, error } = await supabase
+                    .from('task_metrics_dashboard')
+                    .select('*')
+                    .single();
+
+                if (!mountedRef.current) return;
+
+                if (!error && data) {
+                    setMetrics(data as TaskMetrics);
+                }
+            } catch (err) {
+                console.error('[useTaskMetrics] Error:', err);
+            } finally {
+                if (mountedRef.current) {
+                    setLoading(false);
+                }
             }
-            setLoading(false);
         };
 
         fetchMetrics();
 
-        // Subscribe to task changes to update metrics
+        // Debounce realtime updates
+        let debounceTimer: NodeJS.Timeout | null = null;
+
         const channel = supabase
-            .channel('task-metrics-realtime')
+            .channel(`task-metrics-realtime-${Date.now()}`)
             .on(
                 'postgres_changes',
                 { event: '*', schema: 'public', table: 'tasks' },
-                () => fetchMetrics()
+                () => {
+                    if (debounceTimer) clearTimeout(debounceTimer);
+                    debounceTimer = setTimeout(() => {
+                        if (mountedRef.current) fetchMetrics();
+                    }, 500);
+                }
             )
             .subscribe();
 
         return () => {
+            mountedRef.current = false;
+            if (debounceTimer) clearTimeout(debounceTimer);
             supabase.removeChannel(channel);
         };
     }, []);
