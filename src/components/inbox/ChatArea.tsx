@@ -49,6 +49,9 @@ interface ChatAreaProps {
   onProtocolCreated?: (code: string) => void;
   onAudioSettingsChange?: () => void;
   loading?: boolean;
+  loadingMore?: boolean;
+  hasMore?: boolean;
+  onLoadMore?: () => void;
   isMobile?: boolean;
   onBack?: () => void;
 }
@@ -147,6 +150,9 @@ export function ChatArea(props: ChatAreaProps) {
       <MessageList
         messages={messages}
         loading={loading}
+        loadingMore={props.loadingMore}
+        hasMore={props.hasMore}
+        onLoadMore={props.onLoadMore}
         conversationId={conversationId}
         profiles={props.profiles}
         contactName={participant?.name || contact?.name}

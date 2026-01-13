@@ -8,6 +8,9 @@ import { ptBR } from 'date-fns/locale';
 interface MessageListProps {
   messages: any[];
   loading?: boolean;
+  loadingMore?: boolean;
+  hasMore?: boolean;
+  onLoadMore?: () => void;
   conversationId?: string | null;
   profiles: any[];
   contactName?: string;
@@ -24,13 +27,8 @@ const isPhoneNumber = (str: string | null | undefined): boolean => {
 
 // Função para formatar a data do separador
 const formatDateSeparator = (date: Date): string => {
-  if (isToday(date)) {
-    return 'Hoje';
-  }
-  if (isYesterday(date)) {
-    return 'Ontem';
-  }
-  // Para datas mais antigas, mostra o dia da semana e a data
+  if (isToday(date)) return 'Hoje';
+  if (isYesterday(date)) return 'Ontem';
   const dayOfWeek = format(date, 'EEEE', { locale: ptBR });
   const formattedDate = format(date, 'dd/MM/yyyy');
   return `${dayOfWeek.charAt(0).toUpperCase() + dayOfWeek.slice(1)}, ${formattedDate}`;
@@ -47,9 +45,20 @@ const DateSeparator = ({ date }: { date: Date }) => (
   </div>
 );
 
-export function MessageList({ messages, loading, conversationId, profiles, contactName }: MessageListProps) {
+export function MessageList({
+  messages,
+  loading,
+  loadingMore,
+  hasMore,
+  onLoadMore,
+  conversationId,
+  profiles,
+  contactName
+}: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const prevLength = useRef(messages.length);
+  const isInitialLoad = useRef(true);
+  const scrollSnapshot = useRef<{ height: number; top: number } | null>(null);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     if (containerRef.current) {
@@ -57,75 +66,122 @@ export function MessageList({ messages, loading, conversationId, profiles, conta
     }
   }, []);
 
-  useEffect(() => {
-    const isNewMessage = messages.length > prevLength.current;
-    if (isNewMessage) {
-      scrollToBottom('smooth');
-    } else {
-      scrollToBottom('auto');
-    }
-    prevLength.current = messages.length;
-  }, [messages.length, scrollToBottom]);
-
   const getAgentName = (senderId: string | null | undefined): string | null => {
     if (!senderId) return null;
     const profile = profiles.find(p => p.id === senderId);
     return profile?.name || null;
   };
 
+  // Handle pagination trigger
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    // Trigger when scrolled to near the top (100px threshold for better UX)
+    if (target.scrollTop < 100 && hasMore && !loadingMore && onLoadMore && !loading) {
+      console.log('[MessageList] Scrolled to top, fetching more...');
+      scrollSnapshot.current = {
+        height: target.scrollHeight,
+        top: target.scrollTop
+      };
+      onLoadMore();
+    }
+  };
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const isAddedAtBottom = messages.length > prevLength.current && messages[messages.length - 1]?.sent_at !== (prevLength.current > 0 ? messages[prevLength.current - 1]?.sent_at : null);
+    const isPrepended = messages.length > prevLength.current && messages[0]?.sent_at !== (prevLength.current > 0 ? messages[0]?.sent_at : null);
+
+    if (isInitialLoad.current && messages.length > 0) {
+      scrollToBottom('auto');
+      isInitialLoad.current = false;
+    } else if (isPrepended && scrollSnapshot.current) {
+      // Restore scroll position after history load
+      const newHeight = containerRef.current.scrollHeight;
+      const heightDifference = newHeight - scrollSnapshot.current.height;
+      containerRef.current.scrollTop = scrollSnapshot.current.top + heightDifference;
+      scrollSnapshot.current = null;
+    } else if (isAddedAtBottom) {
+      scrollToBottom('smooth');
+    }
+
+    prevLength.current = messages.length;
+  }, [messages, scrollToBottom]);
+
+  // Reset flags when switching conversation
+  useEffect(() => {
+    isInitialLoad.current = true;
+    scrollSnapshot.current = null;
+    prevLength.current = 0;
+  }, [conversationId]);
+
   if (loading && messages.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center">
-        <p className="text-muted-foreground">Carregando mensagens...</p>
+        <p className="text-muted-foreground animate-pulse">Carregando histórico...</p>
       </div>
     );
   }
 
   // Agrupar mensagens por data
-  const messagesWithDateSeparators: (any | { type: 'date-separator', date: Date })[] = [];
+  const messagesWithDateSeparators: (any | { type: 'date-separator', date: Date, id: string })[] = [];
   let lastDate: Date | null = null;
 
   messages.forEach((msg) => {
     const msgDate = new Date(msg.sent_at);
-
-    // Se é um novo dia, adiciona o separador
     if (!lastDate || !isSameDay(msgDate, lastDate)) {
       messagesWithDateSeparators.push({
         type: 'date-separator',
         date: msgDate,
-        id: `separator-${msg.sent_at}` // Unique key for separator
+        id: `sep-${msg.id || msg.sent_at}`
       });
       lastDate = msgDate;
     }
-
     messagesWithDateSeparators.push(msg);
   });
 
   return (
     <div
       ref={containerRef}
+      onScroll={handleScroll}
       className="flex-1 overflow-y-auto p-4 scrollbar-thin"
+      style={{ overflowAnchor: 'none' }}
     >
-      <div className="flex flex-col">
+      <div className="flex flex-col min-h-full">
+        {hasMore && (
+          <div className="py-6 text-center">
+            {loadingMore ? (
+              <div className="flex items-center justify-center gap-2">
+                <div className="w-2 h-2 bg-primary rounded-full animate-bounce" />
+                <div className="w-2 h-2 bg-primary rounded-full animate-bounce [animation-delay:0.2s]" />
+                <div className="w-2 h-2 bg-primary rounded-full animate-bounce [animation-delay:0.4s]" />
+              </div>
+            ) : (
+              <p className="text-[10px] text-muted-foreground uppercase tracking-widest opacity-40">
+                Continue rolando para carregar mais histórico
+              </p>
+            )}
+          </div>
+        )}
+
+        {!hasMore && messages.length > 50 && (
+          <div className="py-8 text-center border-b border-border/50 mb-6">
+            <p className="text-xs text-muted-foreground italic opacity-60">Início da conversa</p>
+          </div>
+        )}
+
         {messagesWithDateSeparators.map((item) => {
-          // Renderizar separador de data
           if (item.type === 'date-separator') {
             return <DateSeparator key={item.id} date={item.date} />;
           }
 
-          // Renderizar mensagem normal
           const msg = item;
           const isOutgoing = msg.sender_type === 'agent';
-
           let name: string | null = null;
 
           if (isOutgoing) {
             name = msg.agent_name || getAgentName(msg.sender_id || msg.agent_id);
           } else {
-            // Lógica para remetente (inbound):
-            // 1. Se o nome na mensagem NÃO for um telefone, usa ele (bom para grupos)
-            // 2. Senão, usa o contactName (nome identificado do contato)
-            // 3. Se nada funcionar, usa o que tiver na mensagem
             if (msg.sender_name && !isPhoneNumber(msg.sender_name)) {
               name = msg.sender_name;
             } else {

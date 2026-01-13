@@ -31,7 +31,13 @@ export default function InboxPage() {
   });
 
   // Hook para mensagens da conversa ativa
-  const { messages, loading: loadingMessages } = useRealtimeMessages(activeConversationId);
+  const {
+    messages,
+    loading: loadingMessages,
+    loadingMore,
+    hasMore,
+    loadMoreMessages
+  } = useRealtimeMessages(activeConversationId);
 
   const fetchActiveConversationDetails = useCallback(async (id: string) => {
     const { data } = await supabase
@@ -322,6 +328,9 @@ export default function InboxPage() {
                   aiMode={activeConvData?.ai_mode}
                   humanControl={activeConvData?.human_control}
                   loading={loadingMessages}
+                  loadingMore={loadingMore}
+                  hasMore={hasMore}
+                  onLoadMore={loadMoreMessages}
                   currentUserId={user.id}
                   isMobile={true}
                   onBack={() => {
@@ -376,6 +385,9 @@ export default function InboxPage() {
                       aiMode={activeConvData?.ai_mode}
                       humanControl={activeConvData?.human_control}
                       loading={loadingMessages}
+                      loadingMore={loadingMore}
+                      hasMore={hasMore}
+                      onLoadMore={loadMoreMessages}
                       currentUserId={user.id}
                     />
                   )

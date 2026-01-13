@@ -7,12 +7,15 @@ type Message = Database['public']['Tables']['messages']['Row'];
 export function useRealtimeMessages(conversationId: string | null) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const channelRef = useRef<any>(null);
+  const PAGE_SIZE = 100;
 
   const fetchMessages = useCallback(async (id: string) => {
-    // Immediate log to track request
-    console.log(`[RealtimeMessages] Fetching messages for: ${id}`);
+    console.log(`[RealtimeMessages] Fetching initial messages for: ${id}`);
     setLoading(true);
+    setHasMore(true);
 
     try {
       const { data, error } = await supabase
@@ -20,20 +23,14 @@ export function useRealtimeMessages(conversationId: string | null) {
         .select('*')
         .eq('conversation_id', id)
         .order('sent_at', { ascending: false })
-        .limit(50);
+        .limit(PAGE_SIZE);
 
       if (error) throw error;
 
-      // CRITICAL: Only update state if this ID is still the active one
-      // This handles the "race condition" where switching fast could mix data
-      setMessages((prev) => {
-        // We check if the data we just got should actually be applied
-        // by verifying it via a closure or by checking the current conversation context
-        // in a more robust way if needed, but for now we trust the hook's scope.
-        if (data) return data.reverse();
-        return prev;
-      });
-
+      if (data) {
+        setMessages(data.reverse());
+        setHasMore(data.length === PAGE_SIZE);
+      }
     } catch (err) {
       console.error('[RealtimeMessages] Error fetching:', err);
     } finally {
@@ -41,21 +38,50 @@ export function useRealtimeMessages(conversationId: string | null) {
     }
   }, []);
 
-  useEffect(() => {
-    // ALWAYS clear messages immediately when conversation changes
-    setMessages([]);
+  const loadMoreMessages = useCallback(async () => {
+    if (!conversationId || loadingMore || !hasMore || messages.length === 0) return;
 
+    setLoadingMore(true);
+    const oldestMessage = messages[0];
+
+    console.log(`[RealtimeMessages] Loading more messages before: ${oldestMessage.sent_at}`);
+
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('conversation_id', conversationId)
+        .lt('sent_at', oldestMessage.sent_at)
+        .order('sent_at', { ascending: false })
+        .limit(PAGE_SIZE);
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        const olderMessages = data.reverse();
+        setMessages(prev => [...olderMessages, ...prev]);
+        setHasMore(data.length === PAGE_SIZE);
+      } else {
+        setHasMore(false);
+      }
+    } catch (err) {
+      console.error('[RealtimeMessages] Error loading more:', err);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [conversationId, loadingMore, hasMore, messages]);
+
+  useEffect(() => {
+    setMessages([]);
     if (!conversationId) {
       setLoading(false);
       return;
     }
 
-    console.log(`[RealtimeMessages] Conversation changed to: ${conversationId}`);
     fetchMessages(conversationId);
 
     // Cleanup previous channel
     if (channelRef.current) {
-      console.log('[RealtimeMessages] Cleaning up previous channel');
       supabase.removeChannel(channelRef.current);
     }
 
@@ -73,7 +99,6 @@ export function useRealtimeMessages(conversationId: string | null) {
           if (payload.eventType === 'INSERT') {
             const newMessage = payload.new as Message;
             setMessages((prev) => {
-              // Ignore if message already exists or belongs to another conversation
               if (newMessage.conversation_id !== conversationId) return prev;
               if (prev.some((m) => m.id === newMessage.id)) return prev;
 
@@ -89,12 +114,7 @@ export function useRealtimeMessages(conversationId: string | null) {
           }
         }
       )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIPTION_ERROR') {
-          console.error('[RealtimeMessages] Subscription error, retrying...');
-          setTimeout(() => fetchMessages(conversationId), 2000);
-        }
-      });
+      .subscribe();
 
     channelRef.current = channel;
 
@@ -105,5 +125,12 @@ export function useRealtimeMessages(conversationId: string | null) {
     };
   }, [conversationId, fetchMessages]);
 
-  return { messages, loading, setMessages };
+  return {
+    messages,
+    loading,
+    loadingMore,
+    hasMore,
+    loadMoreMessages,
+    setMessages
+  };
 }
