@@ -258,3 +258,111 @@ export function formatSecondsToHM(seconds: number): string {
     const m = Math.floor((s % 3600) / 60);
     return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
+
+// Per-agent metrics
+export interface AgentMetrics {
+    assignee_id: string | null;
+    assignee_name: string | null;
+    pending_count: number;
+    in_progress_count: number;
+    done_today_count: number;
+}
+
+export function useAgentMetrics() {
+    const [agentMetrics, setAgentMetrics] = useState<AgentMetrics[]>([]);
+    const [loading, setLoading] = useState(true);
+    const mountedRef = useRef(true);
+
+    useEffect(() => {
+        mountedRef.current = true;
+
+        const fetchAgentMetrics = async () => {
+            try {
+                // Get today's start/end in UTC
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const todayStart = today.toISOString();
+                const tomorrow = new Date(today);
+                tomorrow.setDate(tomorrow.getDate() + 1);
+                const tomorrowStart = tomorrow.toISOString();
+
+                // Fetch all tasks with assignee info
+                const { data, error } = await supabase
+                    .from('tasks')
+                    .select('assignee_id, status, completed_at, assignee:profiles!assignee_id(name)')
+                    .not('assignee_id', 'is', null);
+
+                if (error) throw error;
+                if (!mountedRef.current) return;
+
+                // Group by assignee
+                const metricsMap = new Map<string, AgentMetrics>();
+
+                data?.forEach((task: any) => {
+                    const id = task.assignee_id;
+                    if (!id) return;
+
+                    if (!metricsMap.has(id)) {
+                        metricsMap.set(id, {
+                            assignee_id: id,
+                            assignee_name: task.assignee?.name || 'Desconhecido',
+                            pending_count: 0,
+                            in_progress_count: 0,
+                            done_today_count: 0,
+                        });
+                    }
+
+                    const m = metricsMap.get(id)!;
+
+                    if (task.status === 'pending' || task.status === 'waiting') {
+                        m.pending_count++;
+                    } else if (task.status === 'in_progress') {
+                        m.in_progress_count++;
+                    } else if (task.status === 'done' && task.completed_at) {
+                        const completedDate = new Date(task.completed_at);
+                        if (completedDate >= new Date(todayStart) && completedDate < new Date(tomorrowStart)) {
+                            m.done_today_count++;
+                        }
+                    }
+                });
+
+                setAgentMetrics(Array.from(metricsMap.values()).sort((a, b) =>
+                    (a.assignee_name || '').localeCompare(b.assignee_name || '')
+                ));
+            } catch (err) {
+                console.error('[useAgentMetrics] Error:', err);
+            } finally {
+                if (mountedRef.current) {
+                    setLoading(false);
+                }
+            }
+        };
+
+        fetchAgentMetrics();
+
+        // Debounce realtime updates
+        let debounceTimer: NodeJS.Timeout | null = null;
+
+        const channel = supabase
+            .channel(`agent-metrics-realtime-${Date.now()}`)
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'tasks' },
+                () => {
+                    if (debounceTimer) clearTimeout(debounceTimer);
+                    debounceTimer = setTimeout(() => {
+                        if (mountedRef.current) fetchAgentMetrics();
+                    }, 500);
+                }
+            )
+            .subscribe();
+
+        return () => {
+            mountedRef.current = false;
+            if (debounceTimer) clearTimeout(debounceTimer);
+            supabase.removeChannel(channel);
+        };
+    }, []);
+
+    return { agentMetrics, loading };
+}

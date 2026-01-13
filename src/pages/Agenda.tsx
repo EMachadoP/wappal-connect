@@ -1,6 +1,6 @@
 import React from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { useTasks, TaskPriority, formatSecondsToHM } from '@/hooks/useTasks';
+import { useTasks, TaskPriority, formatSecondsToHM, useAgentMetrics } from '@/hooks/useTasks';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -29,6 +29,7 @@ export default function Agenda() {
     const { tasks, loading, startTask, completeTask } = useTasks({
         status: ['pending', 'in_progress', 'waiting'],
     });
+    const { agentMetrics, loading: metricsLoading } = useAgentMetrics();
 
     const now = new Date();
     const today = startOfDay(now);
@@ -173,6 +174,32 @@ export default function Agenda() {
                         </Button>
                     </Link>
                 </div>
+
+                {/* Agent Metrics Cards */}
+                {!metricsLoading && agentMetrics.length > 0 && (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        {agentMetrics.map((agent) => (
+                            <Card key={agent.assignee_id} className="bg-gradient-to-br from-background to-muted/30">
+                                <CardContent className="pt-4 pb-3">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <User className="h-4 w-4 text-muted-foreground" />
+                                        <span className="font-medium text-sm truncate">{agent.assignee_name}</span>
+                                    </div>
+                                    <div className="flex items-center gap-3 text-xs">
+                                        <span className="flex items-center gap-1">
+                                            <span className="w-2 h-2 rounded-full bg-yellow-500" />
+                                            {agent.pending_count + agent.in_progress_count} pendente{agent.pending_count + agent.in_progress_count !== 1 ? 's' : ''}
+                                        </span>
+                                        <span className="flex items-center gap-1 text-green-600">
+                                            <CheckCircle className="h-3 w-3" />
+                                            {agent.done_today_count} hoje
+                                        </span>
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        ))}
+                    </div>
+                )}
 
                 {loading ? (
                     <Card>
