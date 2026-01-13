@@ -255,14 +255,19 @@ serve(async (req: Request) => {
       log(`[create-protocol] Matching template via keywords...`);
       const lowerSummary = summary.toLowerCase();
       let maxMatches = 0;
+      let maxPriority = -1;
       for (const t of templates) {
         const keywords = t.match_keywords || [];
         let matches = 0;
         for (const kw of keywords) {
           if (lowerSummary.includes(kw.toLowerCase())) matches++;
         }
-        if (matches > maxMatches) {
+
+        const priority = t.match_priority || 0;
+
+        if (matches > maxMatches || (matches === maxMatches && priority > maxPriority && matches > 0)) {
           maxMatches = matches;
+          maxPriority = priority;
           bestTemplate = t;
         }
       }
