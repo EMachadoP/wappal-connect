@@ -48,51 +48,65 @@ export function useTasks(filters?: TaskFilters) {
     const [error, setError] = useState<string | null>(null);
     const { user } = useAuth();
 
-    const fetchTasks = useCallback(async () => {
-        try {
-            setLoading(true);
-            let query = supabase
-                .from('tasks')
-                .select('*, assignee:profiles!assignee_id(name)')
-                .order('due_at', { ascending: true, nullsFirst: false });
+    const fetchTasks = useCallback(async (retries = 2) => {
+        let lastErr: any;
 
-            // Apply status filter
-            if (filters?.status && filters.status !== 'all') {
-                if (Array.isArray(filters.status)) {
-                    query = query.in('status', filters.status);
-                } else {
-                    query = query.eq('status', filters.status);
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            try {
+                setLoading(true);
+                let query = supabase
+                    .from('tasks')
+                    .select('*, assignee:profiles!assignee_id(name)')
+                    .order('due_at', { ascending: true, nullsFirst: false });
+
+                // Apply status filter
+                if (filters?.status && filters.status !== 'all') {
+                    if (Array.isArray(filters.status)) {
+                        query = query.in('status', filters.status);
+                    } else {
+                        query = query.eq('status', filters.status);
+                    }
+                }
+
+                // Apply assignee filter
+                if (filters?.assignee_id) {
+                    if (filters.assignee_id === 'me' && user) {
+                        query = query.eq('assignee_id', user.id);
+                    } else if (filters.assignee_id === 'unassigned') {
+                        query = query.is('assignee_id', null);
+                    } else if (filters.assignee_id !== 'all') {
+                        query = query.eq('assignee_id', filters.assignee_id);
+                    }
+                }
+
+                // Apply overdue filter
+                if (filters?.overdue) {
+                    query = query.lt('due_at', new Date().toISOString());
+                    query = query.not('status', 'in', '("done","cancelled")');
+                }
+
+                const { data, error: fetchError } = await query;
+
+                if (fetchError) throw fetchError;
+                setTasks((data as Task[]) || []);
+                setError(null);
+                setLoading(false);
+                return; // Success, exit retry loop
+            } catch (err) {
+                lastErr = err;
+                console.warn(`[useTasks] Attempt ${attempt + 1}/${retries + 1} failed:`, err);
+
+                if (attempt < retries) {
+                    // Wait before retrying (exponential backoff)
+                    await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
                 }
             }
-
-            // Apply assignee filter
-            if (filters?.assignee_id) {
-                if (filters.assignee_id === 'me' && user) {
-                    query = query.eq('assignee_id', user.id);
-                } else if (filters.assignee_id === 'unassigned') {
-                    query = query.is('assignee_id', null);
-                } else if (filters.assignee_id !== 'all') {
-                    query = query.eq('assignee_id', filters.assignee_id);
-                }
-            }
-
-            // Apply overdue filter
-            if (filters?.overdue) {
-                query = query.lt('due_at', new Date().toISOString());
-                query = query.not('status', 'in', '("done","cancelled")');
-            }
-
-            const { data, error: fetchError } = await query;
-
-            if (fetchError) throw fetchError;
-            setTasks((data as Task[]) || []);
-            setError(null);
-        } catch (err) {
-            console.error('Error fetching tasks:', err);
-            setError(err instanceof Error ? err.message : 'Failed to fetch tasks');
-        } finally {
-            setLoading(false);
         }
+
+        // All retries failed
+        console.error('[useTasks] All retries failed:', lastErr);
+        setError(lastErr instanceof Error ? lastErr.message : 'Failed to fetch tasks');
+        setLoading(false);
     }, [filters, user]);
 
     // Subscribe to realtime updates
