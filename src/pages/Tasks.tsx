@@ -47,13 +47,23 @@ const priorityIcons: Record<TaskPriority, string> = {
 };
 
 export default function Tasks() {
-    const [statusFilter, setStatusFilter] = useState<TaskStatus | 'all'>('all');
+    type TabType = 'pendentes' | 'resolvidas' | 'canceladas';
+    const [activeTab, setActiveTab] = useState<TabType>('pendentes');
     const [showOverdueOnly, setShowOverdueOnly] = useState(false);
     const [assigneeFilter, setAssigneeFilter] = useState<'all' | 'me'>('all');
 
+    // Map tabs to status filters
+    const getStatusFilter = (tab: TabType): TaskStatus | TaskStatus[] => {
+        switch (tab) {
+            case 'pendentes': return ['pending', 'in_progress', 'waiting'];
+            case 'resolvidas': return 'done';
+            case 'canceladas': return 'cancelled';
+        }
+    };
+
     const { tasks, loading, error, refetch, startTask, completeTask, cancelTask } = useTasks({
-        status: statusFilter === 'all' ? undefined : statusFilter,
-        overdue: showOverdueOnly,
+        status: getStatusFilter(activeTab),
+        overdue: activeTab === 'pendentes' ? showOverdueOnly : false,
         assignee_id: assigneeFilter,
     });
 
@@ -118,7 +128,7 @@ export default function Tasks() {
                         <p className="text-muted-foreground">Gerencie suas tarefas e pendências</p>
                     </div>
 
-                    <Button variant="outline" onClick={refetch} disabled={loading}>
+                    <Button variant="outline" onClick={() => refetch()} disabled={loading}>
                         <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
                         Atualizar
                     </Button>
@@ -164,6 +174,36 @@ export default function Tasks() {
                     </div>
                 )}
 
+                {/* Tabs */}
+                <div className="flex gap-1 p-1 bg-muted rounded-lg w-fit">
+                    <Button
+                        variant={activeTab === 'pendentes' ? 'default' : 'ghost'}
+                        size="sm"
+                        onClick={() => setActiveTab('pendentes')}
+                        className="px-4"
+                    >
+                        Pendentes
+                        {metrics && <Badge variant="secondary" className="ml-2">{metrics.open_tasks}</Badge>}
+                    </Button>
+                    <Button
+                        variant={activeTab === 'resolvidas' ? 'default' : 'ghost'}
+                        size="sm"
+                        onClick={() => setActiveTab('resolvidas')}
+                        className="px-4"
+                    >
+                        Resolvidas
+                        {metrics && <Badge variant="secondary" className="ml-2">{metrics.done_today}</Badge>}
+                    </Button>
+                    <Button
+                        variant={activeTab === 'canceladas' ? 'default' : 'ghost'}
+                        size="sm"
+                        onClick={() => setActiveTab('canceladas')}
+                        className="px-4"
+                    >
+                        Canceladas
+                    </Button>
+                </div>
+
                 {/* Filters */}
                 <Card>
                     <CardContent className="pt-4">
@@ -172,19 +212,6 @@ export default function Tasks() {
                                 <Filter className="h-4 w-4 text-muted-foreground" />
                                 <span className="text-sm font-medium">Filtros:</span>
                             </div>
-
-                            <Select value={statusFilter} onValueChange={(v: any) => setStatusFilter(v)}>
-                                <SelectTrigger className="w-[160px]">
-                                    <SelectValue placeholder="Status" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">Todos os status</SelectItem>
-                                    <SelectItem value="pending">Pendente</SelectItem>
-                                    <SelectItem value="in_progress">Em Andamento</SelectItem>
-                                    <SelectItem value="waiting">Aguardando</SelectItem>
-                                    <SelectItem value="done">Concluída</SelectItem>
-                                </SelectContent>
-                            </Select>
 
                             <Select value={assigneeFilter} onValueChange={(v: any) => setAssigneeFilter(v)}>
                                 <SelectTrigger className="w-[140px]">
