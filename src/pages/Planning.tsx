@@ -17,7 +17,6 @@ import { format, addDays, startOfWeek, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
-import { callFunction } from '@/lib/supabaseFunctions';
 
 // Interface matches v_planning_week VIEW
 interface PlanItem {
@@ -107,15 +106,19 @@ export default function Planning() {
         setRebuilding(true);
         try {
             const startDate = format(weekStart, 'yyyy-MM-dd');
-            const result = await callFunction('rebuild-plan', {
-                start_date: startDate,
-                days: 7,
+
+            // Use supabase.functions.invoke for proper JWT auth
+            const { data, error } = await supabase.functions.invoke('rebuild-plan', {
+                body: { start_date: startDate, days: 7 },
             });
-            toast.success(`Planejamento gerado! ${result.scheduled} itens agendados.`);
+
+            if (error) throw error;
+
+            toast.success(`Planejamento gerado! ${data?.scheduled || 0} itens agendados.`);
             fetchData();
-        } catch (err) {
+        } catch (err: any) {
             console.error('Error rebuilding plan:', err);
-            toast.error('Erro ao gerar planejamento');
+            toast.error(err?.message || 'Erro ao gerar planejamento');
         } finally {
             setRebuilding(false);
         }
