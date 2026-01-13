@@ -59,3 +59,6 @@ verify_jwt = false
 
 [functions.create-ticket]
 verify_jwt = false
+
+[functions.create-task]
+verify_jwt = false
