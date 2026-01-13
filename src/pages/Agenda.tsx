@@ -35,26 +35,35 @@ export default function Agenda() {
     const tomorrow = addDays(today, 1);
     const nextWeek = addDays(today, 7);
 
-    // Group tasks by date category
-    const overdueTasks = tasks.filter(
-        (t) => t.due_at && new Date(t.due_at) < today
-    );
+    // Helper: get agenda date (remind_at takes priority, fallback to due_at)
+    const getAgendaDate = (t: any): Date | null => {
+        const dateStr = t.remind_at ?? t.due_at;
+        return dateStr ? new Date(dateStr) : null;
+    };
 
-    const todayTasks = tasks.filter(
-        (t) => t.due_at && isToday(new Date(t.due_at))
-    );
-
-    const tomorrowTasks = tasks.filter(
-        (t) => t.due_at && isTomorrow(new Date(t.due_at))
-    );
-
-    const next7DaysTasks = tasks.filter((t) => {
-        if (!t.due_at) return false;
-        const dueDate = new Date(t.due_at);
-        return dueDate > endOfDay(tomorrow) && dueDate <= endOfDay(nextWeek);
+    // Group tasks by date category using agenda date
+    const overdueTasks = tasks.filter((t) => {
+        const agendaDate = getAgendaDate(t);
+        return agendaDate && agendaDate < today;
     });
 
-    const noDueTasks = tasks.filter((t) => !t.due_at);
+    const todayTasks = tasks.filter((t) => {
+        const agendaDate = getAgendaDate(t);
+        return agendaDate && isToday(agendaDate);
+    });
+
+    const tomorrowTasks = tasks.filter((t) => {
+        const agendaDate = getAgendaDate(t);
+        return agendaDate && isTomorrow(agendaDate);
+    });
+
+    const next7DaysTasks = tasks.filter((t) => {
+        const agendaDate = getAgendaDate(t);
+        if (!agendaDate) return false;
+        return agendaDate > endOfDay(tomorrow) && agendaDate <= endOfDay(nextWeek);
+    });
+
+    const noDueTasks = tasks.filter((t) => !getAgendaDate(t));
 
     const handleStart = async (id: string) => {
         try {
@@ -87,10 +96,11 @@ export default function Agenda() {
                                 {task.assignee.name}
                             </span>
                         )}
-                        {task.due_at && (
+                        {(task.remind_at || task.due_at) && (
                             <span className="flex items-center gap-1">
                                 <Clock className="h-3 w-3" />
-                                {format(new Date(task.due_at), 'HH:mm')}
+                                {format(new Date(task.remind_at ?? task.due_at), 'HH:mm')}
+                                {task.remind_at && <span className="text-xs opacity-60">(lembrete)</span>}
                             </span>
                         )}
                     </div>
