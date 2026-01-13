@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -25,6 +25,8 @@ interface Agent {
     profile_id: string | null;
 }
 
+const UNASSIGNED = '__unassigned__';
+
 export function CreateTaskModal({
     open,
     onOpenChange,
@@ -40,18 +42,17 @@ export function CreateTaskModal({
     const [title, setTitle] = useState(defaultTitle);
     const [description, setDescription] = useState('');
     const [priority, setPriority] = useState<'low' | 'normal' | 'high' | 'urgent'>('normal');
-    const [assigneeId, setAssigneeId] = useState<string>('');
+    const [assigneeId, setAssigneeId] = useState<string>(UNASSIGNED);
     const [dueDate, setDueDate] = useState('');
     const [dueTime, setDueTime] = useState('18:00');
     const [assignConversation, setAssignConversation] = useState(true);
 
-    // Reset form when modal opens
     useEffect(() => {
         if (open) {
             setTitle(defaultTitle);
             setDescription('');
             setPriority('normal');
-            setAssigneeId(user?.id || '');
+            setAssigneeId(user?.id || UNASSIGNED);
             setDueDate('');
             setDueTime('18:00');
             setAssignConversation(true);
@@ -90,8 +91,9 @@ export function CreateTaskModal({
             }
 
             // Find the profile_id for the selected agent
-            const selectedAgent = agents.find(a => a.id === assigneeId);
-            const profileId = selectedAgent?.profile_id || assigneeId;
+            const actualAssigneeId = assigneeId === UNASSIGNED ? null : assigneeId;
+            const selectedAgent = agents.find(a => a.id === actualAssigneeId);
+            const profileId = selectedAgent?.profile_id || actualAssigneeId;
 
             const response = await supabase.functions.invoke('create-task', {
                 body: {
@@ -128,6 +130,9 @@ export function CreateTaskModal({
                         <Calendar className="h-5 w-5" />
                         Criar Tarefa
                     </DialogTitle>
+                    <DialogDescription className="sr-only">
+                        Preencha os dados da tarefa e defina prazo, prioridade e responsável.
+                    </DialogDescription>
                 </DialogHeader>
 
                 <form onSubmit={handleSubmit} className="space-y-4">
@@ -179,7 +184,7 @@ export function CreateTaskModal({
                                     <SelectValue placeholder="Selecione..." />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="">Não atribuído</SelectItem>
+                                    <SelectItem value={UNASSIGNED}>Não atribuído</SelectItem>
                                     {agents.map((agent) => (
                                         <SelectItem key={agent.id} value={agent.id}>
                                             <span className="flex items-center gap-2">

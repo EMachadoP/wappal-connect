@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -91,6 +91,9 @@ export function WaitForClientModal({
                         <Clock className="h-5 w-5" />
                         Aguardar Cliente
                     </DialogTitle>
+                    <DialogDescription className="sr-only">
+                        Escolha quando ser lembrado de retomar contato com o cliente.
+                    </DialogDescription>
                 </DialogHeader>
 
                 <div className="space-y-4 py-4">
