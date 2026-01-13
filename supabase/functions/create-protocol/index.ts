@@ -440,6 +440,55 @@ serve(async (req) => {
       throw new Error(`Erro ao inserir protocolo: ${protocolError.message} | Details: ${protocolError.details} | Hint: ${protocolError.hint}`);
     }
 
+    // 6.6. CREATE WORK ITEM (for workforce planning)
+    log(`[create-protocol] Creating work item for protocol ${protocolRecord.id}...`);
+    try {
+      // Get template for this category
+      const { data: template } = await supabaseClient
+        .from('task_templates')
+        .select('id, title, default_minutes, required_people, required_skill_codes, default_materials')
+        .eq('category', finalCategory)
+        .eq('active', true)
+        .limit(1)
+        .maybeSingle();
+
+      const wiTitle = template?.title ?? `Atendimento - ${translateCategory(finalCategory)}`;
+      const wiMinutes = template?.default_minutes ?? 60;
+
+      const { data: workItem, error: wiErr } = await supabaseClient
+        .from('protocol_work_items')
+        .insert({
+          protocol_id: protocolRecord.id,
+          category: finalCategory,
+          priority: priority || 'normal',
+          title: wiTitle,
+          estimated_minutes: wiMinutes,
+          required_people: template?.required_people ?? 1,
+          required_skill_codes: template?.required_skill_codes ?? [],
+          location_text: resolvedCondoId ? 'Condomínio vinculado' : null,
+          status: 'open',
+        })
+        .select('id')
+        .single();
+
+      if (wiErr) {
+        log(`[create-protocol] WARNING: Failed to create work item: ${wiErr.message}`);
+      } else {
+        log(`[create-protocol] Work item created: ${workItem.id}`);
+
+        // Create material request if template has materials
+        const materials = (template?.default_materials ?? []) as any[];
+        if (materials.length > 0) {
+          await supabaseClient
+            .from('material_requests')
+            .insert({ work_item_id: workItem.id, items: materials });
+          log(`[create-protocol] Material request created for work item`);
+        }
+      }
+    } catch (wiEx) {
+      log(`[create-protocol] WARNING: Work item creation exception: ${(wiEx as Error).message}`);
+      // Don't fail the protocol creation if work item fails
+    }
 
     // 7. Ações Pós-Criação
     try {
