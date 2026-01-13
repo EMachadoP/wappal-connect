@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Clock, Calendar } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { callFunction } from '@/lib/supabaseFunctions';
 import { toast } from 'sonner';
 
 interface WaitForClientModalProps {
@@ -55,36 +55,18 @@ export function WaitForClientModal({
         try {
             const remindAt = customRemindAt || new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
 
-            // Get session and force Authorization header
-            const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
-            if (sessionErr) throw new Error(sessionErr.message);
-
-            const accessToken = sessionData.session?.access_token;
-            if (!accessToken) {
-                throw new Error("Sessão não encontrada/expirada. Faça login novamente.");
-            }
-
-            console.log("[wait-task] hasSession?", !!sessionData.session);
-            console.log("[wait-task] userId", sessionData.session?.user?.id);
-
-            const response = await supabase.functions.invoke('create-task', {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                },
-                body: {
-                    title: `Follow-up: ${contactName}`,
-                    description: `Cliente não respondeu. Aguardar e retornar contato.`,
-                    priority: 'normal',
-                    status: 'waiting',
-                    conversation_id: conversationId,
-                    remind_at: remindAt,
-                    assign_conversation: false,
-                },
+            // Use callFunction helper with explicit apikey + Authorization
+            const data = await callFunction<{ task: any }>('create-task', {
+                title: `Follow-up: ${contactName}`,
+                description: `Cliente não respondeu. Aguardar e retornar contato.`,
+                priority: 'normal',
+                status: 'waiting',
+                conversation_id: conversationId,
+                remind_at: remindAt,
+                assign_conversation: false,
             });
 
-            if (response.error) {
-                throw new Error(response.error.message);
-            }
+            console.log('[wait-task] Success:', data.task?.id);
 
             const hoursLabel = hours === 24 ? '24 horas' : hours === 48 ? '48 horas' : `${Math.round(hours)} horas`;
             toast.success(`Follow-up agendado para ${hoursLabel}!`);

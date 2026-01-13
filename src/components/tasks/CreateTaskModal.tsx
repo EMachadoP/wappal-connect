@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Checkbox } from '@/components/ui/checkbox';
 import { Calendar, Clock, User, AlertCircle } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
+import { callFunction } from '@/lib/supabaseFunctions';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
 
@@ -95,36 +96,18 @@ export function CreateTaskModal({
             const selectedAgent = agents.find(a => a.id === actualAssigneeId);
             const profileId = selectedAgent?.profile_id || actualAssigneeId;
 
-            // Get session and force Authorization header
-            const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
-            if (sessionErr) throw new Error(sessionErr.message);
-
-            const accessToken = sessionData.session?.access_token;
-            if (!accessToken) {
-                throw new Error("Sessão não encontrada/expirada. Faça login novamente.");
-            }
-
-            console.log("[create-task] hasSession?", !!sessionData.session);
-            console.log("[create-task] userId", sessionData.session?.user?.id);
-
-            const response = await supabase.functions.invoke('create-task', {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                },
-                body: {
-                    title: title.trim(),
-                    description: description.trim() || null,
-                    priority,
-                    assignee_id: profileId || null,
-                    conversation_id: conversationId || null,
-                    due_at: dueAt,
-                    assign_conversation: assignConversation && !!conversationId && !!profileId,
-                },
+            // Use callFunction helper with explicit apikey + Authorization
+            const data = await callFunction<{ task: any }>('create-task', {
+                title: title.trim(),
+                description: description.trim() || null,
+                priority,
+                assignee_id: profileId || null,
+                conversation_id: conversationId || null,
+                due_at: dueAt,
+                assign_conversation: assignConversation && !!conversationId && !!profileId,
             });
 
-            if (response.error) {
-                throw new Error(response.error.message);
-            }
+            console.log('[create-task] Success:', data.task?.id);
 
             toast.success('Tarefa criada com sucesso!');
             onOpenChange(false);
