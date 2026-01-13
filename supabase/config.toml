@@ -62,3 +62,6 @@ verify_jwt = false
 
 [functions.create-task]
 verify_jwt = false
+
+[functions.rebuild-plan]
+verify_jwt = false
