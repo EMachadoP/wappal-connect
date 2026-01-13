@@ -20,10 +20,10 @@ interface CreateTaskModalProps {
     onTaskCreated?: () => void;
 }
 
-interface Agent {
+// Profile for assignee selection (directly from profiles table)
+interface Profile {
     id: string;
     name: string;
-    profile_id: string | null;
 }
 
 const UNASSIGNED = '__unassigned__';
@@ -37,7 +37,7 @@ export function CreateTaskModal({
 }: CreateTaskModalProps) {
     const { user } = useAuth();
     const [loading, setLoading] = useState(false);
-    const [agents, setAgents] = useState<Agent[]>([]);
+    const [profiles, setProfiles] = useState<Profile[]>([]);
 
     // Form state
     const [title, setTitle] = useState(defaultTitle);
@@ -60,18 +60,17 @@ export function CreateTaskModal({
         }
     }, [open, defaultTitle, user?.id]);
 
-    // Fetch agents on mount
+    // Fetch profiles (assignees) on mount - directly from profiles table
     useEffect(() => {
-        const fetchAgents = async () => {
+        const fetchProfiles = async () => {
             const { data } = await supabase
-                .from('agents')
-                .select('id, name, profile_id')
-                .eq('is_active', true)
+                .from('profiles')
+                .select('id, name')
                 .order('name');
 
-            if (data) setAgents(data);
+            if (data) setProfiles(data);
         };
-        fetchAgents();
+        fetchProfiles();
     }, []);
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -91,22 +90,18 @@ export function CreateTaskModal({
                 dueAt = new Date(`${dueDate}T${dueTime || '18:00'}:00`).toISOString();
             }
 
-            // Find the profile_id for the selected agent
-            // IMPORTANT: assignee_id must reference profiles.id, not agents.id
+            // assignee_id is now directly profiles.id (no translation needed)
             const actualAssigneeId = assigneeId === UNASSIGNED ? null : assigneeId;
-            const selectedAgent = agents.find(a => a.id === actualAssigneeId);
-            // Use profile_id (references profiles table), or null if agent has no profile
-            const profileId = selectedAgent?.profile_id || null;
 
             // Use callFunction helper with explicit apikey + Authorization
             const data = await callFunction<{ task: any }>('create-task', {
                 title: title.trim(),
                 description: description.trim() || null,
                 priority,
-                assignee_id: profileId || null,
+                assignee_id: actualAssigneeId, // Direct profiles.id
                 conversation_id: conversationId || null,
                 due_at: dueAt,
-                assign_conversation: assignConversation && !!conversationId && !!profileId,
+                assign_conversation: assignConversation && !!conversationId && !!actualAssigneeId,
             });
 
             console.log('[create-task] Success:', data.task?.id);
@@ -185,11 +180,11 @@ export function CreateTaskModal({
                                 </SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value={UNASSIGNED}>Não atribuído</SelectItem>
-                                    {agents.map((agent) => (
-                                        <SelectItem key={agent.id} value={agent.id}>
+                                    {profiles.map((profile) => (
+                                        <SelectItem key={profile.id} value={profile.id}>
                                             <span className="flex items-center gap-2">
                                                 <User className="h-3 w-3" />
-                                                {agent.name}
+                                                {profile.name}
                                             </span>
                                         </SelectItem>
                                     ))}
