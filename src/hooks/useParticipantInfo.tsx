@@ -91,7 +91,7 @@ export function useParticipantInfo(contactId: string | undefined, conversationId
           .from('conversation_participant_state')
           .select('*')
           .eq('conversation_id', conversationId)
-          .single();
+          .maybeSingle();
 
         setParticipantState(state);
       }
