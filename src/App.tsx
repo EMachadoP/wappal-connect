@@ -20,6 +20,8 @@ import NotFound from "./pages/NotFound";
 import Tasks from "./pages/Tasks";
 import Agenda from "./pages/Agenda";
 import Planning from "./pages/Planning";
+import SettingsTechnicians from "./pages/SettingsTechnicians";
+import SettingsTemplates from "./pages/SettingsTemplates";
 
 const queryClient = new QueryClient();
 
@@ -38,6 +40,8 @@ const App = () => (
             <Route path="/tasks" element={<Tasks />} />
             <Route path="/agenda" element={<Agenda />} />
             <Route path="/planning" element={<Planning />} />
+            <Route path="/settings/technicians" element={<SettingsTechnicians />} />
+            <Route path="/settings/templates" element={<SettingsTemplates />} />
             <Route path="/admin" element={<Admin />} />
             <Route path="/admin/ai" element={<AdminAI />} />
             <Route path="/admin/knowledge" element={<AdminKnowledge />} />

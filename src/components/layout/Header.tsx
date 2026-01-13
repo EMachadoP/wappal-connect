@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { MessageSquare, BarChart3, Settings, LogOut, Bot, Contact, Link2, User, Share2, ListTodo, Calendar, Wrench } from 'lucide-react';
+import { MessageSquare, BarChart3, Settings, LogOut, Bot, Contact, Link2, User, Share2, ListTodo, Calendar, Wrench, Users, FileText } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
@@ -20,6 +20,8 @@ const navItems = [
   { path: '/admin/zapi', label: 'Z-API', icon: Share2, adminOnly: true },
   { path: '/admin/integrations', label: 'Integrações', icon: Link2, adminOnly: true },
   { path: '/admin/contacts', label: 'Duplicados', icon: Contact, adminOnly: true },
+  { path: '/settings/technicians', label: 'Técnicos', icon: Users, adminOnly: true },
+  { path: '/settings/templates', label: 'Templates', icon: FileText, adminOnly: true },
 ];
 
 export function Header() {
