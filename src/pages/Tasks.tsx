@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useTasks, TaskStatus, TaskPriority, formatSecondsToHM, useTaskMetrics } from '@/hooks/useTasks';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -18,6 +19,7 @@ import {
     RefreshCw,
     ListTodo,
     XCircle,
+    MessageSquare,
 } from 'lucide-react';
 import { format, isPast, isToday, isTomorrow, formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -47,6 +49,7 @@ const priorityIcons: Record<TaskPriority, string> = {
 };
 
 export default function Tasks() {
+    const navigate = useNavigate();
     type TabType = 'pendentes' | 'resolvidas' | 'canceladas';
     const [activeTab, setActiveTab] = useState<TabType>('pendentes');
     const [showOverdueOnly, setShowOverdueOnly] = useState(false);
@@ -264,7 +267,11 @@ export default function Tasks() {
                             return (
                                 <Card
                                     key={task.id}
-                                    className={`${due?.overdue ? 'border-red-500 bg-red-50 dark:bg-red-950' : ''}`}
+                                    className={`${due?.overdue ? 'border-red-500 bg-red-50 dark:bg-red-950' : ''} ${task.conversation_id ? 'cursor-pointer hover:bg-muted/40 transition-colors' : ''}`}
+                                    onClick={() => task.conversation_id && navigate(`/inbox/${task.conversation_id}`)}
+                                    role={task.conversation_id ? 'button' : undefined}
+                                    tabIndex={task.conversation_id ? 0 : undefined}
+                                    title={task.conversation_id ? 'Clique para abrir a conversa' : undefined}
                                 >
                                     <CardContent className="py-4">
                                         <div className="flex items-start justify-between gap-4">
@@ -301,27 +308,33 @@ export default function Tasks() {
                                                             {due.text}
                                                         </span>
                                                     )}
+                                                    {task.conversation_id && (
+                                                        <span className="flex items-center gap-1 text-blue-600">
+                                                            <MessageSquare className="h-3 w-3" />
+                                                            Conversa
+                                                        </span>
+                                                    )}
                                                 </div>
                                             </div>
 
                                             {/* Actions */}
                                             <div className="flex items-center gap-2">
                                                 {task.status === 'pending' && (
-                                                    <Button size="sm" variant="outline" onClick={() => handleStart(task.id)}>
+                                                    <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleStart(task.id); }}>
                                                         <Play className="h-4 w-4 mr-1" />
                                                         Iniciar
                                                     </Button>
                                                 )}
 
                                                 {(task.status === 'pending' || task.status === 'in_progress' || task.status === 'waiting') && (
-                                                    <Button size="sm" variant="default" onClick={() => handleComplete(task.id)}>
+                                                    <Button size="sm" variant="default" onClick={(e) => { e.stopPropagation(); handleComplete(task.id); }}>
                                                         <CheckCircle className="h-4 w-4 mr-1" />
                                                         Concluir
                                                     </Button>
                                                 )}
 
                                                 {task.status !== 'done' && task.status !== 'cancelled' && (
-                                                    <Button size="sm" variant="ghost" onClick={() => handleCancel(task.id)}>
+                                                    <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); handleCancel(task.id); }}>
                                                         <XCircle className="h-4 w-4" />
                                                     </Button>
                                                 )}
