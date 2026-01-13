@@ -55,7 +55,22 @@ export function WaitForClientModal({
         try {
             const remindAt = customRemindAt || new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
 
+            // Get session and force Authorization header
+            const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
+            if (sessionErr) throw new Error(sessionErr.message);
+
+            const accessToken = sessionData.session?.access_token;
+            if (!accessToken) {
+                throw new Error("Sessão não encontrada/expirada. Faça login novamente.");
+            }
+
+            console.log("[wait-task] hasSession?", !!sessionData.session);
+            console.log("[wait-task] userId", sessionData.session?.user?.id);
+
             const response = await supabase.functions.invoke('create-task', {
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                },
                 body: {
                     title: `Follow-up: ${contactName}`,
                     description: `Cliente não respondeu. Aguardar e retornar contato.`,

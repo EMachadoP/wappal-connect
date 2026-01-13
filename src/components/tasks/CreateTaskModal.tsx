@@ -95,7 +95,22 @@ export function CreateTaskModal({
             const selectedAgent = agents.find(a => a.id === actualAssigneeId);
             const profileId = selectedAgent?.profile_id || actualAssigneeId;
 
+            // Get session and force Authorization header
+            const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
+            if (sessionErr) throw new Error(sessionErr.message);
+
+            const accessToken = sessionData.session?.access_token;
+            if (!accessToken) {
+                throw new Error("Sessão não encontrada/expirada. Faça login novamente.");
+            }
+
+            console.log("[create-task] hasSession?", !!sessionData.session);
+            console.log("[create-task] userId", sessionData.session?.user?.id);
+
             const response = await supabase.functions.invoke('create-task', {
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                },
                 body: {
                     title: title.trim(),
                     description: description.trim() || null,

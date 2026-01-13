@@ -6,6 +6,13 @@ const corsHeaders = {
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+function json(status: number, body: unknown) {
+    return new Response(JSON.stringify(body), {
+        status,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+}
+
 serve(async (req) => {
     // Handle CORS preflight
     if (req.method === 'OPTIONS') {
@@ -13,23 +20,22 @@ serve(async (req) => {
     }
 
     try {
-        if (req.method !== "POST") {
-            return new Response(JSON.stringify({ error: "Method Not Allowed" }), {
-                status: 405,
-                headers: { ...corsHeaders, "Content-Type": "application/json" },
-            });
-        }
+        if (req.method !== "POST") return json(405, { error: "Method Not Allowed" });
 
         const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
         const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
         const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+        // Debug: check if secrets are loaded
+        console.log("[create-task] SUPABASE_URL:", SUPABASE_URL ? "SET" : "MISSING");
+        console.log("[create-task] ANON_KEY:", ANON_KEY ? "SET" : "MISSING");
+        console.log("[create-task] SERVICE_ROLE_KEY:", SERVICE_ROLE_KEY ? "SET" : "MISSING");
+
         const authHeader = req.headers.get("Authorization") ?? "";
+        console.log("[create-task] Authorization header:", authHeader ? `Bearer ${authHeader.substring(7, 20)}...` : "MISSING");
+
         if (!authHeader.startsWith("Bearer ")) {
-            return new Response(JSON.stringify({ error: "Missing Authorization Bearer token" }), {
-                status: 401,
-                headers: { ...corsHeaders, "Content-Type": "application/json" },
-            });
+            return json(401, { error: "Missing Authorization Bearer token" });
         }
 
         // 1) Valida usuário usando o JWT (anon client + auth header)
@@ -38,25 +44,24 @@ serve(async (req) => {
         });
 
         const { data: userData, error: userErr } = await userClient.auth.getUser();
+        console.log("[create-task] getUser result:", userData?.user?.id || "NO USER", userErr?.message || "NO ERROR");
+
         if (userErr || !userData?.user) {
-            return new Response(JSON.stringify({ error: "Unauthorized", details: userErr?.message }), {
-                status: 401,
-                headers: { ...corsHeaders, "Content-Type": "application/json" },
-            });
+            return json(401, { error: "Unauthorized", details: userErr?.message || "No user data" });
         }
 
         const userId = userData.user.id;
+        console.log("[create-task] Authenticated user:", userId);
 
         // 2) Admin client (service role) para inserir/atualizar (bypass RLS)
         const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
         const payload = await req.json();
+        console.log("[create-task] Payload:", JSON.stringify(payload));
+
         const title = String(payload.title ?? "").trim();
         if (!title) {
-            return new Response(JSON.stringify({ error: "title is required" }), {
-                status: 400,
-                headers: { ...corsHeaders, "Content-Type": "application/json" },
-            });
+            return json(400, { error: "title is required" });
         }
 
         const { data: task, error: insErr } = await admin
@@ -77,11 +82,11 @@ serve(async (req) => {
             .single();
 
         if (insErr) {
-            return new Response(JSON.stringify({ error: insErr.message }), {
-                status: 500,
-                headers: { ...corsHeaders, "Content-Type": "application/json" },
-            });
+            console.error("[create-task] Insert error:", insErr.message);
+            return json(500, { error: insErr.message });
         }
+
+        console.log("[create-task] Task created:", task.id);
 
         // Opcional: atribui conversa
         if (payload.assign_conversation && payload.conversation_id && payload.assignee_id) {
@@ -95,21 +100,14 @@ serve(async (req) => {
                 .eq("id", payload.conversation_id);
 
             if (convErr) {
-                return new Response(JSON.stringify({ task, warning: "Conversation assign failed", details: convErr.message }), {
-                    status: 200,
-                    headers: { ...corsHeaders, "Content-Type": "application/json" },
-                });
+                console.warn("[create-task] Conversation assign failed:", convErr.message);
+                return json(200, { task, warning: "Conversation assign failed", details: convErr.message });
             }
         }
 
-        return new Response(JSON.stringify({ task }), {
-            status: 200,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return json(200, { task });
     } catch (e) {
-        return new Response(JSON.stringify({ error: (e as Error).message }), {
-            status: 500,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        console.error("[create-task] Exception:", (e as Error).message);
+        return json(500, { error: (e as Error).message });
     }
 });
