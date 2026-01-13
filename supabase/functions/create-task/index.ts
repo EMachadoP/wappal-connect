@@ -1,34 +1,10 @@
-// supabase/functions/create-task/index.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-type TaskStatus = "pending" | "in_progress" | "waiting" | "done" | "cancelled";
-type TaskPriority = "low" | "normal" | "high" | "urgent";
-
-type CreateTaskPayload = {
-    title: string;
-    description?: string | null;
-    conversation_id?: string | null;
-    assignee_id?: string | null;
-    status?: TaskStatus;
-    priority?: TaskPriority;
-    due_at?: string | null;
-    remind_at?: string | null;
-    assign_conversation?: boolean;
-    external_ref?: string | null;
-};
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
-
-function json(status: number, body: unknown) {
-    return new Response(JSON.stringify(body), {
-        status,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-}
 
 serve(async (req) => {
     // Handle CORS preflight
@@ -37,33 +13,52 @@ serve(async (req) => {
     }
 
     try {
-        if (req.method !== "POST") return json(405, { error: "Method Not Allowed" });
+        if (req.method !== "POST") {
+            return new Response(JSON.stringify({ error: "Method Not Allowed" }), {
+                status: 405,
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+        }
 
         const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+        const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
         const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-        // 1) Extrai usuário do JWT do request (Authorization: Bearer ...)
         const authHeader = req.headers.get("Authorization") ?? "";
+        if (!authHeader.startsWith("Bearer ")) {
+            return new Response(JSON.stringify({ error: "Missing Authorization Bearer token" }), {
+                status: 401,
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+        }
 
-        const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+        // 1) Valida usuário usando o JWT (anon client + auth header)
+        const userClient = createClient(SUPABASE_URL, ANON_KEY, {
             global: { headers: { Authorization: authHeader } },
         });
 
-        const { data: userData, error: userErr } = await admin.auth.getUser();
-        if (userErr || !userData?.user) return json(401, { error: "Unauthorized" });
+        const { data: userData, error: userErr } = await userClient.auth.getUser();
+        if (userErr || !userData?.user) {
+            return new Response(JSON.stringify({ error: "Unauthorized", details: userErr?.message }), {
+                status: 401,
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+        }
 
         const userId = userData.user.id;
 
-        // 2) Valida payload
-        const payload = (await req.json()) as CreateTaskPayload;
+        // 2) Admin client (service role) para inserir/atualizar (bypass RLS)
+        const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
-        const title = (payload.title ?? "").trim();
-        if (!title) return json(400, { error: "title is required" });
+        const payload = await req.json();
+        const title = String(payload.title ?? "").trim();
+        if (!title) {
+            return new Response(JSON.stringify({ error: "title is required" }), {
+                status: 400,
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+        }
 
-        const status: TaskStatus = payload.status ?? "pending";
-        const priority: TaskPriority = payload.priority ?? "normal";
-
-        // 3) Insere task (usando service role para bypassar RLS)
         const { data: task, error: insErr } = await admin
             .from("tasks")
             .insert({
@@ -71,8 +66,8 @@ serve(async (req) => {
                 description: payload.description ?? null,
                 conversation_id: payload.conversation_id ?? null,
                 assignee_id: payload.assignee_id ?? null,
-                status,
-                priority,
+                status: payload.status ?? "pending",
+                priority: payload.priority ?? "normal",
                 due_at: payload.due_at ?? null,
                 remind_at: payload.remind_at ?? null,
                 created_by: userId,
@@ -81,9 +76,14 @@ serve(async (req) => {
             .select("*")
             .single();
 
-        if (insErr) return json(500, { error: insErr.message });
+        if (insErr) {
+            return new Response(JSON.stringify({ error: insErr.message }), {
+                status: 500,
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+        }
 
-        // 4) (Opcional) atribui conversa também
+        // Opcional: atribui conversa
         if (payload.assign_conversation && payload.conversation_id && payload.assignee_id) {
             const { error: convErr } = await admin
                 .from("conversations")
@@ -95,13 +95,21 @@ serve(async (req) => {
                 .eq("id", payload.conversation_id);
 
             if (convErr) {
-                // não derruba a criação da task, mas avisa
-                return json(200, { task, warning: "task created, but conversation assign failed", details: convErr.message });
+                return new Response(JSON.stringify({ task, warning: "Conversation assign failed", details: convErr.message }), {
+                    status: 200,
+                    headers: { ...corsHeaders, "Content-Type": "application/json" },
+                });
             }
         }
 
-        return json(200, { task });
+        return new Response(JSON.stringify({ task }), {
+            status: 200,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
     } catch (e) {
-        return json(500, { error: (e as Error).message ?? "Unknown error" });
+        return new Response(JSON.stringify({ error: (e as Error).message }), {
+            status: 500,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
     }
 });
