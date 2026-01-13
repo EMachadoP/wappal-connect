@@ -1,5 +1,9 @@
+// @ts-ignore
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+// @ts-ignore
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.1";
+
+declare const Deno: any;
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -100,7 +104,7 @@ Responda APENAS em JSON válido, sem markdown:
   }
 }
 
-serve(async (req) => {
+serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -245,7 +249,7 @@ serve(async (req) => {
       .eq('active', true);
 
     if (template_id && isValidUUID(template_id)) {
-      bestTemplate = templates?.find(t => t.id === template_id) || null;
+      bestTemplate = templates?.find((t: any) => t.id === template_id) || null;
       log(`[create-protocol] Using explicit template: ${bestTemplate?.title}`);
     } else if (summary && templates) {
       log(`[create-protocol] Matching template via keywords...`);
@@ -268,7 +272,7 @@ serve(async (req) => {
         if (aiClassification) {
           aiClassified = true;
           if (!bestTemplate) {
-            bestTemplate = templates.find(t => t.category === aiClassification?.category) || null;
+            bestTemplate = templates.find((t: any) => t.category === aiClassification?.category) || null;
           }
         }
       }
