@@ -19,25 +19,24 @@ import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { callFunction } from '@/lib/supabaseFunctions';
 
+// Interface matches v_planning_week VIEW
 interface PlanItem {
     id: string;
     plan_date: string;
-    technician_id: string;
-    work_item_id: string;
     start_minute: number;
     end_minute: number;
     sequence: number;
-    work_item: {
-        id: string;
-        title: string;
-        priority: string;
-        category: string;
-        protocol_id: string;
-        protocols?: {
-            conversation_id: string;
-            protocol_code: string;
-        };
-    };
+    technician_id: string;
+    technician_name: string;
+    work_item_id: string;
+    work_item_title: string;
+    work_item_priority: string;
+    work_item_category: string;
+    work_item_status: string;
+    estimated_minutes: number;
+    protocol_id: string;
+    protocol_code: string;
+    conversation_id: string;
 }
 
 interface Technician {
@@ -83,25 +82,15 @@ export default function Planning() {
 
             setTechnicians(techData || []);
 
-            // Fetch plan items for the week
+            // Fetch plan items from VIEW (simpler, faster)
             const { data: planData } = await supabase
-                .from('plan_items')
-                .select(`
-                    *,
-                    work_item:protocol_work_items(
-                        id,
-                        title,
-                        priority,
-                        category,
-                        protocol_id,
-                        protocols(conversation_id, protocol_code)
-                    )
-                `)
+                .from('v_planning_week')
+                .select('*')
                 .gte('plan_date', startDate)
                 .lte('plan_date', endDate)
                 .order('start_minute', { ascending: true });
 
-            setPlanItems((planData as any[]) || []);
+            setPlanItems((planData as PlanItem[]) || []);
         } catch (err) {
             console.error('Error fetching planning data:', err);
             toast.error('Erro ao carregar planejamento');
@@ -249,9 +238,9 @@ export default function Planning() {
                                                         {items.map((item) => (
                                                             <div
                                                                 key={item.id}
-                                                                className={`p-2 rounded text-xs cursor-pointer hover:opacity-80 transition-opacity border ${priorityColors[item.work_item?.priority || 'normal']}`}
-                                                                onClick={() => openConversation(item.work_item?.protocols?.conversation_id || '')}
-                                                                title={`${item.work_item?.protocols?.protocol_code || ''} - Clique para abrir conversa`}
+                                                                className={`p-2 rounded text-xs cursor-pointer hover:opacity-80 transition-opacity border ${priorityColors[item.work_item_priority || 'normal']}`}
+                                                                onClick={() => openConversation(item.conversation_id || '')}
+                                                                title={`${item.protocol_code || ''} - Clique para abrir conversa`}
                                                             >
                                                                 <div className="flex items-center gap-1 mb-1">
                                                                     <Clock className="h-3 w-3" />
@@ -260,7 +249,7 @@ export default function Planning() {
                                                                     </span>
                                                                 </div>
                                                                 <div className="truncate">
-                                                                    {item.work_item?.title || 'Sem título'}
+                                                                    {item.work_item_title || 'Sem título'}
                                                                 </div>
                                                             </div>
                                                         ))}
