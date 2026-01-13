@@ -1,0 +1,16 @@
+
+> vite_react_shadcn_ts@1.1.0 build
+> vite build
+
+[36mvite v5.4.19 [32mbuilding for production...[36m[39m
+transforming...
+[32mÔ£ô[39m 106 modules transformed.
+x Build failed in 1.95s
+error during build:
+[vite-plugin-pwa:build] Could not load C:\Projetos\wappal-connect\src/integrations/supabase/functions (imported by src/pages/Planning.tsx): ENOENT: no such file or directory, open 'C:\Projetos\wappal-connect\src\integrations\supabase\functions'
+    at async open (node:internal/fs/promises:641:25)
+    at async Object.readFile (node:internal/fs/promises:1245:14)
+    at async Object.load (file:///C:/Projetos/wappal-connect/node_modules/vite/dist/node/chunks/dep-C6uTJdX2.js:65341:25)
+    at async PluginDriver.hookFirstAndGetPlugin (file:///C:/Projetos/wappal-connect/node_modules/rollup/dist/es/shared/node-entry.js:20630:28)
+    at async file:///C:/Projetos/wappal-connect/node_modules/rollup/dist/es/shared/node-entry.js:19750:33
+    at async Queue.work (file:///C:/Projetos/wappal-connect/node_modules/rollup/dist/es/shared/node-entry.js:20840:32)
