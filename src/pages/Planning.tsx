@@ -13,6 +13,9 @@ import {
     Wrench,
     AlertCircle,
     Users,
+    Play,
+    CheckCircle,
+    Pause,
 } from 'lucide-react';
 import { format, addDays, startOfWeek, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -46,10 +49,17 @@ interface Technician {
 }
 
 const priorityColors: Record<string, string> = {
-    urgent: 'bg-red-100 text-red-800 border-red-300',
-    high: 'bg-orange-100 text-orange-800 border-orange-300',
-    normal: 'bg-blue-100 text-blue-800 border-blue-300',
-    low: 'bg-gray-100 text-gray-800 border-gray-300',
+    urgent: 'border-red-400 bg-red-50 text-red-900',
+    high: 'border-orange-400 bg-orange-50 text-orange-900',
+    normal: 'border-blue-300 bg-blue-50 text-blue-900',
+    low: 'border-gray-300 bg-gray-50 text-gray-700',
+};
+
+const statusStyles: Record<string, string> = {
+    open: 'border-opacity-100',
+    in_progress: 'border-amber-500 border-2 bg-amber-50 shadow-sm',
+    done: 'opacity-50 grayscale bg-green-50 border-green-200',
+    blocked: 'border-rose-500 bg-rose-50 border-2',
 };
 
 function minutesToTime(minutes: number): string {
@@ -76,22 +86,22 @@ export default function Planning() {
 
             // Fetch technicians
             const { data: techData } = await supabase
-                .from('technicians')
+                .from('technicians' as any)
                 .select('id, name')
                 .eq('is_active', true)
                 .order('name');
 
-            setTechnicians(techData || []);
+            setTechnicians((techData as unknown as Technician[]) || []);
 
             // Fetch plan items from VIEW (simpler, faster)
             const { data: planData } = await supabase
-                .from('v_planning_week')
+                .from('v_planning_week' as any)
                 .select('*')
                 .gte('plan_date', startDate)
                 .lte('plan_date', endDate)
                 .order('start_minute', { ascending: true });
 
-            setPlanItems((planData as PlanItem[]) || []);
+            setPlanItems((planData as unknown as PlanItem[]) || []);
         } catch (err) {
             console.error('Error fetching planning data:', err);
             toast.error('Erro ao carregar planejamento');
@@ -102,7 +112,42 @@ export default function Planning() {
 
     useEffect(() => {
         fetchData();
+
+        // Subscribe to work item changes to refresh the grid
+        const channel = supabase
+            .channel('planning-updates')
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'protocol_work_items' },
+                () => fetchData()
+            )
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
     }, [fetchData]);
+
+    const handleUpdateStatus = async (itemId: string, status: string, e: React.MouseEvent) => {
+        e.stopPropagation(); // Don't open conversation
+        try {
+            const updates: any = { status };
+            if (status === 'in_progress') updates.started_at = new Date().toISOString();
+            if (status === 'done') updates.completed_at = new Date().toISOString();
+
+            const { error } = await supabase
+                .from('protocol_work_items' as any)
+                .update(updates)
+                .eq('id', itemId);
+
+            if (error) throw error;
+            toast.success(`Status atualizado para ${status}`);
+            fetchData();
+        } catch (error: any) {
+            console.error('Error updating status:', error);
+            toast.error('Erro ao atualizar status');
+        }
+    };
 
     const handleRebuildPlan = async () => {
         setRebuilding(true);
@@ -262,25 +307,71 @@ export default function Planning() {
                                                         {items.map((item) => (
                                                             <div
                                                                 key={item.id}
-                                                                className={`p-2 rounded text-xs cursor-pointer hover:opacity-80 transition-opacity border ${priorityColors[item.work_item_priority || 'normal']}`}
+                                                                className={`p-2 rounded text-xs cursor-pointer hover:shadow-md transition-all border group ${priorityColors[item.work_item_priority || 'normal']} ${statusStyles[item.work_item_status || 'open']}`}
                                                                 onClick={() => openConversation(item.conversation_id || '')}
                                                                 title={`${item.protocol_code || ''} - Clique para abrir conversa`}
                                                             >
-                                                                <div className="flex items-center gap-1 mb-1">
-                                                                    <Clock className="h-3 w-3" />
-                                                                    <span className="font-medium">
-                                                                        {minutesToTime(item.start_minute)} - {minutesToTime(item.end_minute)}
-                                                                    </span>
+                                                                <div className="flex items-center justify-between gap-1 mb-1">
+                                                                    <div className="flex items-center gap-1">
+                                                                        <Clock className="h-3 w-3" />
+                                                                        <span className="font-medium">
+                                                                            {minutesToTime(item.start_minute)} - {minutesToTime(item.end_minute)}
+                                                                        </span>
+                                                                    </div>
+                                                                    {item.work_item_status === 'done' && <CheckCircle className="h-3 w-3 text-green-600" />}
                                                                 </div>
-                                                                <div className="truncate">
+                                                                <div className="font-semibold mb-1 truncate">
+                                                                    {item.protocol_code}
+                                                                </div>
+                                                                <div className="truncate mb-2">
                                                                     {item.work_item_title || 'Sem título'}
                                                                 </div>
+
                                                                 {item.assignment_group_id && (
-                                                                    <div className="mt-1 flex items-center gap-1 text-[10px] opacity-70 italic border-t border-black/10 pt-1">
+                                                                    <div className="mb-2 flex items-center gap-1 text-[10px] opacity-70 italic border-t border-black/5 pt-1">
                                                                         <Users className="h-3 w-3" />
                                                                         <span>{getOtherTechs(item).join(', ') || 'Equipe'}</span>
                                                                     </div>
                                                                 )}
+
+                                                                {/* Action Buttons - Visible on hover or if in_progress/blocked */}
+                                                                <div className={`flex items-center gap-1 pt-1 border-t border-black/5 ${item.work_item_status === 'open' ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'} transition-opacity`}>
+                                                                    {item.work_item_status !== 'done' && (
+                                                                        <>
+                                                                            {item.work_item_status !== 'in_progress' ? (
+                                                                                <Button
+                                                                                    variant="ghost"
+                                                                                    size="icon"
+                                                                                    className="h-6 w-6 hover:bg-amber-100 text-amber-600"
+                                                                                    onClick={(e) => handleUpdateStatus(item.work_item_id, 'in_progress', e)}
+                                                                                    title="Iniciar"
+                                                                                >
+                                                                                    <Play className="h-3 w-3 fill-current" />
+                                                                                </Button>
+                                                                            ) : (
+                                                                                <Button
+                                                                                    variant="ghost"
+                                                                                    size="icon"
+                                                                                    className="h-6 w-6 hover:bg-green-100 text-green-600"
+                                                                                    onClick={(e) => handleUpdateStatus(item.work_item_id, 'done', e)}
+                                                                                    title="Concluir"
+                                                                                >
+                                                                                    <CheckCircle className="h-3 w-3" />
+                                                                                </Button>
+                                                                            )}
+
+                                                                            <Button
+                                                                                variant="ghost"
+                                                                                size="icon"
+                                                                                className="h-6 w-6 hover:bg-rose-100 text-rose-600"
+                                                                                onClick={(e) => handleUpdateStatus(item.work_item_id, 'blocked', e)}
+                                                                                title="Bloquear"
+                                                                            >
+                                                                                <Pause className="h-3 w-3" />
+                                                                            </Button>
+                                                                        </>
+                                                                    )}
+                                                                </div>
                                                             </div>
                                                         ))}
                                                     </div>

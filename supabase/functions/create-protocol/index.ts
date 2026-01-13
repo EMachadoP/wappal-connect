@@ -345,7 +345,7 @@ serve(async (req) => {
       if (!wiErr && template?.default_materials) {
         await supabaseClient.from('material_requests').insert({ work_item_id: workItem.id, items: template.default_materials });
       }
-    } catch (wiEx) { log(`Work item failed but protocol created: ${wiEx.message}`); }
+    } catch (wiEx: any) { log(`Work item failed but protocol created: ${wiEx.message}`); }
 
     // Finalize
     await supabaseClient.from('conversations').update({ protocol: protocolCode }).eq('id', conversation_id);

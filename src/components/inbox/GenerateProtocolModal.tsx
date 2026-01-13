@@ -95,11 +95,11 @@ export function GenerateProtocolModal({
   const fetchTemplates = async () => {
     try {
       const { data } = await supabase
-        .from('task_templates')
+        .from('task_templates' as any)
         .select('id, title, category, match_keywords')
         .eq('active', true)
         .order('title');
-      setTemplates(data || []);
+      setTemplates((data as any) || []);
     } catch (err) {
       console.error('Error fetching templates:', err);
     }
