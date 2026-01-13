@@ -16,11 +16,11 @@ export function AppLayout({ children, hideHeader = false, hideBottomNav = false 
     <div className="h-screen-safe flex flex-col bg-background">
       {/* Desktop: show header, Mobile: hide header */}
       {!isMobile && !hideHeader && <Header />}
-      
-      <main className={`flex-1 overflow-hidden ${isMobile && !hideBottomNav ? 'pb-bottom-nav' : ''}`}>
+
+      <main className={`flex-1 overflow-y-auto ${isMobile && !hideBottomNav ? 'pb-bottom-nav' : ''}`}>
         {children}
       </main>
-      
+
       {/* Mobile: show bottom nav */}
       {isMobile && !hideBottomNav && <MobileBottomNav />}
     </div>
