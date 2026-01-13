@@ -64,10 +64,21 @@ serve(async (req) => {
     const isGroup = Boolean(payload.isGroup || (payload.chatLid && payload.chatLid.includes('@g.us')) || (payload.chatId && payload.chatId.includes('@g.us')));
     const fromMe = Boolean(payload.fromMe);
 
-    let chatLid = (payload.chatLid || payload.chatId || payload.chat?.chatId || payload.phone || payload.senderPhone)?.trim().toLowerCase();
+    // Função para normalizar IDs (remover sufixos redundantes e padronizar)
+    const normalizeLid = (id: string | null | undefined) => {
+      if (!id) return id;
+      let normalized = id.trim().toLowerCase();
+      // Se não for grupo, remove @c.us ou @s.whatsapp.net para ter apenas o número
+      if (!isGroup) {
+        normalized = normalized.split('@')[0];
+      }
+      return normalized;
+    };
+
+    let chatLid = normalizeLid(payload.chatLid || payload.chatId || payload.chat?.chatId || payload.phone || payload.senderPhone);
 
     // Em chats privados, o chatLid é o ID do contato. Em grupos, usamos participantLid ou os campos de contato.
-    const contactLid = (payload.contact?.lid || payload.lid || payload.participantLid || (isGroup ? null : chatLid) || payload.senderPhone || payload.phone)?.trim().toLowerCase();
+    const contactLid = normalizeLid(payload.contact?.lid || payload.lid || payload.participantLid || (isGroup ? null : chatLid) || payload.senderPhone || payload.phone);
 
     // Se chatLid ainda estiver vazio mas temos contactLid e não é grupo, chatLid = contactLid
     if (!chatLid && contactLid && !isGroup) {
@@ -81,7 +92,7 @@ serve(async (req) => {
     // Identificamos o contato base (quem o usuário vê no chat)
     // Se for grupo, o "contato" da conversa é o próprio grupo
     const chatIdentifier = isGroup ? chatLid : contactLid;
-    const chatName = payload.chatName || payload.contact?.name || payload.senderName || payload.pushName || chatIdentifier.split('@')[0];
+    const chatName = payload.chatName || payload.contact?.name || payload.senderName || payload.pushName || (chatIdentifier ? chatIdentifier.split('@')[0] : 'Desconhecido');
 
     // 4. Salvar/Atualizar Contato do Chat (Grupo ou Individual)
     const { data: contact } = await supabase.from('contacts').upsert({

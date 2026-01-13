@@ -41,6 +41,17 @@ export function ConversationList({
   const [activeTab, setActiveTab] = useState<TabValue>('inbox');
   const [newMessageModalOpen, setNewMessageModalOpen] = useState(false);
 
+  console.log('[ConversationList] Total conversations:', conversations.length);
+  if (conversations.length > 0) {
+    console.table(conversations.map(t => ({
+      conversation_id: t.id,
+      contact_id: (t as any).contact?.id,
+      name: t.contact?.name,
+      last_message: t.last_message,
+      status: t.status
+    })));
+  }
+
   const filteredConversations = conversations
     .filter((conv) => {
       if (!conv.contact) return false;
