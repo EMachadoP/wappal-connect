@@ -112,11 +112,24 @@ serve(async (req) => {
                 return json(200, { success: true, scheduled: 0, message: 'No work items to schedule' });
             }
 
-            // Sort by priority (descending) then created_at
+            // Sort by: criticality (critical first) -> due_date -> priority -> created_at
             workItems.sort((a, b) => {
+                // 1. Critical items first
+                const critA = a.criticality === 'critical' ? 1 : 0;
+                const critB = b.criticality === 'critical' ? 1 : 0;
+                if (critB !== critA) return critB - critA;
+
+                // 2. Earlier due_date first
+                const dueA = a.due_date ? new Date(a.due_date).getTime() : Infinity;
+                const dueB = b.due_date ? new Date(b.due_date).getTime() : Infinity;
+                if (dueA !== dueB) return dueA - dueB;
+
+                // 3. Higher priority first
                 const pa = PRIORITY_ORDER[a.priority] || 2;
                 const pb = PRIORITY_ORDER[b.priority] || 2;
                 if (pb !== pa) return pb - pa;
+
+                // 4. Earlier created_at first
                 return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
             });
 

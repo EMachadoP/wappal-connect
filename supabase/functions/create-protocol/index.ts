@@ -443,10 +443,10 @@ serve(async (req) => {
     // 6.6. CREATE WORK ITEM (for workforce planning)
     log(`[create-protocol] Creating work item for protocol ${protocolRecord.id}...`);
     try {
-      // Get template for this category
+      // Get template for this category (including criticality/SLA)
       const { data: template } = await supabaseClient
         .from('task_templates')
-        .select('id, title, default_minutes, required_people, required_skill_codes, default_materials')
+        .select('id, title, default_minutes, required_people, required_skill_codes, default_materials, criticality, sla_business_days')
         .eq('category', finalCategory)
         .eq('active', true)
         .limit(1)
@@ -454,6 +454,33 @@ serve(async (req) => {
 
       const wiTitle = template?.title ?? `Atendimento - ${translateCategory(finalCategory)}`;
       const wiMinutes = template?.default_minutes ?? 60;
+      const criticality = template?.criticality ?? 'non_critical';
+      const slaDays = template?.sla_business_days ?? 2;
+
+      // Calculate due_date based on SLA (business days, skip weekends)
+      const calculateDueDate = (days: number): string => {
+        const now = new Date();
+        let dueDate = new Date(now);
+        let addedDays = 0;
+
+        while (addedDays < days) {
+          dueDate.setDate(dueDate.getDate() + 1);
+          const dayOfWeek = dueDate.getDay();
+          // Skip Saturday (6) and Sunday (0)
+          if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+            addedDays++;
+          }
+        }
+
+        return dueDate.toISOString().split('T')[0]; // YYYY-MM-DD
+      };
+
+      // critical = same day (today), non_critical = +2 business days
+      const dueDate = slaDays === 0
+        ? new Date().toISOString().split('T')[0]
+        : calculateDueDate(slaDays);
+
+      log(`[create-protocol] Criticality: ${criticality}, SLA: ${slaDays} days, Due: ${dueDate}`);
 
       const { data: workItem, error: wiErr } = await supabaseClient
         .from('protocol_work_items')
@@ -467,6 +494,9 @@ serve(async (req) => {
           required_skill_codes: template?.required_skill_codes ?? [],
           location_text: resolvedCondoId ? 'Condomínio vinculado' : null,
           status: 'open',
+          criticality,
+          sla_business_days: slaDays,
+          due_date: dueDate,
         })
         .select('id')
         .single();

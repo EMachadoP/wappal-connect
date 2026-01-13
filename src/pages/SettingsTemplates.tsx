@@ -39,6 +39,8 @@ interface Template {
     required_people: number;
     required_skill_codes: string[];
     default_materials: Material[];
+    criticality: string;
+    sla_business_days: number;
     active: boolean;
     created_at: string;
 }
@@ -86,6 +88,8 @@ export default function SettingsTemplates() {
         required_people: 1,
         required_skill_codes: [] as string[],
         default_materials: [] as Material[],
+        criticality: 'non_critical',
+        sla_business_days: 2,
         active: true,
     });
 
@@ -137,6 +141,8 @@ export default function SettingsTemplates() {
                 required_people: template.required_people,
                 required_skill_codes: template.required_skill_codes || [],
                 default_materials: template.default_materials || [],
+                criticality: template.criticality || 'non_critical',
+                sla_business_days: template.sla_business_days ?? 2,
                 active: template.active,
             });
         } else {
@@ -148,6 +154,8 @@ export default function SettingsTemplates() {
                 required_people: 1,
                 required_skill_codes: [],
                 default_materials: [],
+                criticality: 'non_critical',
+                sla_business_days: 2,
                 active: true,
             });
         }
@@ -184,6 +192,8 @@ export default function SettingsTemplates() {
                 required_people: form.required_people,
                 required_skill_codes: form.required_skill_codes,
                 default_materials: form.default_materials,
+                criticality: form.criticality,
+                sla_business_days: form.sla_business_days,
                 active: form.active,
             };
 
@@ -417,6 +427,41 @@ export default function SettingsTemplates() {
                                         value={form.required_people}
                                         onChange={(e) => setForm({ ...form, required_people: parseInt(e.target.value) || 1 })}
                                     />
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <Label>Criticidade</Label>
+                                    <Select
+                                        value={form.criticality}
+                                        onValueChange={(v) => setForm({
+                                            ...form,
+                                            criticality: v,
+                                            sla_business_days: v === 'critical' ? 0 : 2
+                                        })}
+                                    >
+                                        <SelectTrigger>
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="critical">Crítico (mesmo dia)</SelectItem>
+                                            <SelectItem value="non_critical">Não Crítico (2 dias úteis)</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div>
+                                    <Label>SLA (dias úteis)</Label>
+                                    <Input
+                                        type="number"
+                                        min={0}
+                                        max={10}
+                                        value={form.sla_business_days}
+                                        onChange={(e) => setForm({ ...form, sla_business_days: parseInt(e.target.value) || 0 })}
+                                    />
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                        0 = mesmo dia, 2 = 2 dias úteis
+                                    </p>
                                 </div>
                             </div>
 
