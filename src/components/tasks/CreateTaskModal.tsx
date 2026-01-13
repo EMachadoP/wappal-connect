@@ -92,9 +92,11 @@ export function CreateTaskModal({
             }
 
             // Find the profile_id for the selected agent
+            // IMPORTANT: assignee_id must reference profiles.id, not agents.id
             const actualAssigneeId = assigneeId === UNASSIGNED ? null : assigneeId;
             const selectedAgent = agents.find(a => a.id === actualAssigneeId);
-            const profileId = selectedAgent?.profile_id || actualAssigneeId;
+            // Use profile_id (references profiles table), or null if agent has no profile
+            const profileId = selectedAgent?.profile_id || null;
 
             // Use callFunction helper with explicit apikey + Authorization
             const data = await callFunction<{ task: any }>('create-task', {
