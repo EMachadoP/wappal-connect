@@ -54,10 +54,46 @@ serve(async (req) => {
     }
 
     console.log('--- [rebuild-plan] START ---');
+    console.log('[rebuild-plan] Checking authentication...');
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+        console.error('[rebuild-plan] No Authorization header provided');
+        return json(401, { error: 'Missing Authorization header' });
+    }
+
+    // 1. Create client with user's JWT
+    const userClient = createClient(supabaseUrl, anonKey, {
+        global: { headers: { Authorization: authHeader } },
+    });
+
+    // 2. Get user from JWT
+    const { data: { user }, error: userErr } = await userClient.auth.getUser();
+    if (userErr || !user) {
+        console.error('[rebuild-plan] Auth error:', userErr?.message);
+        return json(401, { error: 'Invalid JWT', details: userErr?.message });
+    }
+
+    // 3. Create admin client for sensitive operations
     const supabase = createClient(supabaseUrl, serviceKey);
+
+    // 4. Check if user is an active agent
+    const { data: agent, error: agentErr } = await supabase
+        .from('agents')
+        .select('id, is_active, role')
+        .eq('profile_id', user.id)
+        .single();
+
+    if (agentErr || !agent || !agent.is_active) {
+        console.error('[rebuild-plan] Agent check failed:', agentErr?.message || 'Agent not found or inactive');
+        return json(403, { error: 'Forbidden: Agent not active' });
+    }
+
+    console.log(`[rebuild-plan] Authenticated as agent: ${agent.id} (Role: ${agent.role})`);
 
     try {
         const body = await req.json();
