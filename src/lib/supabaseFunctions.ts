@@ -10,6 +10,27 @@ export async function callFunction<TResponse = any>(
     const accessToken = sessionData.session?.access_token;
     if (!accessToken) throw new Error("Sessão não encontrada/expirada. Faça login novamente.");
 
+    // Debug: decode JWT to check issuer
+    try {
+        const payload = JSON.parse(atob(accessToken.split(".")[1]));
+        console.log("[callFunction] JWT Debug:");
+        console.log("  - jwt.iss:", payload.iss);
+        console.log("  - jwt.aud:", payload.aud);
+        console.log("  - jwt.sub (user):", payload.sub);
+        console.log("  - VITE_SUPABASE_URL:", import.meta.env.VITE_SUPABASE_URL);
+
+        // Check if issuer matches the expected project
+        const expectedIssuer = `${import.meta.env.VITE_SUPABASE_URL}/auth/v1`;
+        if (payload.iss !== expectedIssuer) {
+            console.error("[callFunction] ⚠️ JWT ISSUER MISMATCH!");
+            console.error("  - Expected:", expectedIssuer);
+            console.error("  - Got:", payload.iss);
+            console.error("  - This is likely the cause of 401 Invalid JWT!");
+        }
+    } catch (e) {
+        console.warn("[callFunction] Could not decode JWT:", e);
+    }
+
     const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${fnName}`;
     const apikey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
