@@ -41,6 +41,13 @@ interface Participant {
   entity?: Entity | null;
 }
 
+interface Template {
+  id: string;
+  title: string;
+  category: string;
+  match_keywords: string[];
+}
+
 interface GenerateProtocolModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -68,21 +75,59 @@ export function GenerateProtocolModal({
   const [allCondominiums, setAllCondominiums] = useState<Condominium[]>([]);
   const [loadingCondominiums, setLoadingCondominiums] = useState(false);
   const [condominiumId, setCondominiumId] = useState<string>(activeCondominiumId || '');
-  const [category, setCategory] = useState<string>('operational');
-  const [priority, setPriority] = useState<string>('normal');
   const [summary, setSummary] = useState<string>('');
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('auto');
+  const [suggestedTemplateId, setSuggestedTemplateId] = useState<string | null>(null);
   const [notifyGroup, setNotifyGroup] = useState(true);
   const [showNewCondoForm, setShowNewCondoForm] = useState(false);
   const [newCondoName, setNewCondoName] = useState('');
   const [creatingCondo, setCreatingCondo] = useState(false);
   const [entityMatchedCondo, setEntityMatchedCondo] = useState<Condominium | null>(null);
 
-  // Fetch all condominiums when modal opens
   useEffect(() => {
     if (open) {
       fetchAllCondominiums();
+      fetchTemplates();
     }
   }, [open]);
+
+  const fetchTemplates = async () => {
+    try {
+      const { data } = await supabase
+        .from('task_templates')
+        .select('id, title, category, match_keywords')
+        .eq('active', true)
+        .order('title');
+      setTemplates(data || []);
+    } catch (err) {
+      console.error('Error fetching templates:', err);
+    }
+  };
+
+  // Keyword matching for suggestion
+  useEffect(() => {
+    if (!summary || templates.length === 0) {
+      setSuggestedTemplateId(null);
+      return;
+    }
+
+    const lowerSummary = summary.toLowerCase();
+    let best = null;
+    let max = 0;
+
+    for (const t of templates) {
+      let matches = 0;
+      for (const kw of (t.match_keywords || [])) {
+        if (lowerSummary.includes(kw.toLowerCase())) matches++;
+      }
+      if (matches > max) {
+        max = matches;
+        best = t.id;
+      }
+    }
+    setSuggestedTemplateId(best);
+  }, [summary, templates]);
 
   const fetchAllCondominiums = async () => {
     setLoadingCondominiums(true);
@@ -248,11 +293,10 @@ export function GenerateProtocolModal({
         body: {
           conversation_id: conversationId,
           condominium_id: condominiumId,
-          category,
-          priority,
           summary: summary || null,
           notify_group: notifyGroup,
           participant_id: participant?.id || null,
+          template_id: selectedTemplateId === 'auto' ? suggestedTemplateId : selectedTemplateId,
           requester_name: participant?.name || null,
           requester_role: participant?.role_type || null,
           contact_id: contactId,
@@ -503,34 +547,31 @@ export function GenerateProtocolModal({
             )}
           </div>
 
-          {/* Categoria */}
+          {/* Template Selection */}
           <div className="grid gap-2">
-            <Label htmlFor="category">Categoria</Label>
-            <Select value={category} onValueChange={setCategory}>
+            <Label>Template de Trabalho</Label>
+            <Select value={selectedTemplateId} onValueChange={setSelectedTemplateId}>
               <SelectTrigger>
-                <SelectValue placeholder="Selecione a categoria" />
+                <SelectValue placeholder="Selecione um template" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="operational">Suporte / Operacional</SelectItem>
-                <SelectItem value="financial">Financeiro</SelectItem>
-                <SelectItem value="support">Suporte</SelectItem>
-                <SelectItem value="admin">Administrativo</SelectItem>
+                <SelectItem value="auto">
+                  Auto (Sugerido: {templates.find(t => t.id === suggestedTemplateId)?.title || 'Básico'})
+                </SelectItem>
+                {templates.map(t => (
+                  <SelectItem key={t.id} value={t.id}>
+                    {t.title}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
-          </div>
-
-          {/* Prioridade */}
-          <div className="grid gap-2">
-            <Label htmlFor="priority">Prioridade</Label>
-            <Select value={priority} onValueChange={setPriority}>
-              <SelectTrigger>
-                <SelectValue placeholder="Selecione a prioridade" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="normal">Normal</SelectItem>
-                <SelectItem value="critical">Crítica</SelectItem>
-              </SelectContent>
-            </Select>
+            <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+              {selectedTemplateId === 'auto' ? (
+                <>✨ Seleção automática via palavras-chave</>
+              ) : (
+                <>✋ Seleção manual (sobrescreve automático)</>
+              )}
+            </p>
           </div>
 
           {/* Resumo */}

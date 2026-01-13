@@ -12,6 +12,7 @@ import {
     ChevronRight,
     Wrench,
     AlertCircle,
+    Users,
 } from 'lucide-react';
 import { format, addDays, startOfWeek, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -36,6 +37,7 @@ interface PlanItem {
     protocol_id: string;
     protocol_code: string;
     conversation_id: string;
+    assignment_group_id: string | null;
 }
 
 interface Technician {
@@ -152,6 +154,13 @@ export default function Planning() {
         ).sort((a, b) => a.start_minute - b.start_minute);
     };
 
+    const getOtherTechs = (item: PlanItem) => {
+        if (!item.assignment_group_id) return [];
+        return planItems
+            .filter(p => p.assignment_group_id === item.assignment_group_id && p.technician_id !== item.technician_id)
+            .map(p => p.technician_name);
+    };
+
     return (
         <AppLayout>
             <div className="p-6 space-y-6">
@@ -266,6 +275,12 @@ export default function Planning() {
                                                                 <div className="truncate">
                                                                     {item.work_item_title || 'Sem título'}
                                                                 </div>
+                                                                {item.assignment_group_id && (
+                                                                    <div className="mt-1 flex items-center gap-1 text-[10px] opacity-70 italic border-t border-black/10 pt-1">
+                                                                        <Users className="h-3 w-3" />
+                                                                        <span>{getOtherTechs(item).join(', ') || 'Equipe'}</span>
+                                                                    </div>
+                                                                )}
                                                             </div>
                                                         ))}
                                                     </div>

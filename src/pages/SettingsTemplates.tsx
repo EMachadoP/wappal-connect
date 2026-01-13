@@ -38,6 +38,7 @@ interface Template {
     default_minutes: number;
     required_people: number;
     required_skill_codes: string[];
+    match_keywords: string[];
     default_materials: Material[];
     criticality: string;
     sla_business_days: number;
@@ -47,8 +48,10 @@ interface Template {
 
 interface Material {
     name: string;
-    quantity: number;
+    qty: number;
     unit: string;
+    sku: string;
+    optional: boolean;
 }
 
 interface Skill {
@@ -62,6 +65,14 @@ const CATEGORIES = [
     { value: 'support', label: 'Suporte' },
     { value: 'admin', label: 'Administrativo' },
     { value: 'financial', label: 'Financeiro' },
+    { value: 'gate_motor', label: 'Portões e Motores' },
+    { value: 'intercom', label: 'Interfonia' },
+    { value: 'cctv', label: 'CFTV' },
+    { value: 'antenna', label: 'Antena Coletiva' },
+    { value: 'fence_alarm', label: 'Cerca/Alarme' },
+    { value: 'access_control', label: 'Controle de Acesso' },
+    { value: 'infra', label: 'Infraestrutura' },
+    { value: 'generic', label: 'Genérico' },
 ];
 
 const categoryLabels: Record<string, string> = {
@@ -69,6 +80,14 @@ const categoryLabels: Record<string, string> = {
     support: 'Suporte',
     admin: 'Administrativo',
     financial: 'Financeiro',
+    gate_motor: 'Portões',
+    intercom: 'Interfone',
+    cctv: 'CFTV',
+    antenna: 'Antena',
+    fence_alarm: 'Cerca',
+    access_control: 'Acesso',
+    infra: 'Infra',
+    generic: 'Geral',
 };
 
 export default function SettingsTemplates() {
@@ -87,6 +106,7 @@ export default function SettingsTemplates() {
         default_minutes: 60,
         required_people: 1,
         required_skill_codes: [] as string[],
+        match_keywords: [] as string[],
         default_materials: [] as Material[],
         criticality: 'non_critical',
         sla_business_days: 2,
@@ -140,6 +160,7 @@ export default function SettingsTemplates() {
                 default_minutes: template.default_minutes,
                 required_people: template.required_people,
                 required_skill_codes: template.required_skill_codes || [],
+                match_keywords: template.match_keywords || [],
                 default_materials: template.default_materials || [],
                 criticality: template.criticality || 'non_critical',
                 sla_business_days: template.sla_business_days ?? 2,
@@ -153,6 +174,7 @@ export default function SettingsTemplates() {
                 default_minutes: 60,
                 required_people: 1,
                 required_skill_codes: [],
+                match_keywords: [],
                 default_materials: [],
                 criticality: 'non_critical',
                 sla_business_days: 2,
@@ -191,6 +213,7 @@ export default function SettingsTemplates() {
                 default_minutes: form.default_minutes,
                 required_people: form.required_people,
                 required_skill_codes: form.required_skill_codes,
+                match_keywords: form.match_keywords,
                 default_materials: form.default_materials,
                 criticality: form.criticality,
                 sla_business_days: form.sla_business_days,
@@ -231,11 +254,11 @@ export default function SettingsTemplates() {
     const addMaterial = () => {
         setForm({
             ...form,
-            default_materials: [...form.default_materials, { name: '', quantity: 1, unit: 'un' }],
+            default_materials: [...form.default_materials, { name: '', qty: 1, unit: 'un', sku: '', optional: true }],
         });
     };
 
-    const updateMaterial = (index: number, field: keyof Material, value: string | number) => {
+    const updateMaterial = (index: number, field: keyof Material, value: any) => {
         const updated = [...form.default_materials];
         updated[index] = { ...updated[index], [field]: value };
         setForm({ ...form, default_materials: updated });
@@ -482,6 +505,22 @@ export default function SettingsTemplates() {
                             </div>
 
                             <div>
+                                <Label>Palavras-chave (busca automática)</Label>
+                                <Input
+                                    placeholder="Ex: portão, travado, motor (separados por vírgula)"
+                                    value={form.match_keywords.join(', ')}
+                                    onChange={(e) => setForm({
+                                        ...form,
+                                        match_keywords: e.target.value.split(',').map(s => s.trim()).filter(s => s.length > 0)
+                                    })}
+                                    className="mt-2"
+                                />
+                                <p className="text-xs text-muted-foreground mt-1">
+                                    Usadas para selecionar este template automaticamente no chamado.
+                                </p>
+                            </div>
+
+                            <div>
                                 <div className="flex items-center justify-between">
                                     <Label>Materiais Padrão</Label>
                                     <Button variant="outline" size="sm" onClick={addMaterial}>
@@ -491,33 +530,50 @@ export default function SettingsTemplates() {
                                 </div>
                                 <div className="space-y-2 mt-2">
                                     {form.default_materials.map((mat, idx) => (
-                                        <div key={idx} className="flex gap-2 items-center">
-                                            <Input
-                                                placeholder="Nome"
-                                                value={mat.name}
-                                                onChange={(e) => updateMaterial(idx, 'name', e.target.value)}
-                                                className="flex-1"
-                                            />
-                                            <Input
-                                                type="number"
-                                                min={1}
-                                                value={mat.quantity}
-                                                onChange={(e) => updateMaterial(idx, 'quantity', parseInt(e.target.value) || 1)}
-                                                className="w-20"
-                                            />
-                                            <Input
-                                                placeholder="un"
-                                                value={mat.unit}
-                                                onChange={(e) => updateMaterial(idx, 'unit', e.target.value)}
-                                                className="w-16"
-                                            />
-                                            <Button
-                                                variant="ghost"
-                                                size="icon"
-                                                onClick={() => removeMaterial(idx)}
-                                            >
-                                                <Trash2 className="h-4 w-4 text-destructive" />
-                                            </Button>
+                                        <div key={idx} className="flex flex-col gap-2 p-3 border rounded bg-muted/30">
+                                            <div className="flex gap-2">
+                                                <Input
+                                                    placeholder="Nome do Material"
+                                                    value={mat.name}
+                                                    onChange={(e) => updateMaterial(idx, 'name', e.target.value)}
+                                                    className="flex-1"
+                                                />
+                                                <Input
+                                                    placeholder="SKU"
+                                                    value={mat.sku}
+                                                    onChange={(e) => updateMaterial(idx, 'sku', e.target.value)}
+                                                    className="w-24"
+                                                />
+                                            </div>
+                                            <div className="flex gap-2 items-center">
+                                                <Input
+                                                    type="number"
+                                                    min={1}
+                                                    value={mat.qty}
+                                                    onChange={(e) => updateMaterial(idx, 'qty', parseInt(e.target.value) || 1)}
+                                                    className="w-20"
+                                                />
+                                                <Input
+                                                    placeholder="un"
+                                                    value={mat.unit}
+                                                    onChange={(e) => updateMaterial(idx, 'unit', e.target.value)}
+                                                    className="w-16"
+                                                />
+                                                <div className="flex-1 flex items-center gap-2 px-2">
+                                                    <Switch
+                                                        checked={mat.optional}
+                                                        onCheckedChange={(v) => updateMaterial(idx, 'optional', v)}
+                                                    />
+                                                    <span className="text-xs font-medium">Opcional</span>
+                                                </div>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    onClick={() => removeMaterial(idx)}
+                                                >
+                                                    <Trash2 className="h-4 w-4 text-destructive" />
+                                                </Button>
+                                            </div>
                                         </div>
                                     ))}
                                 </div>

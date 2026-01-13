@@ -32,6 +32,7 @@ interface Technician {
     is_active: boolean;
     created_at: string;
     skills: { code: string; label: string; level: number }[];
+    dispatch_priority?: number;
 }
 
 interface Skill {
@@ -49,7 +50,7 @@ export default function SettingsTechnicians() {
     // Technician form
     const [showTechModal, setShowTechModal] = useState(false);
     const [editingTech, setEditingTech] = useState<Technician | null>(null);
-    const [techForm, setTechForm] = useState({ name: '', is_active: true });
+    const [techForm, setTechForm] = useState({ name: '', is_active: true, dispatch_priority: 100 });
     const [techSkills, setTechSkills] = useState<{ skill_id: string; level: number }[]>([]);
 
     // Skill form
@@ -104,7 +105,11 @@ export default function SettingsTechnicians() {
     const openTechModal = (tech?: Technician) => {
         if (tech) {
             setEditingTech(tech);
-            setTechForm({ name: tech.name, is_active: tech.is_active });
+            setTechForm({
+                name: tech.name,
+                is_active: tech.is_active,
+                dispatch_priority: tech.dispatch_priority || 100
+            });
             // Get current skills for this technician
             const currentSkills = tech.skills.map(s => {
                 const skill = skills.find(sk => sk.code === s.code);
@@ -113,7 +118,7 @@ export default function SettingsTechnicians() {
             setTechSkills(currentSkills);
         } else {
             setEditingTech(null);
-            setTechForm({ name: '', is_active: true });
+            setTechForm({ name: '', is_active: true, dispatch_priority: 100 });
             setTechSkills([]);
         }
         setShowTechModal(true);
@@ -132,14 +137,22 @@ export default function SettingsTechnicians() {
                 // Update
                 const { error } = await supabase
                     .from('technicians')
-                    .update({ name: techForm.name, is_active: techForm.is_active })
+                    .update({
+                        name: techForm.name,
+                        is_active: techForm.is_active,
+                        dispatch_priority: techForm.dispatch_priority
+                    })
                     .eq('id', techId);
                 if (error) throw error;
             } else {
                 // Insert
                 const { data, error } = await supabase
                     .from('technicians')
-                    .insert({ name: techForm.name, is_active: techForm.is_active })
+                    .insert({
+                        name: techForm.name,
+                        is_active: techForm.is_active,
+                        dispatch_priority: techForm.dispatch_priority
+                    })
                     .select('id')
                     .single();
                 if (error) throw error;
@@ -294,6 +307,7 @@ export default function SettingsTechnicians() {
                                                 <tr className="border-b">
                                                     <th className="text-left p-2">Nome</th>
                                                     <th className="text-left p-2">Ativo</th>
+                                                    <th className="text-left p-2">Prioridade</th>
                                                     <th className="text-left p-2">Skills</th>
                                                     <th className="text-right p-2">Ações</th>
                                                 </tr>
@@ -306,6 +320,11 @@ export default function SettingsTechnicians() {
                                                             <Badge variant={tech.is_active ? 'default' : 'secondary'}>
                                                                 {tech.is_active ? 'Sim' : 'Não'}
                                                             </Badge>
+                                                        </td>
+                                                        <td className="p-2">
+                                                            <span className="text-sm font-mono">
+                                                                {tech.dispatch_priority ?? 100}
+                                                            </span>
                                                         </td>
                                                         <td className="p-2">
                                                             <div className="flex flex-wrap gap-1">
@@ -412,6 +431,17 @@ export default function SettingsTechnicians() {
                                     onCheckedChange={(checked) => setTechForm({ ...techForm, is_active: checked })}
                                 />
                                 <Label>Ativo</Label>
+                            </div>
+                            <div>
+                                <Label htmlFor="tech-priority">Prioridade de Despacho (André Coringa = 300)</Label>
+                                <Input
+                                    id="tech-priority"
+                                    type="number"
+                                    value={techForm.dispatch_priority}
+                                    onChange={(e) => setTechForm({ ...techForm, dispatch_priority: parseInt(e.target.value) || 100 })}
+                                    placeholder="100 (Normal), 300 (Coringa)"
+                                />
+                                <p className="text-xs text-muted-foreground mt-1">Valores menores são priorizados na distribuição automática.</p>
                             </div>
                             <div>
                                 <Label>Skills</Label>

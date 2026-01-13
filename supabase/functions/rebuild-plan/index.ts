@@ -45,118 +45,75 @@ serve(async (req) => {
         const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
         if (!supabaseUrl || !serviceRoleKey) {
-            console.error('[rebuild-plan] Missing environment variables');
-            return json(500, { error: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY" });
+            console.error('[rebuild-plan] Missing env vars');
+            return json(500, { error: "Missing config" });
         }
 
         const admin = createClient(supabaseUrl, serviceRoleKey);
 
-        // 1. Authenticate the user calling this
+        // 1. Authenticate calling user
         const authHeader = req.headers.get('Authorization');
-        if (!authHeader) {
-            console.error('[rebuild-plan] No Authorization header');
-            return json(401, { error: 'Missing Authorization header' });
-        }
+        if (!authHeader) return json(401, { error: 'Missing Auth' });
 
         const { data: { user }, error: authErr } = await admin.auth.getUser(authHeader.replace('Bearer ', ''));
-        if (authErr || !user) {
-            console.error('[rebuild-plan] Invalid JWT:', authErr?.message);
-            return json(401, { error: 'Invalid JWT', details: authErr?.message });
-        }
+        if (authErr || !user) return json(401, { error: 'Invalid JWT' });
 
-        console.log(`[rebuild-plan] User authenticated: ${user.id}`);
-
-        // 2. Parse request body
+        // 2. Parse request
         const { start_date, days = 7 } = await req.json().catch(() => ({}));
-        if (!start_date) {
-            return json(400, { error: "start_date is required (YYYY-MM-DD)" });
-        }
+        if (!start_date) return json(400, { error: "start_date required" });
 
-        // Calculate end date
         const start = new Date(start_date);
         const end = new Date(start);
         end.setDate(end.getDate() + days - 1);
         const endDate = end.toISOString().split('T')[0];
 
-        console.log(`[rebuild-plan] Interval: ${start_date} to ${endDate}`);
-
-        // 3. Acquire lock
+        // 3. Lock
         const lockKey = `plan:${start_date}:${days}`;
         const { error: lockErr } = await admin.from('planner_locks').insert({ lock_key: lockKey });
-        if (lockErr) {
-            if (lockErr.code === '23505') {
-                return json(409, { error: "Another rebuild is already running for this period" });
-            }
-            return json(500, { error: "Failed to acquire lock", details: lockErr });
-        }
+        if (lockErr) return json(409, { error: "Already running" });
 
         try {
-            // 4. Delete existing items
-            console.log('[rebuild-plan] Deleting existing plan items...');
-            const { error: delErr } = await admin
-                .from('plan_items')
-                .delete()
-                .gte('plan_date', start_date)
-                .lte('plan_date', endDate);
+            // 4. Clean up
+            await admin.from('plan_items').delete().gte('plan_date', start_date).lte('plan_date', endDate);
 
-            if (delErr) {
-                console.error('[rebuild-plan] Delete failed:', delErr);
-                return json(403, { error: "Delete plan_items failed (RLS or Permission)", details: delErr });
-            }
-
-            // 5. Fetch Work Items
-            console.log('[rebuild-plan] Fetching work items...');
+            // 5. Load Work Items
             const { data: workItems, error: wiErr } = await admin
                 .from('protocol_work_items')
                 .select('*')
                 .eq('status', 'open');
 
-            if (wiErr) {
-                console.error('[rebuild-plan] Work items fetch failed:', wiErr);
-                return json(403, { error: "Fetch protocol_work_items failed", details: wiErr });
-            }
+            if (wiErr) throw wiErr;
+            if (!workItems || workItems.length === 0) return json(200, { scheduled: 0 });
 
-            if (!workItems || workItems.length === 0) {
-                return json(200, { ok: true, scheduled: 0, message: "No open work items" });
-            }
-
-            // Sort: Critical -> Due Date -> Priority -> Created At
+            // Sort: Critical -> Date -> Priority
             workItems.sort((a, b) => {
                 const critA = a.criticality === 'critical' ? 1 : 0;
                 const critB = b.criticality === 'critical' ? 1 : 0;
                 if (critB !== critA) return critB - critA;
-
                 const dueA = a.due_date ? new Date(a.due_date).getTime() : Infinity;
                 const dueB = b.due_date ? new Date(b.due_date).getTime() : Infinity;
                 if (dueA !== dueB) return dueA - dueB;
-
                 const pa = PRIORITY_ORDER[a.priority] || 2;
                 const pb = PRIORITY_ORDER[b.priority] || 2;
-                if (pb !== pa) return pb - pa;
-
-                return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+                return pb - pa;
             });
 
-            // 6. Fetch Technicians
-            console.log('[rebuild-plan] Fetching technicians...');
+            // 6. Load Techs
             const { data: technicians, error: techErr } = await admin
                 .from('technicians')
-                .select('id, name, technician_skills(skills(code))')
+                .select('id, name, dispatch_priority, technician_skills(skills(code))')
                 .eq('is_active', true);
 
-            if (techErr) {
-                console.error('[rebuild-plan] Technicians fetch failed:', techErr);
-                return json(403, { error: "Fetch technicians failed", details: techErr });
-            }
+            if (techErr) throw techErr;
 
             const techWithSkills = technicians.map((t: any) => ({
                 id: t.id,
                 name: t.name,
+                dispatch_priority: t.dispatch_priority || 100,
                 skills: (t.technician_skills || []).map((ts: any) => ts.skills?.code).filter(Boolean),
             }));
 
-            // 7. Allocation Algorithm
-            console.log('[rebuild-plan] Running allocation algorithm...');
+            // 7. Allocation Loop
             const planItems: any[] = [];
             const scheduledIds: string[] = [];
             const allocations = new Map<string, SlotAllocation[]>();
@@ -169,85 +126,86 @@ serve(async (req) => {
                 for (const wi of workItems) {
                     if (scheduledIds.includes(wi.id)) continue;
 
-                    const requiredSkills = wi.required_skill_codes || [];
+                    const reqPeople = wi.required_people || 1;
+                    const reqSkills = wi.required_skill_codes || [];
 
-                    for (const tech of techWithSkills) {
-                        const hasSkills = requiredSkills.length === 0 ||
-                            requiredSkills.every((s: string) => tech.skills.includes(s));
+                    // Filter and Sort compatible techs for this day
+                    const compatibleTechs = techWithSkills
+                        .filter(t => reqSkills.length === 0 || reqSkills.every(s => t.skills.includes(s)))
+                        .sort((a, b) => {
+                            if (a.dispatch_priority !== b.dispatch_priority) return a.dispatch_priority - b.dispatch_priority;
+                            const loadA = (allocations.get(`${a.id}:${dateStr}`) || []).reduce((sum, s) => sum + (s.end_minute - s.start_minute), 0);
+                            const loadB = (allocations.get(`${b.id}:${dateStr}`) || []).reduce((sum, s) => sum + (s.end_minute - s.start_minute), 0);
+                            return loadA - loadB;
+                        });
 
-                        if (!hasSkills) continue;
+                    if (compatibleTechs.length < reqPeople) continue;
 
-                        const key = `${tech.id}:${dateStr}`;
-                        const dayAllocs = allocations.get(key) || [];
-                        const slot = findAvailableSlot(dayAllocs, wi.estimated_minutes);
+                    // Match Slot
+                    let commonSlot = null;
+                    const duration = wi.estimated_minutes;
+                    for (let startMin = MORNING_START; startMin <= AFTERNOON_END - duration; startMin += 15) {
+                        if (startMin < MORNING_END && startMin + duration > MORNING_END) continue;
+                        if (startMin >= MORNING_END && startMin < AFTERNOON_START) continue;
 
-                        if (slot) {
+                        const availableForThisSlot = [];
+                        const endMin = startMin + duration;
+
+                        for (const tech of compatibleTechs) {
+                            const dayAllocs = allocations.get(`${tech.id}:${dateStr}`) || [];
+                            const isFree = !dayAllocs.some(a =>
+                                (startMin >= a.start_minute && startMin < a.end_minute) ||
+                                (endMin > a.start_minute && endMin <= a.end_minute) ||
+                                (startMin <= a.start_minute && endMin >= a.end_minute)
+                            );
+                            if (isFree) availableForThisSlot.push(tech);
+                            if (availableForThisSlot.length === reqPeople) {
+                                commonSlot = { startMin, endMin, techs: [...availableForThisSlot] };
+                                break;
+                            }
+                        }
+                        if (commonSlot) break;
+                    }
+
+                    if (commonSlot) {
+                        const groupId = crypto.randomUUID();
+                        for (const tech of commonSlot.techs) {
+                            const key = `${tech.id}:${dateStr}`;
+                            const dayAllocs = allocations.get(key) || [];
                             planItems.push({
                                 plan_date: dateStr,
                                 technician_id: tech.id,
                                 work_item_id: wi.id,
-                                start_minute: slot.start_minute,
-                                end_minute: slot.end_minute,
+                                start_minute: commonSlot.startMin,
+                                end_minute: commonSlot.endMin,
                                 sequence: dayAllocs.length,
+                                assignment_group_id: groupId
                             });
-                            dayAllocs.push(slot);
+                            dayAllocs.push({
+                                technician_id: tech.id,
+                                start_minute: commonSlot.startMin,
+                                end_minute: commonSlot.endMin
+                            });
                             allocations.set(key, dayAllocs);
-                            scheduledIds.push(wi.id);
-                            break;
                         }
+                        scheduledIds.push(wi.id);
+                        await admin.from('protocol_work_items').update({ assignment_group_id: groupId }).eq('id', wi.id);
                     }
                 }
             }
 
-            // 8. Bulk Insert & Update
+            // 8. Bulk Save
             if (planItems.length > 0) {
-                console.log(`[rebuild-plan] Inserting ${planItems.length} items...`);
-                const { error: insErr } = await admin.from('plan_items').insert(planItems);
-                if (insErr) {
-                    console.error('[rebuild-plan] Insert failed:', insErr);
-                    return json(403, { error: "Insert plan_items failed", details: insErr });
-                }
-
-                await admin.from('protocol_work_items')
-                    .update({ status: 'planned' })
-                    .in('id', scheduledIds);
+                await admin.from('plan_items').insert(planItems);
+                await admin.from('protocol_work_items').update({ status: 'planned' }).in('id', scheduledIds);
             }
 
-            console.log('[rebuild-plan] SUCCESS');
-            return json(200, { ok: true, scheduled: planItems.length });
+            return json(200, { ok: true, scheduled: scheduledIds.length });
 
         } finally {
             await admin.from('planner_locks').delete().eq('lock_key', lockKey);
         }
-
     } catch (e) {
-        console.error('[rebuild-plan] Catch:', e);
-        return json(500, { error: "Unhandled internal error", details: String(e) });
+        return json(500, { error: (e as Error).message });
     }
 });
-
-function findAvailableSlot(existing: SlotAllocation[], duration: number): SlotAllocation | null {
-    const sorted = [...existing].sort((a, b) => a.start_minute - b.start_minute);
-
-    // Check morning
-    let candidate = MORNING_START;
-    for (const a of sorted) {
-        if (a.end_minute <= MORNING_START) continue;
-        if (a.start_minute >= MORNING_END) break;
-        if (candidate + duration <= a.start_minute) return { technician_id: '', start_minute: candidate, end_minute: candidate + duration };
-        candidate = Math.max(candidate, a.end_minute);
-    }
-    if (candidate + duration <= MORNING_END) return { technician_id: '', start_minute: candidate, end_minute: candidate + duration };
-
-    // Check afternoon
-    candidate = AFTERNOON_START;
-    for (const a of sorted) {
-        if (a.end_minute <= AFTERNOON_START) continue;
-        if (a.start_minute >= AFTERNOON_END) break;
-        if (candidate + duration <= a.start_minute) return { technician_id: '', start_minute: candidate, end_minute: candidate + duration };
-        candidate = Math.max(candidate, a.end_minute);
-    }
-    if (candidate + duration <= AFTERNOON_END) return { technician_id: '', start_minute: candidate, end_minute: candidate + duration };
-
-    return null;
-}
