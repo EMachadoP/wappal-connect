@@ -10,6 +10,8 @@ import { AIControlBar } from './AIControlBar';
 import { HumanActionBar } from './HumanActionBar';
 import { GenerateProtocolModal } from './GenerateProtocolModal';
 import { CondominiumChips } from './CondominiumSelector';
+import { CreateTaskModal } from '@/components/tasks/CreateTaskModal';
+import { WaitForClientModal } from '@/components/tasks/WaitForClientModal';
 import { useParticipantInfo } from '@/hooks/useParticipantInfo';
 import { useContactCondominiums } from '@/hooks/useContactCondominiums';
 import { toast } from 'sonner';
@@ -55,6 +57,8 @@ export function ChatArea(props: ChatAreaProps) {
   const { contact, messages, conversationId, loading, isMobile } = props;
   const [identifyModalOpen, setIdentifyModalOpen] = useState(false);
   const [protocolModalOpen, setProtocolModalOpen] = useState(false);
+  const [taskModalOpen, setTaskModalOpen] = useState(false);
+  const [waitModalOpen, setWaitModalOpen] = useState(false);
 
   const { participant, contactInfo, displayNameType, refetch: refetchParticipant } =
     useParticipantInfo(contact?.id, conversationId ?? undefined);
@@ -103,6 +107,8 @@ export function ChatArea(props: ChatAreaProps) {
         onAssignTeam={props.onAssignTeam}
         onAddLabel={props.onAddLabel}
         onGenerateProtocol={() => setProtocolModalOpen(true)}
+        onCreateTask={() => setTaskModalOpen(true)}
+        onWaitForClient={() => setWaitModalOpen(true)}
         onAudioSettingsChange={props.onAudioSettingsChange}
         onBack={props.onBack}
       />
@@ -189,6 +195,25 @@ export function ChatArea(props: ChatAreaProps) {
             props.onProtocolCreated?.(code);
             toast.success(`Protocolo ${code} criado`);
           }}
+        />
+      )}
+
+      {conversationId && (
+        <CreateTaskModal
+          open={taskModalOpen}
+          onOpenChange={setTaskModalOpen}
+          conversationId={conversationId}
+          defaultTitle={`Acompanhar: ${contactWithParticipantName.name}`}
+          onTaskCreated={() => toast.success('Tarefa criada!')}
+        />
+      )}
+
+      {conversationId && (
+        <WaitForClientModal
+          open={waitModalOpen}
+          onOpenChange={setWaitModalOpen}
+          conversationId={conversationId}
+          contactName={contactWithParticipantName.name}
         />
       )}
     </div>

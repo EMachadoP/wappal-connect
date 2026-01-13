@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { MessageSquare, BarChart3, Settings, LogOut, Bot, Contact, Link2, User, Share2 } from 'lucide-react';
+import { MessageSquare, BarChart3, Settings, LogOut, Bot, Contact, Link2, User, Share2, ListTodo, Calendar } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
@@ -11,6 +11,8 @@ import { EditProfileModal } from '@/components/profile/EditProfileModal';
 
 const navItems = [
   { path: '/inbox', label: 'Conversas', icon: MessageSquare },
+  { path: '/tasks', label: 'Tarefas', icon: ListTodo },
+  { path: '/agenda', label: 'Agenda', icon: Calendar },
   { path: '/dashboard', label: 'Dashboard', icon: BarChart3 },
   { path: '/admin', label: 'Admin', icon: Settings, adminOnly: true },
   { path: '/admin/ai', label: 'IA', icon: Bot, adminOnly: true },

@@ -1,7 +1,7 @@
 "use client";
 
 import React from 'react';
-import { Users, FileText, ArrowLeft } from 'lucide-react';
+import { Users, FileText, ArrowLeft, ListTodo, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ConversationAvatar } from './ConversationAvatar';
 import { ConversationActionsMenu } from './ConversationActionsMenu';
@@ -28,6 +28,8 @@ interface ChatHeaderProps {
   onAssignTeam?: (teamId: string) => void;
   onAddLabel?: (labelId: string) => void;
   onGenerateProtocol?: () => void;
+  onCreateTask?: () => void;
+  onWaitForClient?: () => void;
   onAudioSettingsChange?: () => void;
   onBack?: () => void;
 }
@@ -53,6 +55,8 @@ export function ChatHeader({
   onAssignTeam,
   onAddLabel,
   onGenerateProtocol,
+  onCreateTask,
+  onWaitForClient,
   onAudioSettingsChange,
   onBack,
 }: ChatHeaderProps) {
@@ -94,7 +98,31 @@ export function ChatHeader({
             className="h-8"
           >
             <FileText className="w-4 h-4 mr-2" />
-            Gerar Protocolo
+            Protocolo
+          </Button>
+        )}
+
+        {onCreateTask && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onCreateTask}
+            className="h-8"
+          >
+            <ListTodo className="w-4 h-4 mr-2" />
+            Tarefa
+          </Button>
+        )}
+
+        {onWaitForClient && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={onWaitForClient}
+            className="h-8"
+            title="Aguardar resposta do cliente"
+          >
+            <Clock className="w-4 h-4" />
           </Button>
         )}
 

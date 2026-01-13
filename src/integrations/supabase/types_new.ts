@@ -1470,88 +1470,6 @@ export type Database = {
         }
         Relationships: []
       }
-      tasks: {
-        Row: {
-          assignee_id: string | null
-          completed_at: string | null
-          conversation_id: string | null
-          created_at: string | null
-          created_by: string | null
-          description: string | null
-          due_at: string | null
-          external_ref: string | null
-          first_action_at: string | null
-          id: string
-          last_action_at: string | null
-          priority: string
-          remind_at: string | null
-          started_at: string | null
-          status: string
-          title: string
-          updated_at: string | null
-        }
-        Insert: {
-          assignee_id?: string | null
-          completed_at?: string | null
-          conversation_id?: string | null
-          created_at?: string | null
-          created_by?: string | null
-          description?: string | null
-          due_at?: string | null
-          external_ref?: string | null
-          first_action_at?: string | null
-          id?: string
-          last_action_at?: string | null
-          priority?: string
-          remind_at?: string | null
-          started_at?: string | null
-          status?: string
-          title: string
-          updated_at?: string | null
-        }
-        Update: {
-          assignee_id?: string | null
-          completed_at?: string | null
-          conversation_id?: string | null
-          created_at?: string | null
-          created_by?: string | null
-          description?: string | null
-          due_at?: string | null
-          external_ref?: string | null
-          first_action_at?: string | null
-          id?: string
-          last_action_at?: string | null
-          priority?: string
-          remind_at?: string | null
-          started_at?: string | null
-          status?: string
-          title?: string
-          updated_at?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "tasks_assignee_id_fkey"
-            columns: ["assignee_id"]
-            isOneToOne: false
-            referencedRelation: "profiles"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "tasks_conversation_id_fkey"
-            columns: ["conversation_id"]
-            isOneToOne: false
-            referencedRelation: "conversations"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "tasks_created_by_fkey"
-            columns: ["created_by"]
-            isOneToOne: false
-            referencedRelation: "profiles"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       teams: {
         Row: {
           created_at: string
@@ -1646,16 +1564,7 @@ export type Database = {
       }
     }
     Views: {
-      task_metrics_dashboard: {
-        Row: {
-          avg_resolution_seconds_7d: number | null
-          done_today: number | null
-          followups_due: number | null
-          open_tasks: number | null
-          overdue_tasks: number | null
-        }
-        Relationships: []
-      }
+      [_ in never]: never
     }
     Functions: {
       can_access_conversation: {
@@ -1714,26 +1623,12 @@ export type Database = {
           resumed_count: number
         }[]
       }
-      task_metrics_by_assignee: {
-        Args: { p_days?: number }
-        Returns: {
-          assignee_id: string
-          assignee_name: string
-          avg_resolution_seconds: number
-          done_today: number
-          followups_due: number
-          open_tasks: number
-          overdue_tasks: number
-        }[]
-      }
     }
     Enums: {
       app_role: "admin" | "agent"
       conversation_status: "open" | "resolved"
       message_type: "text" | "image" | "video" | "audio" | "document" | "system"
       sender_type: "contact" | "agent" | "system"
-      task_priority: "low" | "normal" | "high" | "urgent"
-      task_status: "pending" | "in_progress" | "waiting" | "done" | "cancelled"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1865,8 +1760,6 @@ export const Constants = {
       conversation_status: ["open", "resolved"],
       message_type: ["text", "image", "video", "audio", "document", "system"],
       sender_type: ["contact", "agent", "system"],
-      task_priority: ["low", "normal", "high", "urgent"],
-      task_status: ["pending", "in_progress", "waiting", "done", "cancelled"],
     },
   },
 } as const

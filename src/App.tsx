@@ -17,6 +17,8 @@ import AdminDuplicates from "./pages/AdminDuplicates";
 import AdminIntegrations from "./pages/AdminIntegrations";
 import Status from "./pages/Status";
 import NotFound from "./pages/NotFound";
+import Tasks from "./pages/Tasks";
+import Agenda from "./pages/Agenda";
 
 const queryClient = new QueryClient();
 
@@ -32,6 +34,8 @@ const App = () => (
             <Route path="/auth" element={<Auth />} />
             <Route path="/inbox" element={<Inbox />} />
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/tasks" element={<Tasks />} />
+            <Route path="/agenda" element={<Agenda />} />
             <Route path="/admin" element={<Admin />} />
             <Route path="/admin/ai" element={<AdminAI />} />
             <Route path="/admin/knowledge" element={<AdminKnowledge />} />
