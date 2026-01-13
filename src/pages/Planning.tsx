@@ -118,6 +118,18 @@ export default function Planning() {
             fetchData();
         } catch (err: any) {
             console.error('Error rebuilding plan:', err);
+
+            // Tenta extrair a resposta do servidor para depurar 403/500
+            const ctx = err?.context;
+            if (ctx?.response) {
+                try {
+                    const text = await ctx.response.text();
+                    console.error('rebuild-plan response body:', text);
+                } catch (e) {
+                    console.error('Could not parse error response body');
+                }
+            }
+
             toast.error(err?.message || 'Erro ao gerar planejamento');
         } finally {
             setRebuilding(false);

@@ -12,27 +12,6 @@ const MORNING_END = 12 * 60;   // 12:00
 const AFTERNOON_START = 13 * 60; // 13:00
 const AFTERNOON_END = 17 * 60;   // 17:00
 
-interface WorkItem {
-    id: string;
-    category: string;
-    priority: string;
-    title: string;
-    estimated_minutes: number;
-    required_skill_codes: string[];
-}
-
-interface Technician {
-    id: string;
-    name: string;
-    skills: string[];
-}
-
-interface SlotAllocation {
-    technician_id: string;
-    start_minute: number;
-    end_minute: number;
-}
-
 // Priority order (higher = more urgent)
 const PRIORITY_ORDER: Record<string, number> = {
     urgent: 4,
@@ -40,6 +19,12 @@ const PRIORITY_ORDER: Record<string, number> = {
     normal: 2,
     low: 1,
 };
+
+interface SlotAllocation {
+    technician_id: string;
+    start_minute: number;
+    end_minute: number;
+}
 
 function json(status: number, body: unknown) {
     return new Response(JSON.stringify(body), {
@@ -53,158 +38,128 @@ serve(async (req) => {
         return new Response('ok', { headers: corsHeaders });
     }
 
-    console.log('--- [rebuild-plan] START ---');
-    console.log('[rebuild-plan] Checking authentication...');
-
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
-    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-        console.error('[rebuild-plan] No Authorization header provided');
-        return json(401, { error: 'Missing Authorization header' });
-    }
-
-    // 1. Create client with user's JWT
-    const userClient = createClient(supabaseUrl, anonKey, {
-        global: { headers: { Authorization: authHeader } },
-    });
-
-    // 2. Get user from JWT
-    const { data: { user }, error: userErr } = await userClient.auth.getUser();
-    if (userErr || !user) {
-        console.error('[rebuild-plan] Auth error:', userErr?.message);
-        return json(401, { error: 'Invalid JWT', details: userErr?.message });
-    }
-
-    // 3. Create admin client for sensitive operations
-    const supabase = createClient(supabaseUrl, serviceKey);
-
-    // 4. Check if user is an active agent
-    const { data: agent, error: agentErr } = await supabase
-        .from('agents')
-        .select('id, is_active, role')
-        .eq('profile_id', user.id)
-        .single();
-
-    if (agentErr || !agent || !agent.is_active) {
-        console.error('[rebuild-plan] Agent check failed:', agentErr?.message || 'Agent not found or inactive');
-        return json(403, { error: 'Forbidden: Agent not active' });
-    }
-
-    console.log(`[rebuild-plan] Authenticated as agent: ${agent.id} (Role: ${agent.role})`);
-
     try {
-        const body = await req.json();
-        const startDate: string = body.start_date; // YYYY-MM-DD
-        const days: number = body.days || 7;
+        console.log('--- [rebuild-plan] START ---');
 
-        if (!startDate) {
-            return json(400, { error: 'start_date is required (YYYY-MM-DD)' });
+        const supabaseUrl = Deno.env.get('SUPABASE_URL');
+        const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+
+        if (!supabaseUrl || !serviceRoleKey) {
+            console.error('[rebuild-plan] Missing environment variables');
+            return json(500, { error: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY" });
+        }
+
+        const admin = createClient(supabaseUrl, serviceRoleKey);
+
+        // 1. Authenticate the user calling this
+        const authHeader = req.headers.get('Authorization');
+        if (!authHeader) {
+            console.error('[rebuild-plan] No Authorization header');
+            return json(401, { error: 'Missing Authorization header' });
+        }
+
+        const { data: { user }, error: authErr } = await admin.auth.getUser(authHeader.replace('Bearer ', ''));
+        if (authErr || !user) {
+            console.error('[rebuild-plan] Invalid JWT:', authErr?.message);
+            return json(401, { error: 'Invalid JWT', details: authErr?.message });
+        }
+
+        console.log(`[rebuild-plan] User authenticated: ${user.id}`);
+
+        // 2. Parse request body
+        const { start_date, days = 7 } = await req.json().catch(() => ({}));
+        if (!start_date) {
+            return json(400, { error: "start_date is required (YYYY-MM-DD)" });
         }
 
         // Calculate end date
-        const start = new Date(startDate);
+        const start = new Date(start_date);
         const end = new Date(start);
         end.setDate(end.getDate() + days - 1);
         const endDate = end.toISOString().split('T')[0];
 
-        console.log(`[rebuild-plan] Planning ${startDate} to ${endDate} (${days} days)`);
+        console.log(`[rebuild-plan] Interval: ${start_date} to ${endDate}`);
 
-        // 1. Acquire lock (simple table-based lock)
-        const lockKey = `plan:${startDate}:${days}`;
-        const { error: lockErr } = await supabase
-            .from('planner_locks')
-            .insert({ lock_key: lockKey })
-            .select();
-
-        if (lockErr?.code === '23505') { // unique constraint violation
-            console.log('[rebuild-plan] Another rebuild is running for this interval');
-            return json(409, { error: 'Another rebuild is running for this interval' });
+        // 3. Acquire lock
+        const lockKey = `plan:${start_date}:${days}`;
+        const { error: lockErr } = await admin.from('planner_locks').insert({ lock_key: lockKey });
+        if (lockErr) {
+            if (lockErr.code === '23505') {
+                return json(409, { error: "Another rebuild is already running for this period" });
+            }
+            return json(500, { error: "Failed to acquire lock", details: lockErr });
         }
 
         try {
-            // 2. Delete existing plan items in range
+            // 4. Delete existing items
             console.log('[rebuild-plan] Deleting existing plan items...');
-            await supabase
+            const { error: delErr } = await admin
                 .from('plan_items')
                 .delete()
-                .gte('plan_date', startDate)
+                .gte('plan_date', start_date)
                 .lte('plan_date', endDate);
 
-            // 3. Get open work items (not yet planned)
-            console.log('[rebuild-plan] Fetching open work items...');
-            const { data: workItems, error: wiErr } = await supabase
-                .from('protocol_work_items')
-                .select('*')
-                .eq('status', 'open')
-                .order('created_at', { ascending: true });
-
-            if (wiErr) throw wiErr;
-
-            if (!workItems || workItems.length === 0) {
-                console.log('[rebuild-plan] No open work items to schedule');
-                return json(200, { success: true, scheduled: 0, message: 'No work items to schedule' });
+            if (delErr) {
+                console.error('[rebuild-plan] Delete failed:', delErr);
+                return json(403, { error: "Delete plan_items failed (RLS or Permission)", details: delErr });
             }
 
-            // Sort by: criticality (critical first) -> due_date -> priority -> created_at
+            // 5. Fetch Work Items
+            console.log('[rebuild-plan] Fetching work items...');
+            const { data: workItems, error: wiErr } = await admin
+                .from('protocol_work_items')
+                .select('*')
+                .eq('status', 'open');
+
+            if (wiErr) {
+                console.error('[rebuild-plan] Work items fetch failed:', wiErr);
+                return json(403, { error: "Fetch protocol_work_items failed", details: wiErr });
+            }
+
+            if (!workItems || workItems.length === 0) {
+                return json(200, { ok: true, scheduled: 0, message: "No open work items" });
+            }
+
+            // Sort: Critical -> Due Date -> Priority -> Created At
             workItems.sort((a, b) => {
-                // 1. Critical items first
                 const critA = a.criticality === 'critical' ? 1 : 0;
                 const critB = b.criticality === 'critical' ? 1 : 0;
                 if (critB !== critA) return critB - critA;
 
-                // 2. Earlier due_date first
                 const dueA = a.due_date ? new Date(a.due_date).getTime() : Infinity;
                 const dueB = b.due_date ? new Date(b.due_date).getTime() : Infinity;
                 if (dueA !== dueB) return dueA - dueB;
 
-                // 3. Higher priority first
                 const pa = PRIORITY_ORDER[a.priority] || 2;
                 const pb = PRIORITY_ORDER[b.priority] || 2;
                 if (pb !== pa) return pb - pa;
 
-                // 4. Earlier created_at first
                 return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
             });
 
-            console.log(`[rebuild-plan] ${workItems.length} work items to schedule`);
-
-            // 4. Get active technicians with skills
-            const { data: technicians, error: techErr } = await supabase
+            // 6. Fetch Technicians
+            console.log('[rebuild-plan] Fetching technicians...');
+            const { data: technicians, error: techErr } = await admin
                 .from('technicians')
-                .select(`
-          id,
-          name,
-          technician_skills (
-            skills (code)
-          )
-        `)
+                .select('id, name, technician_skills(skills(code))')
                 .eq('is_active', true);
 
-            if (techErr) throw techErr;
-
-            if (!technicians || technicians.length === 0) {
-                console.log('[rebuild-plan] No active technicians found');
-                return json(200, { success: true, scheduled: 0, message: 'No technicians available' });
+            if (techErr) {
+                console.error('[rebuild-plan] Technicians fetch failed:', techErr);
+                return json(403, { error: "Fetch technicians failed", details: techErr });
             }
 
-            // Map technicians with their skill codes
-            const techWithSkills: Technician[] = technicians.map((t: any) => ({
+            const techWithSkills = technicians.map((t: any) => ({
                 id: t.id,
                 name: t.name,
                 skills: (t.technician_skills || []).map((ts: any) => ts.skills?.code).filter(Boolean),
             }));
 
-            console.log(`[rebuild-plan] ${techWithSkills.length} technicians available`);
-
-            // 5. Build schedule per day
+            // 7. Allocation Algorithm
+            console.log('[rebuild-plan] Running allocation algorithm...');
             const planItems: any[] = [];
-            const scheduledWorkItemIds: string[] = [];
-
-            // Track allocations per technician per day
-            const allocations = new Map<string, SlotAllocation[]>(); // key: techId:date
+            const scheduledIds: string[] = [];
+            const allocations = new Map<string, SlotAllocation[]>();
 
             for (let d = 0; d < days; d++) {
                 const currentDate = new Date(start);
@@ -212,27 +167,21 @@ serve(async (req) => {
                 const dateStr = currentDate.toISOString().split('T')[0];
 
                 for (const wi of workItems) {
-                    if (scheduledWorkItemIds.includes(wi.id)) continue;
+                    if (scheduledIds.includes(wi.id)) continue;
 
-                    // Find compatible technician with available slot
                     const requiredSkills = wi.required_skill_codes || [];
 
                     for (const tech of techWithSkills) {
-                        // Check skill compatibility (technician has ALL required skills)
                         const hasSkills = requiredSkills.length === 0 ||
-                            requiredSkills.every(s => tech.skills.includes(s));
+                            requiredSkills.every((s: string) => tech.skills.includes(s));
 
                         if (!hasSkills) continue;
 
-                        // Get existing allocations for this tech on this day
                         const key = `${tech.id}:${dateStr}`;
                         const dayAllocs = allocations.get(key) || [];
-
-                        // Find first available slot
                         const slot = findAvailableSlot(dayAllocs, wi.estimated_minutes);
 
                         if (slot) {
-                            // Allocate
                             planItems.push({
                                 plan_date: dateStr,
                                 technician_id: tech.id,
@@ -241,100 +190,64 @@ serve(async (req) => {
                                 end_minute: slot.end_minute,
                                 sequence: dayAllocs.length,
                             });
-
                             dayAllocs.push(slot);
                             allocations.set(key, dayAllocs);
-                            scheduledWorkItemIds.push(wi.id);
-                            break; // Move to next work item
+                            scheduledIds.push(wi.id);
+                            break;
                         }
                     }
                 }
             }
 
-            console.log(`[rebuild-plan] Created ${planItems.length} plan items`);
-
-            // 6. Insert plan items
+            // 8. Bulk Insert & Update
             if (planItems.length > 0) {
-                const { error: insertErr } = await supabase
-                    .from('plan_items')
-                    .insert(planItems);
-
-                if (insertErr) throw insertErr;
-
-                // 7. Update work items status to 'planned'
-                const { error: updateErr } = await supabase
-                    .from('protocol_work_items')
-                    .update({ status: 'planned' })
-                    .in('id', scheduledWorkItemIds);
-
-                if (updateErr) {
-                    console.warn('[rebuild-plan] Failed to update work item status:', updateErr.message);
+                console.log(`[rebuild-plan] Inserting ${planItems.length} items...`);
+                const { error: insErr } = await admin.from('plan_items').insert(planItems);
+                if (insErr) {
+                    console.error('[rebuild-plan] Insert failed:', insErr);
+                    return json(403, { error: "Insert plan_items failed", details: insErr });
                 }
+
+                await admin.from('protocol_work_items')
+                    .update({ status: 'planned' })
+                    .in('id', scheduledIds);
             }
 
-            console.log('--- [rebuild-plan] SUCCESS ---');
-            return json(200, {
-                success: true,
-                scheduled: planItems.length,
-                remaining: workItems.length - scheduledWorkItemIds.length,
-                date_range: { start: startDate, end: endDate },
-            });
+            console.log('[rebuild-plan] SUCCESS');
+            return json(200, { ok: true, scheduled: planItems.length });
 
         } finally {
-            // Release lock
-            await supabase
-                .from('planner_locks')
-                .delete()
-                .eq('lock_key', lockKey);
+            await admin.from('planner_locks').delete().eq('lock_key', lockKey);
         }
 
     } catch (e) {
-        console.error('[rebuild-plan] Error:', (e as Error).message);
-        return json(500, { error: (e as Error).message });
+        console.error('[rebuild-plan] Catch:', e);
+        return json(500, { error: "Unhandled internal error", details: String(e) });
     }
 });
 
-// Find first available slot in the working hours
-function findAvailableSlot(
-    existingAllocations: SlotAllocation[],
-    durationMinutes: number
-): SlotAllocation | null {
-    // Sort existing by start time
-    const sorted = [...existingAllocations].sort((a, b) => a.start_minute - b.start_minute);
+function findAvailableSlot(existing: SlotAllocation[], duration: number): SlotAllocation | null {
+    const sorted = [...existing].sort((a, b) => a.start_minute - b.start_minute);
 
-    // Try morning slot
+    // Check morning
     let candidate = MORNING_START;
-    for (const alloc of sorted) {
-        if (alloc.end_minute <= MORNING_START) continue;
-        if (alloc.start_minute >= MORNING_END) break;
-
-        if (candidate + durationMinutes <= alloc.start_minute && candidate + durationMinutes <= MORNING_END) {
-            return { technician_id: '', start_minute: candidate, end_minute: candidate + durationMinutes };
-        }
-        candidate = Math.max(candidate, alloc.end_minute);
+    for (const a of sorted) {
+        if (a.end_minute <= MORNING_START) continue;
+        if (a.start_minute >= MORNING_END) break;
+        if (candidate + duration <= a.start_minute) return { technician_id: '', start_minute: candidate, end_minute: candidate + duration };
+        candidate = Math.max(candidate, a.end_minute);
     }
+    if (candidate + duration <= MORNING_END) return { technician_id: '', start_minute: candidate, end_minute: candidate + duration };
 
-    // Check if remaining morning time fits
-    if (candidate < MORNING_END && candidate + durationMinutes <= MORNING_END) {
-        return { technician_id: '', start_minute: candidate, end_minute: candidate + durationMinutes };
-    }
-
-    // Try afternoon slot
+    // Check afternoon
     candidate = AFTERNOON_START;
-    for (const alloc of sorted) {
-        if (alloc.end_minute <= AFTERNOON_START) continue;
-        if (alloc.start_minute >= AFTERNOON_END) break;
-
-        if (candidate + durationMinutes <= alloc.start_minute && candidate + durationMinutes <= AFTERNOON_END) {
-            return { technician_id: '', start_minute: candidate, end_minute: candidate + durationMinutes };
-        }
-        candidate = Math.max(candidate, alloc.end_minute);
+    for (const a of sorted) {
+        if (a.end_minute <= AFTERNOON_START) continue;
+        if (a.start_minute >= AFTERNOON_END) break;
+        if (candidate + duration <= a.start_minute) return { technician_id: '', start_minute: candidate, end_minute: candidate + duration };
+        candidate = Math.max(candidate, a.end_minute);
     }
+    if (candidate + duration <= AFTERNOON_END) return { technician_id: '', start_minute: candidate, end_minute: candidate + duration };
 
-    // Check if remaining afternoon time fits
-    if (candidate < AFTERNOON_END && candidate + durationMinutes <= AFTERNOON_END) {
-        return { technician_id: '', start_minute: candidate, end_minute: candidate + durationMinutes };
-    }
-
-    return null; // No slot available
+    return null;
 }
