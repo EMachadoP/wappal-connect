@@ -157,7 +157,7 @@ serve(async (req: Request) => {
     log(`[create-protocol] Buscando conversa ${conversation_id}...`);
     const { data: conv, error: convError } = await supabaseClient
       .from('conversations')
-      .select('id, active_condominium_id, contact_id, contacts(name)')
+      .select('id, active_condominium_id, active_condominium_confidence, contact_id, contacts(name)')
       .eq('id', conversation_id)
       .maybeSingle();
 
@@ -175,8 +175,12 @@ serve(async (req: Request) => {
     }
 
     if (!resolvedCondoId) {
-      resolvedCondoId = conv.active_condominium_id;
-      if (resolvedCondoId) source = 'conversation';
+      // Use active_condominium_id only if confidence >= 0.70 (reasonably confident)
+      const confidence = conv.active_condominium_confidence;
+      if (conv.active_condominium_id && (confidence === null || confidence >= 0.70)) {
+        resolvedCondoId = conv.active_condominium_id;
+        source = `conversation(conf=${confidence?.toFixed(2) || 'N/A'})`;
+      }
     }
 
     if (!resolvedCondoId && participant_id && isValidUUID(participant_id)) {
