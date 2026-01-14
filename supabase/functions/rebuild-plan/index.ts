@@ -11,6 +11,7 @@ const MORNING_START = 8 * 60;  // 08:00
 const MORNING_END = 12 * 60;   // 12:00
 const AFTERNOON_START = 13 * 60; // 13:00
 const AFTERNOON_END = 17 * 60;   // 17:00
+const DAILY_CAP = 360; // Max 6 hours per day per technician
 
 // Priority order (higher = more urgent)
 const PRIORITY_ORDER: Record<string, number> = {
@@ -39,7 +40,7 @@ serve(async (req) => {
     }
 
     try {
-        console.log('--- [rebuild-plan] START ---');
+        console.log('--- [rebuild-plan] START v5 ---');
 
         const supabaseUrl = Deno.env.get('SUPABASE_URL');
         const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
@@ -63,9 +64,13 @@ serve(async (req) => {
         if (!start_date) return json(400, { error: "start_date required" });
 
         const start = new Date(start_date);
-        const end = new Date(start);
-        end.setDate(end.getDate() + days - 1);
-        const endDate = end.toISOString().split('T')[0];
+        const dates: string[] = [];
+        for (let i = 0; i < days; i++) {
+            const d = new Date(start);
+            d.setDate(d.getDate() + i);
+            dates.push(d.toISOString().split('T')[0]);
+        }
+        const endDate = dates[dates.length - 1];
 
         // 3. Lock
         const lockKey = `plan:${start_date}:${days}`;
@@ -90,23 +95,23 @@ serve(async (req) => {
             if (wiErr) throw wiErr;
             if (!workItems || workItems.length === 0) return json(200, { scheduled: 0 });
 
-            // Sort: Critical -> Date -> Priority
+            // Sort: Critical -> Priority -> CreatedAt
             workItems.sort((a, b) => {
-                const critA = a.criticality === 'critical' ? 1 : 0;
-                const critB = b.criticality === 'critical' ? 1 : 0;
-                if (critB !== critA) return critB - critA;
-                const dueA = a.due_date ? new Date(a.due_date).getTime() : Infinity;
-                const dueB = b.due_date ? new Date(b.due_date).getTime() : Infinity;
-                if (dueA !== dueB) return dueA - dueB;
+                const aCrit = (a.criticality === 'critical' || a.sla_business_days === 0) ? 0 : 1;
+                const bCrit = (b.criticality === 'critical' || b.sla_business_days === 0) ? 0 : 1;
+                if (aCrit !== bCrit) return aCrit - bCrit;
+
                 const pa = PRIORITY_ORDER[a.priority] || 2;
                 const pb = PRIORITY_ORDER[b.priority] || 2;
-                return pb - pa;
+                if (pa !== pb) return pb - pa;
+
+                return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
             });
 
             // 6. Load Techs
             const { data: technicians, error: techErr } = await admin
                 .from('technicians')
-                .select('id, name, dispatch_priority, technician_skills(skills(code))')
+                .select('id, name, dispatch_priority, is_wildcard, technician_skills(skills(code))')
                 .eq('is_active', true);
 
             if (techErr) throw techErr;
@@ -114,6 +119,7 @@ serve(async (req) => {
             const techWithSkills = technicians.map((t: any) => ({
                 id: t.id,
                 name: t.name,
+                is_wildcard: t.is_wildcard || false,
                 dispatch_priority: t.dispatch_priority || 100,
                 skills: (t.technician_skills || []).map((ts: any) => ts.skills?.code).filter(Boolean),
             }));
@@ -122,33 +128,40 @@ serve(async (req) => {
             const planItems: any[] = [];
             const scheduledIds: string[] = [];
             const allocations = new Map<string, SlotAllocation[]>();
+            const loadByTechDay = new Map<string, number>();
 
-            for (let d = 0; d < days; d++) {
-                const currentDate = new Date(start);
-                currentDate.setDate(currentDate.getDate() + d);
-                const dateStr = currentDate.toISOString().split('T')[0];
+            const getLoad = (techId: string, dateStr: string) => loadByTechDay.get(`${techId}:${dateStr}`) || 0;
 
-                for (const wi of workItems) {
-                    if (scheduledIds.includes(wi.id)) continue;
+            for (const wi of workItems) {
+                const duration = wi.estimated_minutes || 60;
+                const isCritical = wi.criticality === 'critical' || wi.sla_business_days === 0;
 
+                // Heuristic: non-critical items prefer D+1 and D+2 before D0
+                const preferredDates = isCritical
+                    ? dates
+                    : [...dates.slice(1, 3), dates[0], ...dates.slice(3)];
+
+                let allocated = false;
+                for (const dateStr of preferredDates) {
                     const reqPeople = wi.required_people || 1;
                     const reqSkills = wi.required_skill_codes || [];
 
-                    // Filter and Sort compatible techs for this day
+                    // Filter and Score techs for this day
                     const compatibleTechs = techWithSkills
                         .filter(t => reqSkills.length === 0 || reqSkills.every(s => t.skills.includes(s)))
-                        .sort((a, b) => {
-                            if (a.dispatch_priority !== b.dispatch_priority) return a.dispatch_priority - b.dispatch_priority;
-                            const loadA = (allocations.get(`${a.id}:${dateStr}`) || []).reduce((sum, s) => sum + (s.end_minute - s.start_minute), 0);
-                            const loadB = (allocations.get(`${b.id}:${dateStr}`) || []).reduce((sum, s) => sum + (s.end_minute - s.start_minute), 0);
-                            return loadA - loadB;
-                        });
+                        .filter(t => getLoad(t.id, dateStr) + duration <= DAILY_CAP)
+                        .map(t => {
+                            const wildcardPenalty = (t.is_wildcard || t.dispatch_priority >= 300) ? 100000 : 0;
+                            const priorityPenalty = (t.dispatch_priority || 100);
+                            const currentLoad = getLoad(t.id, dateStr);
+                            return { ...t, score: wildcardPenalty + priorityPenalty + currentLoad };
+                        })
+                        .sort((a, b) => a.score - b.score);
 
                     if (compatibleTechs.length < reqPeople) continue;
 
                     // Match Slot
                     let commonSlot = null;
-                    const duration = wi.estimated_minutes || 60;
                     for (let startMin = MORNING_START; startMin <= AFTERNOON_END - duration; startMin += 15) {
                         if (startMin < MORNING_END && startMin + duration > MORNING_END) continue;
                         if (startMin >= MORNING_END && startMin < AFTERNOON_START) continue;
@@ -192,9 +205,12 @@ serve(async (req) => {
                                 end_minute: commonSlot.endMin
                             });
                             allocations.set(key, dayAllocs);
+                            loadByTechDay.set(key, getLoad(tech.id, dateStr) + duration);
                         }
                         scheduledIds.push(wi.id);
                         await admin.from('protocol_work_items').update({ assignment_group_id: groupId }).eq('id', wi.id);
+                        allocated = true;
+                        break;
                     }
                 }
             }
@@ -211,6 +227,7 @@ serve(async (req) => {
             await admin.from('planner_locks').delete().eq('lock_key', lockKey);
         }
     } catch (e) {
+        console.error('[rebuild-plan] Error:', e);
         return json(500, { error: (e as Error).message });
     }
 });
