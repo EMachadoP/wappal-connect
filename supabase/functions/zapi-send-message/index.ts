@@ -52,42 +52,44 @@ serve(async (req) => {
     }
 
     const json = await req.json();
-    ({ conversation_id, content } = json);
+    let { conversation_id, content, chatId, isGroup } = json;
     const { message_type, media_url, sender_name: overrideSenderName } = json;
 
     if (overrideSenderName) senderName = overrideSenderName;
 
-    const { data: conv } = await supabaseAdmin
-      .from('conversations')
-      .select('*, contacts(*)')
-      .eq('id', conversation_id)
-      .single();
+    let conv: any = null;
+    let recipient = chatId;
 
-    if (!conv) throw new Error('Conversa não localizada no banco');
+    if (conversation_id) {
+      const { data: foundConv } = await supabaseAdmin
+        .from('conversations')
+        .select('*, contacts(*)')
+        .eq('id', conversation_id)
+        .single();
+
+      conv = foundConv;
+      if (!conv) throw new Error('Conversa não localizada no banco');
+
+      const contact = conv.contacts;
+      if (!recipient) {
+        recipient = conv.chat_id || contact?.chat_lid || contact?.phone || contact?.lid;
+      }
+    }
+
+    if (!recipient) throw new Error('O destinatário não possui um identificador válido (chatId ou conversation_id)');
 
     // Credenciais - Tenta Env Var primeiro, depois banco
-    const { data: settings } = await supabaseAdmin.from('zapi_settings').select('*').limit(1).single();
+    const { data: zapiSettings } = await supabaseAdmin.from('zapi_settings').select('*').limit(1).single();
 
     // Prioridade: Env Var > Banco
-    const instanceId = Deno.env.get('ZAPI_INSTANCE_ID') || settings?.zapi_instance_id;
-    const token = Deno.env.get('ZAPI_TOKEN') || settings?.zapi_token;
-    const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN') || settings?.zapi_security_token;
+    const instanceId = Deno.env.get('ZAPI_INSTANCE_ID') || zapiSettings?.zapi_instance_id;
+    const token = Deno.env.get('ZAPI_TOKEN') || zapiSettings?.zapi_token;
+    const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN') || zapiSettings?.zapi_security_token;
 
     if (!instanceId || !token) {
       console.error('[Send Message] Erro: Faltam credenciais ZAPI (Instance ou Token)');
       throw new Error('Configurações de WhatsApp incompletas no servidor');
     }
-
-    // Determinar destinatário
-    const contact = conv.contacts;
-    let recipient = conv.chat_id;
-
-    // Fallbacks para garantir envio
-    if (!recipient && contact) {
-      recipient = contact.chat_lid || contact.phone || contact.lid;
-    }
-
-    if (!recipient) throw new Error('O destinatário não possui um identificador válido (Phone/LID)');
 
     // Z-API FORMAT RESTORATION
     // Our DB stores normalized IDs (e.g., "5511999999999")

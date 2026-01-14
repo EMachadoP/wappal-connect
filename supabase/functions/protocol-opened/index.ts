@@ -221,15 +221,19 @@ serve(async (req) => {
     const formattedCondominiumName = titleCasePtBR(condominium.name) || "Não Identificado";
     const formattedRequesterName = protocol.requester_name || contact.name || "Não identificado";
     const formattedRequesterRole = translateRole(protocol.requester_role || 'morador');
-    const formattedCategory = translateCategory(protocol.category || "operational");
-    const formattedPriority = translatePriority(protocol.priority || "normal");
+    const category = protocol.category || "operational";
+    const priority = protocol.priority || "normal";
+    const formattedCategory = translateCategory(category);
+    const formattedPriority = translatePriority(priority);
     const summary = protocol.summary || "Sem descrição";
     const conversation_id = conversation.id;
     const contact_id = conversation.contact_id;
-    const condominium_id = conversation.condominium_id;
+    const condominium_id = conversation.active_condominium_id || protocol.condominium_id;
     const apartment = protocol.apartment;
 
     let protocolId = protocol.id;
+    let whatsappMessageId: string | null = null;
+    let asanaTaskGid: string | null = null;
 
     // Check if protocol already has Asana task (idempotency)
     if (protocol.asana_task_gid) {
@@ -257,76 +261,6 @@ serve(async (req) => {
       });
     }
 
-    let protocolId = protocol_id;
-    let whatsappMessageId: string | null = null;
-    let asanaTaskGid: string | null = null;
-
-    // Formatar dados para exibição
-    // Priorizar entity do participante, depois tentar extrair do summary
-    let extractedCondominiumName = condominium_name;
-
-    // 1. Tentar pegar do participante identificado
-    if (participantEntity?.entities?.name) {
-      extractedCondominiumName = participantEntity.entities.name;
-      console.log('[Protocol] Using condominium from participant entity:', extractedCondominiumName);
-    }
-    // 2. Tratar string vazia como null e tentar extrair do summary
-    else if (!extractedCondominiumName || extractedCondominiumName.trim() === '') {
-      if (summary) {
-        // Procurar padrões como "Condomínio X", "Cond. X", "Edifício X", "Ed. X"
-        // Captura até encontrar ponto final ou fim de linha
-        const condMatch = summary.match(/(?:Condomínio|Cond\.|Edifício|Ed\.|Prédio)\s+([A-Za-zÀ-ÿ0-9\s]+?)(?:\.|$)/i);
-        if (condMatch) {
-          extractedCondominiumName = condMatch[1].trim();
-          console.log('[Protocol] Extracted condominium name from summary:', extractedCondominiumName);
-        }
-      }
-    }
-
-    const formattedCondominiumName = titleCasePtBR(extractedCondominiumName) || "Não Identificado";
-    const formattedRequesterName = requester_name || "Não identificado";
-    const formattedRequesterRole = translateRole(requester_role);
-    const formattedCategory = translateCategory(category || "operational");
-    const formattedPriority = translatePriority(priority || "normal");
-
-    // Create protocol record if it doesn't exist
-    if (!protocolId && !existingProtocol) {
-      const insertData: Record<string, unknown> = {
-        protocol_code,
-        conversation_id,
-        contact_id,
-        condominium_id,
-        status: "open",
-        priority: priority || "normal",
-        category: category || "operational",
-        summary,
-        requester_name: formattedRequesterName,
-        requester_role: formattedRequesterRole,
-      };
-
-      // Adicionar campos de auditoria se fornecidos
-      if (created_by_type) insertData.created_by_type = created_by_type;
-      if (created_by_agent_id) insertData.created_by_agent_id = created_by_agent_id;
-      if (customer_text) insertData.customer_text = customer_text;
-      if (ai_summary) insertData.ai_summary = ai_summary;
-      if (participant_id) insertData.participant_id = participant_id;
-
-      const { data: newProtocol, error: createError } = await supabase
-        .from("protocols")
-        .insert(insertData)
-        .select()
-        .single();
-
-      if (createError) {
-        console.error("Error creating protocol:", createError);
-        throw createError;
-      }
-      protocolId = newProtocol.id;
-      console.log("Created protocol:", protocolId);
-    } else if (existingProtocol) {
-      protocolId = existingProtocol.id;
-    }
-
     // Calculate due date - always same day or next business day if weekend/holiday
     const dueDate = formatDateForAsana(getBusinessDay(new Date()));
 
@@ -344,7 +278,6 @@ serve(async (req) => {
         if (zapiInstanceId && zapiToken) {
           // Format date for display
           const displayDate = new Date().toLocaleDateString('pt-BR');
-          const yearMonthDay = protocol_code.split('-')[0]; // Get YYYYMM from protocol code
 
           // Priority emoji for group message
           const priorityEmoji = priority === 'critical' || priority === 'high' ? '🔴 CRÍTICO' : '🟢 Normal';
@@ -362,22 +295,20 @@ ${priorityEmoji} *Prioridade:* ${priority || 'normal'}
 ➡️ *Para encerrar, responda:*
 G7-${protocol_code} - Resolvido`;
 
-          const zapiUrl = `https://api.z-api.io/instances/${zapiInstanceId}/token/${zapiToken}/send-text`;
+          console.log(`[protocol-opened] Sending group message to ${settings.whatsapp_group_id}...`);
 
-          const response = await fetch(zapiUrl, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Client-Token": zapiClientToken,
+          const zapiResponse = await supabase.functions.invoke("zapi-send-message", {
+            body: {
+              chatId: settings.whatsapp_group_id,
+              content: whatsappMessage,
+              message_type: "text",
+              isGroup: true,
+              sender_name: "G7",
             },
-            body: JSON.stringify({
-              phone: settings.whatsapp_group_id,
-              message: whatsappMessage,
-            }),
           });
 
-          const zapiResult = await response.json();
-          console.log("WhatsApp group message sent:", zapiResult);
+          const zapiResult = zapiResponse.data;
+          console.log("WhatsApp group message sent via wrapper:", zapiResult);
 
           if (zapiResult.zapiMessageId || zapiResult.messageId) {
             whatsappMessageId = zapiResult.zapiMessageId || zapiResult.messageId;
