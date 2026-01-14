@@ -58,7 +58,7 @@ async function executeCreateProtocol(
   // 1. Deep Condominium Lookup (Critical for Asana/G7)
   const { data: conv, error: convError } = await supabase
     .from('conversations')
-    .select('contact_id, active_condominium_id, contacts(name)')
+    .select('contact_id, condominium_id, active_condominium_id, contacts(name), condominiums(name)')
     .eq('id', conversationId)
     .single();
 
@@ -72,7 +72,7 @@ async function executeCreateProtocol(
     throw new Error(`Conversation not found: ${conversationId}`);
   }
 
-  let condominiumId = conv?.active_condominium_id;
+  let condominiumId = (conv as any)?.condominium_id || (conv as any)?.active_condominium_id;
 
   if (!condominiumId) {
     const { data: part } = await supabase

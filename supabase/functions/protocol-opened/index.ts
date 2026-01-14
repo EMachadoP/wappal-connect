@@ -153,58 +153,61 @@ serve(async (req) => {
   try {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const {
-      protocol_id,
-      protocol_code,
-      priority,
-      category,
-      summary,
-      condominium_name,
-      requester_name,
-      requester_role,
-      conversation_id,
-      contact_id,
-      condominium_id,
-      apartment,  // Added apartment parameter
-      // Novos campos de auditoria
-      created_by_type,
-      created_by_agent_id,
-      customer_text,
-      ai_summary,
-      participant_id,
-    } = await req.json();
+    const { protocol_id, protocol_code, notify_group } = await req.json();
 
-    console.log("Protocol opened:", { protocol_code, priority, category, condominium_name, requester_name, participant_id });
+    console.log('Protocol opened DB-first:', { protocol_code });
 
-    // Fetch participant with entity if participant_id is provided
-    let participantEntity: any = null;
-    if (participant_id) {
-      const { data: participantData } = await supabase
-        .from('participants')
-        .select('*, entities(name)')
-        .eq('id', participant_id)
-        .maybeSingle();
-
-      if (participantData) {
-        participantEntity = participantData;
-        console.log('[Protocol] Participant entity:', participantEntity?.entities?.name);
-      }
-    }
-
-    // Check if protocol already has Asana task (idempotency)
-    const { data: existingProtocol } = await supabase
-      .from("protocols")
-      .select("id, asana_task_gid, whatsapp_group_message_id")
-      .eq("protocol_code", protocol_code)
+    // DB-FIRST: Load all data from database
+    const { data: protocolData } = await supabase
+      .from('protocols')
+      .select(`
+        *,
+        conversations (
+          id,
+          contact_id,
+          condominium_id,
+          condominiums (name),
+          contacts (name, phone, chat_lid)
+        )
+      `)
+      .eq('protocol_code', protocol_code)
       .maybeSingle();
 
-    if (existingProtocol?.asana_task_gid) {
-      console.log("Protocol already has Asana task, skipping:", existingProtocol.asana_task_gid);
+    if (!protocolData) {
+      console.error('Protocol not found:', protocol_code);
+      return new Response(JSON.stringify({ error: 'Protocol not found' }), {
+        status: 404,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // Extract data with fallbacks
+    const protocol = protocolData;
+    const conversation = (protocol.conversations as any) ?? {};
+    const condominium = ((conversation.condominiums as any) ?? {}) as { name?: string };
+    const contact = ((conversation.contacts as any) ?? {}) as { name?: string; phone?: string; chat_lid?: string };
+
+    const formattedCondominiumName = titleCasePtBR(condominium.name) || "Não Identificado";
+    const formattedRequesterName = protocol.requester_name || contact.name || "Não identificado";
+    const formattedRequesterRole = translateRole(protocol.requester_role || 'morador');
+    const formattedCategory = translateCategory(protocol.category || "operational");
+    const formattedPriority = translatePriority(protocol.priority || "normal");
+    const summary = protocol.summary || "Sem descrição";
+    const conversation_id = conversation.id;
+    const contact_id = conversation.contact_id;
+    const condominium_id = conversation.condominium_id;
+    const apartment = protocol.apartment;
+
+    let protocolId = protocol.id;
+
+    // Check if protocol already has Asana task (idempotency)
+    if (protocol.asana_task_gid) {
+      console.log("Protocol already has Asana task, skipping:", protocol.asana_task_gid);
       return new Response(
         JSON.stringify({
           success: true,
           skipped: true,
-          asana_task_gid: existingProtocol.asana_task_gid,
+          asana_task_gid: protocol.asana_task_gid,
         }),
         {
           headers: { ...corsHeaders, "Content-Type": "application/json" },

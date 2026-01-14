@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { isEmployeeSender } from "../_shared/employee.ts";
+import { parseAndExtract } from "../_shared/parse.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -246,7 +248,51 @@ serve(async (req) => {
 
     if (msgError) throw new Error(`Falha ao salvar mensagem: ${msgError.message}`);
 
-    // 6.5. Store media files (audio/video) in Supabase Storage for permanent URLs
+    // 6.5. Employee Command Detection
+    if (!fromMe && msgResult?.id && msgType === 'text') {
+      const employee = await isEmployeeSender(supabase, payload);
+
+      if (employee.isEmployee) {
+        console.log('[Webhook] Employee detected:', employee.profileName);
+
+        const parsed = parseAndExtract(content);
+
+        if (parsed.intent === 'create_protocol') {
+          console.log('[Webhook] Employee command detected, creating protocol...');
+
+          try {
+            await fetch(`${supabaseUrl}/functions/v1/create-protocol`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${supabaseServiceKey}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                conversation_id: conv.id,
+                summary: parsed.summary,
+                priority: parsed.priority || 'normal',
+                category: parsed.category || 'operational',
+                requester_name: `G7 Serv (${employee.profileName})`,
+                requester_role: 'Funcionário',
+                created_by_agent_id: employee.profileId,
+                created_by_type: 'agent',
+                force_new: parsed.forceNew ?? true,
+                notify_group: true,
+                notify_client: false,
+                source_message_id: msgResult.id
+              })
+            });
+            console.log('[Webhook] Employee protocol created successfully');
+          } catch (err) {
+            console.error('[Webhook] Employee protocol creation failed:', err);
+          }
+
+          return new Response(JSON.stringify({ success: true, employee_command: true }), { headers: corsHeaders });
+        }
+      }
+    }
+
+    // 6.6. Store media files (audio/video) in Supabase Storage for permanent URLs
     if (msgResult && (msgType === 'audio' || msgType === 'video')) {
       const mediaUrl = payload.audioUrl || payload.videoUrl ||
         payload.audio?.url || payload.video?.url ||

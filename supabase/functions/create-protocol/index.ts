@@ -129,21 +129,23 @@ serve(async (req: Request) => {
       throw new Error('Corpo da requisição não é um JSON válido.');
     }
 
-    let {
-      conversation_id,
-      condominium_id,
-      participant_id,
-      contact_id,
-      category,
-      priority,
-      summary,
-      created_by_agent_id,
-      notify_group,
-      requester_name,
-      requester_role,
-      apartment,
-      template_id
-    } = body;
+    const conversation_id = body.conversation_id;
+    const condominium_id = body.condominium_id;
+    const participant_id = body.participant_id;
+    const contact_id = body.contact_id;
+    const category = body.category;
+    const priority = body.priority;
+    const summary = body.summary;
+    const created_by_agent_id = body.created_by_agent_id ?? null;
+    const notify_group = body.notify_group ?? true;
+    const requester_name = body.requester_name;
+    const requester_role = body.requester_role;
+    const apartment = body.apartment;
+    const template_id = body.template_id;
+    const created_by_type = body.created_by_type ?? 'ai';
+    const force_new = body.force_new ?? false;
+    const notify_client = body.notify_client ?? true;
+    const source_message_id = body.source_message_id ?? null;
 
     if (isValidUUID(conversation_id)) conversation_id_for_log = conversation_id;
 
@@ -210,27 +212,29 @@ serve(async (req: Request) => {
       }
     }
 
-    // IDEMPOTENCY - Only block if there's a RECENT open/draft protocol (prevent double-click, not block new issues)
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-    const { data: existingProtocol } = await supabaseClient
-      .from('protocols')
-      .select('*')
-      .eq('conversation_id', conversation_id)
-      .in('status', ['open', 'draft'])
-      .gte('created_at', fiveMinutesAgo)
-      .maybeSingle();
+    // IDEMPOTENCY - Only block if force_new=false AND recent draft exists
+    if (!force_new) {
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      const { data: existingProtocol } = await supabaseClient
+        .from('protocols')
+        .select('*')
+        .eq('conversation_id', conversation_id)
+        .in('status', ['open', 'draft'])
+        .gte('created_at', fiveMinutesAgo)
+        .maybeSingle();
 
-    if (existingProtocol) {
-      log(`[create-protocol] Recent protocol exists (${existingProtocol.protocol_code}), returning it.`);
-      return new Response(JSON.stringify({
-        success: true,
-        already_existed: true,
-        protocol_code: existingProtocol.protocol_code,
-        protocol: existingProtocol
-      }), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
+      if (existingProtocol) {
+        log(`[create-protocol] Recent protocol exists (${existingProtocol.protocol_code}), returning it.`);
+        return new Response(JSON.stringify({
+          success: true,
+          already_existed: true,
+          protocol_code: existingProtocol.protocol_code,
+          protocol: existingProtocol
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
     }
 
     // Code Gen
@@ -372,6 +376,14 @@ serve(async (req: Request) => {
         headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ protocol_id: protocolRecord.id, protocol_code: protocolCode, notify_group: true })
       }).catch(e => log(`Notify failed: ${e.message}`));
+    }
+
+    if (notify_client && conversation_id) {
+      await fetch(`${supabaseUrl}/functions/v1/protocol-client`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ protocol_id: protocolRecord.id, protocol_code: protocolCode })
+      }).catch(e => log(`Notify client failed: ${e.message}`));
     }
 
     return new Response(JSON.stringify({ success: true, protocol_code: protocolCode, protocol: protocolRecord }), {
