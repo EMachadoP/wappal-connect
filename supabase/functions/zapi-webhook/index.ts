@@ -61,27 +61,36 @@ serve(async (req) => {
     const getChatKey = (id: string | null | undefined, isGrp: boolean) => {
       if (!id) return id;
       const clean = id.trim().toLowerCase();
-      if (isGrp || clean.endsWith('@g.us')) return clean;
+
+      if (isGrp) {
+        // Garantir sufixo @g.us para grupos
+        const base = clean.includes('@') ? clean.split('@')[0] : clean;
+        return `g:${base}@g.us`;
+      }
 
       const numeric = clean.split('@')[0].replace(/\D/g, '');
       if (!numeric) return numeric;
 
-      if (numeric.length === 10 || numeric.length === 11) return '55' + numeric;
-      if ((numeric.length === 12 || numeric.length === 13) && numeric.startsWith('55')) return numeric;
+      let finalPhone = numeric;
+      if (numeric.length === 10 || numeric.length === 11) finalPhone = '55' + numeric;
 
-      return numeric;
+      return `u:${finalPhone}`;
     };
 
-    const normalizeLid = (id: string | null | undefined) => {
+    const normalizeLid = (id: string | null | undefined, isGrp: boolean) => {
       if (!id) return id;
       let normalized = id.trim().toLowerCase();
+      if (isGrp) {
+        const base = normalized.includes('@') ? normalized.split('@')[0] : normalized;
+        return `${base}@g.us`;
+      }
       if (normalized.endsWith('@lid') || normalized.endsWith('@g.us')) return normalized;
       if (normalized.includes('@')) normalized = normalized.split('@')[0];
       return normalized;
     };
 
-    let chatLid = normalizeLid(payload.phone || payload.senderPhone || payload.chatLid || payload.chatId || payload.chat?.chatId);
-    const contactLid = normalizeLid(payload.phone || payload.senderPhone || payload.contact?.phone || payload.contact?.lid || payload.lid || payload.participantLid || (isGroup ? null : chatLid));
+    let chatLid = normalizeLid(payload.phone || payload.senderPhone || payload.chatLid || payload.chatId || payload.chat?.chatId, isGroup);
+    const contactLid = normalizeLid(payload.phone || payload.senderPhone || payload.contact?.phone || payload.contact?.lid || payload.lid || payload.participantLid || (isGroup ? null : chatLid), isGroup);
 
     if (!chatLid && contactLid && !isGroup) chatLid = contactLid;
     if (!contactLid || !chatLid) throw new Error(`Identificadores ausentes: contact=${contactLid}, chat=${chatLid}`);
@@ -335,7 +344,14 @@ serve(async (req) => {
       await fetch(`${supabaseUrl}/functions/v1/group-resolution-handler`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message_id: msgResult.id, conversation_id: conv.id, message_text: content, sender_phone: contactLid, sender_name: senderName || 'Desconhecido' }),
+        body: JSON.stringify({
+          message_id: msgResult.id,
+          conversation_id: conv.id,
+          message_text: content,
+          group_id: chatLid,
+          sender_phone: contactLid,
+          sender_name: senderName || 'Desconhecido'
+        }),
       });
     }
 

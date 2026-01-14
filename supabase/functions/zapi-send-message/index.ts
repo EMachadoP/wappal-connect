@@ -112,15 +112,19 @@ serve(async (req: Request) => {
     const getChatKey = (id: string | null | undefined, isGrp: boolean) => {
       if (!id) return id;
       const clean = id.trim().toLowerCase();
-      if (isGrp || clean.endsWith('@g.us')) return clean;
+
+      if (isGrp || clean.endsWith('@g.us')) {
+        const base = clean.split('@')[0];
+        return `g:${base}@g.us`;
+      }
 
       const numeric = clean.split('@')[0].replace(/\D/g, '');
       if (!numeric) return numeric;
 
-      if (numeric.length === 10 || numeric.length === 11) return '55' + numeric;
-      if ((numeric.length === 12 || numeric.length === 13) && numeric.startsWith('55')) return numeric;
+      let finalPhone = numeric;
+      if (numeric.length === 10 || numeric.length === 11) finalPhone = '55' + numeric;
 
-      return numeric;
+      return `u:${finalPhone}`;
     };
 
     const formattedRecipient = formatForZAPI(recipient, !!isGroup);

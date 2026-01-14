@@ -427,6 +427,10 @@ serve(async (req: Request) => {
     // Finalize
     await supabaseClient.from('conversations').update({ protocol: protocolCode }).eq('id', conversation_id);
 
+    // Final flags
+    let groupNotified = false;
+    let clientNotified = false;
+
     // Notify group (tech)
     if (notify_group) {
       log(`[create-protocol] Calling protocol-opened for ${protocolCode}...`);
@@ -440,17 +444,12 @@ serve(async (req: Request) => {
           },
           body: JSON.stringify({ protocol_id: protocolRecord.id, protocol_code: protocolCode, notify_group: true })
         });
+        if (groupResponse.ok) groupNotified = true;
         const groupText = await groupResponse.text();
         log(`[create-protocol] protocol-opened status: ${groupResponse.status}, body: ${groupText}`);
-        if (!groupResponse.ok) {
-          log(`[create-protocol] ERROR: protocol-opened failed with status ${groupResponse.status}`);
-        }
       } catch (groupError: any) {
         log(`[create-protocol] ERROR calling protocol-opened: ${groupError.message}`);
-        console.error('[create-protocol] protocol-opened error:', groupError);
       }
-    } else {
-      log(`[create-protocol] Skipping protocol-opened (notify_group=false)`);
     }
 
     // Notify client
@@ -466,20 +465,22 @@ serve(async (req: Request) => {
           },
           body: JSON.stringify({ protocol_id: protocolRecord.id, protocol_code: protocolCode })
         });
+        if (clientResponse.ok) clientNotified = true;
         const clientText = await clientResponse.text();
         log(`[create-protocol] protocol-client status: ${clientResponse.status}, body: ${clientText}`);
-        if (!clientResponse.ok) {
-          log(`[create-protocol] ERROR: protocol-client failed with status ${clientResponse.status}`);
-        }
       } catch (clientError: any) {
         log(`[create-protocol] ERROR calling protocol-client: ${clientError.message}`);
-        console.error('[create-protocol] protocol-client error:', clientError);
       }
-    } else {
-      log(`[create-protocol] Skipping protocol-client (notify_client=${notify_client}, conversation_id=${conversation_id})`);
     }
 
-    return new Response(JSON.stringify({ success: true, protocol_code: protocolCode, protocol: protocolRecord }), {
+    return new Response(JSON.stringify({
+      success: true,
+      protocol_created: true,
+      group_notified: groupNotified,
+      client_notified: clientNotified,
+      protocol_code: protocolCode,
+      protocol: protocolRecord
+    }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
