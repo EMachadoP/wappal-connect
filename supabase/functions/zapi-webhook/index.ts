@@ -257,6 +257,27 @@ serve(async (req) => {
 
         const parsed = parseAndExtract(content);
 
+        if (parsed.intent === 'needs_more_info') {
+          console.log('[Webhook] Employee command incomplete, requesting more info');
+
+          // Send helpful response
+          await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${supabaseServiceKey}`
+            },
+            body: JSON.stringify({
+              conversation_id: conv.id,
+              content: `📋 Oi, ${employee.profileName}!\n\n${parsed.hint}`,
+              message_type: 'text',
+              sender_name: 'Sistema'
+            })
+          }).catch(err => console.error('[Webhook] Failed to send help message:', err));
+
+          return new Response(JSON.stringify({ success: true, needs_more_info: true }), { headers: corsHeaders });
+        }
+
         if (parsed.intent === 'create_protocol') {
           console.log('[Webhook] Employee command detected, creating protocol...');
 
@@ -269,6 +290,7 @@ serve(async (req) => {
               },
               body: JSON.stringify({
                 conversation_id: conv.id,
+                condominium_name: parsed.condominiumName,
                 summary: parsed.summary,
                 priority: parsed.priority || 'normal',
                 category: parsed.category || 'operational',

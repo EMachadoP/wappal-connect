@@ -137,15 +137,49 @@ serve(async (req: Request) => {
     const priority = body.priority;
     const summary = body.summary;
     const created_by_agent_id = body.created_by_agent_id ?? null;
-    const notify_group = body.notify_group ?? true;
+    // DEFAULTS: If frontend didn't send flags, assume TRUE (manual protocol should notify)
+    const notify_group = typeof body.notify_group === 'boolean' ? body.notify_group : true;
+    const notify_client = typeof body.notify_client === 'boolean' ? body.notify_client : true;
+    const force_new = typeof body.force_new === 'boolean' ? body.force_new : true;
+
     const requester_name = body.requester_name;
     const requester_role = body.requester_role;
     const apartment = body.apartment;
     const template_id = body.template_id;
+    const condominium_name = body.condominium_name ?? null;
     const created_by_type = body.created_by_type ?? 'ai';
-    const force_new = body.force_new ?? false;
-    const notify_client = body.notify_client ?? true;
     const source_message_id = body.source_message_id ?? null;
+
+    log(`[create-protocol] Flags: notify_group=${notify_group}, notify_client=${notify_client}, force_new=${force_new}`);
+
+    // Helper: Resolve condominium ID by name
+    async function resolveCondominiumIdByName(name: string | null): Promise<string | null | { ambiguous: true; options: any[] }> {
+      if (!name || name.trim().length < 3) return null;
+
+      const q = name.trim();
+
+      // 1) Exact match (case-insensitive)
+      let { data } = await supabaseClient
+        .from("condominiums")
+        .select("id, name")
+        .ilike("name", q)
+        .limit(5);
+
+      // 2) Fallback: contains
+      if (!data || data.length === 0) {
+        ({ data } = await supabaseClient
+          .from("condominiums")
+          .select("id, name")
+          .ilike("name", `%${q}%`)
+          .limit(5));
+      }
+
+      if (!data || data.length === 0) return null;
+      if (data.length === 1) return data[0].id;
+
+      // Multiple matches - ambiguous
+      return { ambiguous: true, options: data.slice(0, 5) };
+    }
 
     if (isValidUUID(conversation_id)) conversation_id_for_log = conversation_id;
 
@@ -178,10 +212,33 @@ serve(async (req: Request) => {
 
     if (!resolvedCondoId) {
       // Use active_condominium_id only if confidence >= 0.70 (reasonably confident)
-      const confidence = conv.active_condominium_confidence;
-      if (conv.active_condominium_id && (confidence === null || confidence >= 0.70)) {
+      if (conv.active_condominium_id && (conv.active_condominium_confidence ?? 0) >= 0.70) {
         resolvedCondoId = conv.active_condominium_id;
-        source = `conversation(conf=${confidence?.toFixed(2) || 'N/A'})`;
+        source = 'active_condominium_id';
+        log(`[create-protocol] Using active_condominium_id (conf ${conv.active_condominium_confidence}): ${resolvedCondoId}`);
+      }
+    }
+
+    // Try resolving by name if still no ID
+    if (!resolvedCondoId && condominium_name) {
+      log(`[create-protocol] Attempting to resolve condominium by name: "${condominium_name}"`);
+      const nameResolution = await resolveCondominiumIdByName(condominium_name);
+
+      if (nameResolution && typeof nameResolution === 'object' && 'ambiguous' in nameResolution) {
+        // Multiple condominiums match - cannot proceed
+        const options = nameResolution.options.map((o: any) => o.name).join(', ');
+        log(`[create-protocol] Ambiguous condominium name. Options: ${options}`);
+        return new Response(JSON.stringify({
+          error: 'Condomínio ambíguo',
+          message: `Encontrei ${nameResolution.options.length} condomínios com nome parecido. Confirme qual é:\n${options}`
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      } else if (nameResolution && typeof nameResolution === 'string') {
+        resolvedCondoId = nameResolution;
+        source = 'name_lookup';
+        log(`[create-protocol] Resolved condominium by name: ${resolvedCondoId}`);
       }
     }
 
@@ -370,20 +427,48 @@ serve(async (req: Request) => {
     // Finalize
     await supabaseClient.from('conversations').update({ protocol: protocolCode }).eq('id', conversation_id);
 
+    // Notify group (tech)
     if (notify_group) {
-      await fetch(`${supabaseUrl}/functions/v1/protocol-opened`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ protocol_id: protocolRecord.id, protocol_code: protocolCode, notify_group: true })
-      }).catch(e => log(`Notify failed: ${e.message}`));
+      log(`[create-protocol] Calling protocol-opened for ${protocolCode}...`);
+      try {
+        const groupResponse = await fetch(`${supabaseUrl}/functions/v1/protocol-opened`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ protocol_id: protocolRecord.id, protocol_code: protocolCode, notify_group: true })
+        });
+        const groupText = await groupResponse.text();
+        log(`[create-protocol] protocol-opened status: ${groupResponse.status}, body: ${groupText}`);
+        if (!groupResponse.ok) {
+          log(`[create-protocol] ERROR: protocol-opened failed with status ${groupResponse.status}`);
+        }
+      } catch (groupError: any) {
+        log(`[create-protocol] ERROR calling protocol-opened: ${groupError.message}`);
+        console.error('[create-protocol] protocol-opened error:', groupError);
+      }
+    } else {
+      log(`[create-protocol] Skipping protocol-opened (notify_group=false)`);
     }
 
+    // Notify client
     if (notify_client && conversation_id) {
-      await fetch(`${supabaseUrl}/functions/v1/protocol-client`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ protocol_id: protocolRecord.id, protocol_code: protocolCode })
-      }).catch(e => log(`Notify client failed: ${e.message}`));
+      log(`[create-protocol] Calling protocol-client for ${protocolCode}...`);
+      try {
+        const clientResponse = await fetch(`${supabaseUrl}/functions/v1/protocol-client`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ protocol_id: protocolRecord.id, protocol_code: protocolCode })
+        });
+        const clientText = await clientResponse.text();
+        log(`[create-protocol] protocol-client status: ${clientResponse.status}, body: ${clientText}`);
+        if (!clientResponse.ok) {
+          log(`[create-protocol] ERROR: protocol-client failed with status ${clientResponse.status}`);
+        }
+      } catch (clientError: any) {
+        log(`[create-protocol] ERROR calling protocol-client: ${clientError.message}`);
+        console.error('[create-protocol] protocol-client error:', clientError);
+      }
+    } else {
+      log(`[create-protocol] Skipping protocol-client (notify_client=${notify_client}, conversation_id=${conversation_id})`);
     }
 
     return new Response(JSON.stringify({ success: true, protocol_code: protocolCode, protocol: protocolRecord }), {
