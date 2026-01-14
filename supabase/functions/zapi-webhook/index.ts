@@ -64,14 +64,21 @@ serve(async (req) => {
     const isGroup = Boolean(payload.isGroup || (payload.chatLid && payload.chatLid.includes('@g.us')) || (payload.chatId && payload.chatId.includes('@g.us')));
     const fromMe = Boolean(payload.fromMe);
 
-    // Função para normalizar IDs (remover sufixos redundantes e padronizar)
+    // Função para normalizar IDs (preservar @lid e @g.us, remover apenas sufixos legados)
     const normalizeLid = (id: string | null | undefined) => {
       if (!id) return id;
       let normalized = id.trim().toLowerCase();
-      // Se não for grupo, remove @c.us ou @s.whatsapp.net para ter apenas o número
-      if (!isGroup) {
+
+      // Preserve @lid and @g.us (LID identifiers)
+      if (normalized.endsWith('@lid') || normalized.endsWith('@g.us')) {
+        return normalized;
+      }
+
+      // Remove legacy suffixes only (@c.us, @s.whatsapp.net)
+      if (normalized.includes('@')) {
         normalized = normalized.split('@')[0];
       }
+
       return normalized;
     };
 

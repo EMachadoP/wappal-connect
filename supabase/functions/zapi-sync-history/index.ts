@@ -81,11 +81,18 @@ Deno.serve(async (req) => {
     const normalizeLid = (id: string | null | undefined, isGroup: boolean) => {
       if (!id) return id;
       let normalized = id.trim().toLowerCase();
-      // Only remove suffix if IT IS NOT A GROUP (groups keep @g.us usually, but let's check webhook logic)
-      // Webhook logic: if (!isGroup) normalized = normalized.split('@')[0];
-      if (!isGroup) {
+
+      // Preserve @lid and @g.us (LID identifiers)
+      if (normalized.endsWith('@lid') || normalized.endsWith('@g.us')) {
+        return normalized;
+      }
+
+      // Remove legacy suffixes only (@c.us, @s.whatsapp.net)
+      // Only if not a group or if group but doesn't have @g.us
+      if (!isGroup && normalized.includes('@')) {
         normalized = normalized.split('@')[0];
       }
+
       return normalized;
     };
 

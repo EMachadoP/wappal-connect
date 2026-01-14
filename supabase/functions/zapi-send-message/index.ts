@@ -89,13 +89,29 @@ serve(async (req) => {
 
     if (!recipient) throw new Error('O destinatário não possui um identificador válido (Phone/LID)');
 
-    console.log(`[Send Message] Enviando para ${recipient} via instância ${instanceId}`);
+    // Z-API FORMAT RESTORATION
+    // Our DB stores normalized IDs (e.g., "5511999999999")
+    // But Z-API requires full format for individuals: "5511999999999@s.whatsapp.net"
+    // Groups already have "@g.us" so we keep them as-is
+    const formatForZAPI = (phone: string): string => {
+      if (!phone) return phone;
+
+      // If already has suffix, return as-is
+      if (phone.includes('@')) return phone;
+
+      // For individual chats, append @s.whatsapp.net
+      return `${phone}@s.whatsapp.net`;
+    };
+
+    const formattedRecipient = formatForZAPI(recipient);
+
+    console.log(`[Send Message] Enviando para ${formattedRecipient} (original: ${recipient}) via instância ${instanceId}`);
 
     // Formatar mensagem
     // Se for áudio, não adiciona prefixo de nome
     let finalContent = content;
     let endpoint = '/send-text';
-    let body: any = { phone: recipient };
+    let body: any = { phone: formattedRecipient };
 
     if (message_type === 'text') {
       // Adicionar nome do remetente apenas se não for IA automática (opcional, aqui estamos colocando sempre)
