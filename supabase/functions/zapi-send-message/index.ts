@@ -104,13 +104,41 @@ serve(async (req: Request) => {
 
     const formatForZAPI = (id: string, isGrp: boolean): string => {
       if (!id) return id;
-      if (id.includes('@')) return id;
-      return isGrp ? `${id}@g.us` : `${id}@s.whatsapp.net`;
+      if (id.includes('@')) return id.trim().toLowerCase();
+      return isGrp ? `${id.trim()}@g.us` : `${id.trim()}@s.whatsapp.net`;
+    };
+
+    const getChatKey = (id: string | null | undefined, isGrp: boolean) => {
+      if (!id) return id;
+      const clean = id.trim().toLowerCase();
+      if (isGrp || clean.endsWith('@g.us')) return clean;
+
+      const numeric = clean.split('@')[0].replace(/\D/g, '');
+      if (!numeric) return numeric;
+
+      if (numeric.length === 10 || numeric.length === 11) return '55' + numeric;
+      if ((numeric.length === 12 || numeric.length === 13) && numeric.startsWith('55')) return numeric;
+
+      return numeric;
     };
 
     const formattedRecipient = formatForZAPI(recipient, !!isGroup);
+    const chatKey = getChatKey(formattedRecipient, !!isGroup);
 
-    console.log(`[Send Message] Enviando para ${formattedRecipient} (original: ${recipient}, isGroup: ${!!isGroup}) via instância ${instanceId}`);
+    console.log(`[Send Message] Enviando para ${formattedRecipient} (Key: ${chatKey}, original: ${recipient}, isGroup: ${!!isGroup}) via instância ${instanceId}`);
+
+    // Obter conversation_id se não fornecido (fallback lookup por chatKey)
+    let finalConvId = conversation_id;
+    if (!finalConvId && chatKey) {
+      const { data: contact } = await supabaseAdmin.from('contacts')
+        .select('id, conversations(id)')
+        .eq('chat_key', chatKey)
+        .maybeSingle();
+
+      if (contact && contact.conversations && contact.conversations.length > 0) {
+        finalConvId = contact.conversations[0].id;
+      }
+    }
 
     let finalContent = content;
     let endpoint = '/send-text';
@@ -137,6 +165,7 @@ serve(async (req: Request) => {
     }
 
     const zapiBaseUrl = `https://api.z-api.io/instances/${instanceId}/token/${token}`;
+
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (clientToken) headers['Client-Token'] = clientToken;
 
@@ -155,7 +184,7 @@ serve(async (req: Request) => {
     // Salvar registro no banco
     // ATENÇÃO: Salvamos sempre formattedRecipient no chat_id para garantir consistência da thread
     await supabaseAdmin.from('messages').insert({
-      conversation_id,
+      conversation_id: finalConvId,
       sender_type: 'agent',
       sender_id: userId === 'system' ? null : userId,
       agent_name: senderName,
@@ -170,7 +199,7 @@ serve(async (req: Request) => {
       chat_id: formattedRecipient // <--- FIX: Ensure chat_id is never NULL for outbound
     });
 
-    if (conversation_id) {
+    if (finalConvId) { // Use finalConvId here
       if (userId && userId !== 'system') {
         const pauseUntil = new Date(Date.now() + 30 * 60 * 1000);
         await supabaseAdmin.from('conversations').update({
@@ -178,11 +207,11 @@ serve(async (req: Request) => {
           ai_mode: 'OFF',
           ai_paused_until: pauseUntil.toISOString(),
           last_message_at: new Date().toISOString(),
-        }).eq('id', conversation_id);
+        }).eq('id', finalConvId);
       } else {
         await supabaseAdmin.from('conversations').update({
           last_message_at: new Date().toISOString(),
-        }).eq('id', conversation_id);
+        }).eq('id', finalConvId);
       }
     }
 

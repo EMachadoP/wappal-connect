@@ -57,13 +57,19 @@ serve(async (req) => {
     const fromMe = Boolean(payload.fromMe);
 
     // CHAT_KEY: O identificador canônico (numérico para pessoas, id original para grupos)
+    // Regras BR: 10/11 dígitos -> prefixa 55. 12/13 com 55 -> mantém.
     const getChatKey = (id: string | null | undefined, isGrp: boolean) => {
       if (!id) return id;
       const clean = id.trim().toLowerCase();
       if (isGrp || clean.endsWith('@g.us')) return clean;
 
-      // Para pessoas: tira @lid, @s.whatsapp.net e pega só números
-      return clean.split('@')[0].replace(/\D/g, '');
+      const numeric = clean.split('@')[0].replace(/\D/g, '');
+      if (!numeric) return numeric;
+
+      if (numeric.length === 10 || numeric.length === 11) return '55' + numeric;
+      if ((numeric.length === 12 || numeric.length === 13) && numeric.startsWith('55')) return numeric;
+
+      return numeric;
     };
 
     const normalizeLid = (id: string | null | undefined) => {
@@ -84,10 +90,23 @@ serve(async (req) => {
     const chatKey = getChatKey(chatIdentifier, !!isGroup);
     const chatName = payload.chatName || payload.contact?.name || payload.senderName || payload.pushName || (chatIdentifier ? chatIdentifier.split('@')[0] : 'Desconhecido');
 
+    const providerMsgId = payload.messageId || payload.id || crypto.randomUUID();
+
+    // IDEMPOTÊNCIA: Ignorar se a mensagem já existe
+    const { data: existingMsg } = await supabase
+      .from('messages')
+      .select('id')
+      .eq('provider_message_id', providerMsgId)
+      .maybeSingle();
+
+    if (existingMsg) {
+      console.log(`[Webhook] Mensagem duplicada ignorada: ${providerMsgId}`);
+      return new Response(JSON.stringify({ success: true, duplicated: true }), { headers: corsHeaders });
+    }
+
     console.log(`[Webhook] Normalizing: ID=${chatIdentifier} -> Key=${chatKey} (Group: ${!!isGroup})`);
 
-    // 4. Salvar/Atualizar Contato usando CHAT_KEY para evitar duplicidade LID vs Telefone
-    // CANÔNICO: Se já temos esse chat_key, usamos o contato existente.
+    // 4. Salvar/Atualizar Contato usando CHAT_KEY
     let contactId: string;
     const { data: existingContact } = await supabase.from('contacts')
       .select('id, chat_lid, phone, name')
@@ -215,15 +234,8 @@ serve(async (req) => {
     }
 
     const senderPhone = (payload.contact?.phone || payload.phone || contactLid).split('@')[0];
-    const providerMsgId = payload.messageId || payload.id || crypto.randomUUID();
 
-    const { data: existingMsg } = await supabase
-      .from('messages')
-      .select('id')
-      .eq('provider_message_id', providerMsgId)
-      .maybeSingle();
-
-    let msgResult = existingMsg;
+    let msgResult = null;
     let msgError = null;
 
     if (!existingMsg) {

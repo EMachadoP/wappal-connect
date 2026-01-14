@@ -1,66 +1,169 @@
--- 1. Add chat_key column to contacts
-ALTER TABLE public.contacts ADD COLUMN IF NOT EXISTS chat_key text;
+-- =====================================================
+-- 1. ESTRUTURA PARA AUDITORIA DE MERGE
+-- =====================================================
+CREATE TABLE IF NOT EXISTS public.contact_merge_map (
+  dropped_contact_id uuid PRIMARY KEY,
+  kept_contact_id uuid NOT NULL REFERENCES public.contacts(id),
+  merged_at timestamptz NOT NULL DEFAULT now(),
+  chat_key text
+);
 
--- 2. Create index for faster key-based lookups
-CREATE INDEX IF NOT EXISTS idx_contacts_chat_key ON public.contacts(chat_key);
-
--- 3. Normalization function (canonical key)
+-- =====================================================
+-- 2. NORMALIZAÇÃO ROBUSTA (BR-FRIENDLY)
+-- =====================================================
 CREATE OR REPLACE FUNCTION public.normalize_chat_key(chat_id text) 
 RETURNS text AS $$
+DECLARE
+  clean_id text;
+  numeric_id text;
 BEGIN
   IF chat_id IS NULL THEN RETURN NULL; END IF;
-  -- Extract numeric part from @lid, @s.whatsapp.net, @c.us or raw numbers
-  -- This ignores @g.us as groups are unique canonical IDs themselves
+  
+  -- Para grupos, mantemos o ID original como chave canônica
   IF chat_id LIKE '%@g.us' THEN
-    RETURN chat_id;
+    RETURN lower(chat_id);
   END IF;
   
-  -- Remove any suffix and non-numeric characters (except for groups)
-  RETURN regexp_replace(split_part(chat_id, '@', 1), '[^0-9]', '', 'g');
+  -- Extrair apenas dígitos do que vem antes do @
+  numeric_id := regexp_replace(split_part(chat_id, '@', 1), '[^0-9]', '', 'g');
+  
+  IF numeric_id = '' THEN RETURN NULL; END IF;
+
+  -- Lógica BR: 
+  -- Se tem 10 ou 11 dígitos (DDD + Número), prefixa com 55
+  IF length(numeric_id) IN (10, 11) THEN
+    RETURN '55' || numeric_id;
+  END IF;
+
+  -- Se tem 12 ou 13 dígitos e começa com 55, mantém
+  IF (length(numeric_id) IN (12, 13)) AND numeric_id LIKE '55%' THEN
+    RETURN numeric_id;
+  END IF;
+
+  -- Caso contrário, retorna os dígitos puros
+  RETURN numeric_id;
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
--- 4. Initial population of chat_key
-UPDATE public.contacts 
-SET chat_key = normalize_chat_key(COALESCE(chat_id, lid, chat_lid, phone))
-WHERE chat_key IS NULL;
+-- =====================================================
+-- 3. SCHEMA HARDENING
+-- =====================================================
 
--- 5. CONSOLIDATION: Merge "Sandro" case (as identified by user)
+-- Adiciona chat_key se não existir
+ALTER TABLE public.contacts ADD COLUMN IF NOT EXISTS chat_key text;
+
+-- Índice único para pessoas (Impede duplicidade futura)
+-- Aplicamos apenas para IDs com comprimento de número de telefone comum para evitar conflitos em IDs curtos estranhos
+CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_chat_key_unique 
+ON public.contacts (chat_key) 
+WHERE (chat_key IS NOT NULL AND chat_key <> '' AND length(chat_key) >= 10);
+
+-- Idempotência de mensagens (Impede replays do webhook)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_provider_id_unique
+ON public.messages (provider_message_id)
+WHERE provider_message_id IS NOT NULL;
+
+-- =====================================================
+-- 4. BACKFILL & LIMPEZA AUTOMÁTICA (FAXINA GLOBAL)
+-- =====================================================
 DO $$
 DECLARE
-  v_keep_contact uuid := 'f9d5d6ae-66bb-46fa-a802-4b8820609f71'; -- The one with phone and @lid
-  v_drop_contact uuid := '1cf73b3e-0fde-4179-baf9-e56ffc694fed'; -- The duplicate one
-  v_keep_conv uuid := '80a8559c-dfb1-431c-bf80-b6ace98b8e6a';
-  v_drop_conv uuid := 'ce104f5c-564b-4730-8900-d23534a07b09';
+    r RECORD;
+    v_keep_id UUID;
+    v_drop_id UUID;
+    v_keep_conv UUID;
+    v_drop_conv UUID;
 BEGIN
-  -- We check if they exist before merging to avoid errors if already merged
-  IF EXISTS (SELECT 1 FROM public.conversations WHERE id = v_drop_conv) THEN
-    -- Move messages from DROP to KEEP
-    UPDATE public.messages
-    SET conversation_id = v_keep_conv
-    WHERE conversation_id = v_drop_conv;
+    -- Primeiro, garante que todos os chat_key estão populados com a nova lógica
+    UPDATE public.contacts 
+    SET chat_key = normalize_chat_key(COALESCE(lid, chat_lid, phone, name))
+    WHERE chat_key IS NULL OR chat_key = '';
 
-    -- Update any references in other tables (safe-guard)
-    UPDATE public.protocols SET conversation_id = v_keep_conv WHERE conversation_id = v_drop_conv;
-    UPDATE public.ai_events SET conversation_id = v_keep_conv WHERE conversation_id = v_drop_conv;
+    -- Loop por grupos duplicados
+    FOR r IN (
+        SELECT chat_key 
+        FROM public.contacts 
+        WHERE chat_key IS NOT NULL AND chat_key <> '' 
+        GROUP BY chat_key 
+        HAVING COUNT(*) > 1
+    ) LOOP
+        -- Define o cadastro principal (Prioridade: LID > Telefone > Antiguidade)
+        SELECT id INTO v_keep_id
+        FROM public.contacts
+        WHERE chat_key = r.chat_key
+        ORDER BY (chat_lid LIKE '%@lid') DESC, (phone IS NOT NULL) DESC, created_at ASC
+        LIMIT 1;
 
-    -- Delete the duplicate conversation and contact
-    DELETE FROM public.conversations WHERE id = v_drop_conv;
-    DELETE FROM public.contacts WHERE id = v_drop_contact;
+        -- Mescla todos os outros contatos vinculados a esta chave
+        FOR v_drop_id IN (
+            SELECT id FROM public.contacts 
+            WHERE chat_key = r.chat_key AND id != v_keep_id
+        ) LOOP
+            -- Registra o merge para auditoria
+            INSERT INTO public.contact_merge_map (dropped_contact_id, kept_contact_id, chat_key)
+            VALUES (v_drop_id, v_keep_id, r.chat_key)
+            ON CONFLICT (dropped_contact_id) DO NOTHING;
 
-    -- Recalculate last_message_at and unread_count for keeper
-    UPDATE public.conversations c
-    SET 
-      last_message_at = (SELECT MAX(sent_at) FROM public.messages WHERE conversation_id = v_keep_conv),
-      unread_count = (SELECT COUNT(*) FROM public.messages WHERE conversation_id = v_keep_conv AND sender_type = 'contact' AND (read_at IS NULL))
-    WHERE id = v_keep_conv;
-  END IF;
+            -- 1. Move Protocolos
+            UPDATE public.protocols SET contact_id = v_keep_id WHERE contact_id = v_drop_id;
+            
+            -- 2. Move Participantes
+            UPDATE public.participants SET contact_id = v_keep_id WHERE contact_id = v_drop_id;
+
+            -- 3. Move Condomínios (Lida com duplicatas)
+            BEGIN
+                UPDATE public.contact_condominiums SET contact_id = v_keep_id WHERE contact_id = v_drop_id;
+            EXCEPTION WHEN unique_violation THEN
+                DELETE FROM public.contact_condominiums WHERE contact_id = v_drop_id;
+            END;
+
+            -- 4. Unifica Conversas
+            SELECT id INTO v_keep_conv FROM public.conversations WHERE contact_id = v_keep_id LIMIT 1;
+            SELECT id INTO v_drop_conv FROM public.conversations WHERE contact_id = v_drop_id LIMIT 1;
+
+            IF v_drop_conv IS NOT NULL THEN
+                IF v_keep_conv IS NULL THEN
+                    UPDATE public.conversations SET contact_id = v_keep_id WHERE id = v_drop_conv;
+                    v_keep_conv := v_drop_conv;
+                ELSE
+                    UPDATE public.messages SET conversation_id = v_keep_conv WHERE conversation_id = v_drop_conv;
+                    UPDATE public.protocols SET conversation_id = v_keep_conv WHERE conversation_id = v_drop_conv;
+                    UPDATE public.ai_events SET conversation_id = v_keep_conv WHERE conversation_id = v_drop_conv;
+                    DELETE FROM public.conversations WHERE id = v_drop_conv;
+                END IF;
+            END IF;
+
+            -- 5. Atualiza dados no contato que ficou
+            UPDATE public.contacts c_keep
+            SET 
+                phone = COALESCE(c_keep.phone, c_drop.phone),
+                name = CASE WHEN (c_keep.name ~ '^[0-9]+$') AND NOT (c_drop.name ~ '^[0-9]+$') THEN c_drop.name ELSE c_keep.name END
+            FROM public.contacts c_drop
+            WHERE c_keep.id = v_keep_id AND c_drop.id = v_drop_id;
+
+            -- 6. Remove o rastro
+            DELETE FROM public.contacts WHERE id = v_drop_id;
+        END LOOP;
+
+        -- 7. Recalcula ponteiros da conversa vencedora
+        IF v_keep_conv IS NOT NULL THEN
+            UPDATE public.conversations c
+            SET 
+                last_message_at = (SELECT MAX(sent_at) FROM public.messages WHERE conversation_id = c.id),
+                unread_count = (SELECT COUNT(*) FROM public.messages WHERE conversation_id = c.id AND sender_type = 'contact' AND read_at IS NULL),
+                thread_key = r.chat_key
+            WHERE id = v_keep_conv;
+        END IF;
+
+    END LOOP;
 END $$;
 
--- 6. Backfill missing messages.chat_id for outbound messages
+-- =====================================================
+-- 5. CONSISTÊNCIA DE MENSAGENS (BACKLOG)
+-- =====================================================
 UPDATE public.messages m
 SET chat_id = c.chat_id
 FROM public.conversations c
 WHERE m.conversation_id = c.id
-  AND m.chat_id IS NULL
+  AND (m.chat_id IS NULL OR m.chat_id = '')
   AND c.chat_id IS NOT NULL;
