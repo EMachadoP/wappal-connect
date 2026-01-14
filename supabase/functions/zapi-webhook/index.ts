@@ -112,11 +112,21 @@ serve(async (req) => {
 
     if (!contact) throw new Error('Falha ao processar contato do chat');
 
-    // 5. Salvar/Atualizar Conversa (Lógica robusta para lidar com thread_key legada)
+    // 5. Salvar/Atualizar Conversa
+    // IMPROVED LOOKUP: Check by contact_id first to avoid duplicates from ID normalization changes
     let { data: existingConv } = await supabase.from('conversations')
       .select('id')
-      .eq('chat_id', chatLid)
+      .eq('contact_id', contact.id)
       .maybeSingle();
+
+    // Fallback: check by chat_id if contact didn't match (handles edge cases)
+    if (!existingConv) {
+      const fallback = await supabase.from('conversations')
+        .select('id')
+        .eq('chat_id', chatLid)
+        .maybeSingle();
+      existingConv = fallback.data;
+    }
 
     let conv: { id: string };
 
@@ -124,7 +134,9 @@ serve(async (req) => {
       const { data: updated, error: updateErr } = await supabase.from('conversations')
         .update({
           last_message_at: now,
-          thread_key: chatLid, // Sincroniza para o padrão novo
+          chat_id: chatLid,      // Update to latest normalized format
+          thread_key: chatLid,   // Sync to current standard
+          contact_id: contact.id, // Ensure contact link is current
           status: 'open'
         })
         .eq('id', existingConv.id)
