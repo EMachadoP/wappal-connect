@@ -50,7 +50,7 @@ Deno.serve(async (req) => {
 
     while (hasMore && currentPage <= maxPages) {
       const url = `https://api.z-api.io/instances/${instanceId}/token/${token}/chats?page=${currentPage}&pageSize=${pageSize}`;
-      
+
       const response = await fetch(url, {
         method: 'GET',
         headers: {
@@ -76,14 +76,36 @@ Deno.serve(async (req) => {
     let updated = 0;
     let errors = 0;
 
+    // --- HELPERS ---
+    // Same normalization logic as zapi-webhook to ensure IDs match
+    const normalizeLid = (id: string | null | undefined, isGroup: boolean) => {
+      if (!id) return id;
+      let normalized = id.trim().toLowerCase();
+      // Only remove suffix if IT IS NOT A GROUP (groups keep @g.us usually, but let's check webhook logic)
+      // Webhook logic: if (!isGroup) normalized = normalized.split('@')[0];
+      if (!isGroup) {
+        normalized = normalized.split('@')[0];
+      }
+      return normalized;
+    };
+
     for (const chat of allChats) {
       try {
         if (!chat.phone) continue;
 
         const isGroup = chat.isGroup || false;
-        const contactName = chat.name || chat.phone;
-        const phone = chat.phone;
-        const groupKey = isGroup ? phone.trim().toLowerCase() : null;
+
+        // Normalize IDs immediately
+        const rawPhone = chat.phone;
+        const normalizedLid = normalizeLid(rawPhone, isGroup);
+
+        if (!normalizedLid) continue;
+
+        const contactName = chat.name || normalizedLid;
+        const groupKey = isGroup ? normalizedLid : null;
+
+        // Use normalized ID for phone field in contacts (to match webhook)
+        const phone = normalizedLid;
 
         let existingContact: { id: string } | null = null;
 

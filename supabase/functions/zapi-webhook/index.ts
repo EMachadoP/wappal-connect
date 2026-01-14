@@ -168,7 +168,17 @@ serve(async (req) => {
     }
     if (!content) content = "..."; // Fallback final
 
-    const senderName = payload.contact?.name || payload.senderName || payload.pushName || contactLid.split('@')[0];
+    let senderName = payload.contact?.name || payload.senderName || payload.pushName;
+
+    // Fallback logic for agent name (fromMe)
+    if (fromMe) {
+      if (!senderName || /^\d+$/.test(senderName.replace(/\D/g, ''))) {
+        senderName = "Operador (Celular)";
+      }
+    } else {
+      // Fallback for contacts
+      senderName = senderName || contactLid.split('@')[0];
+    }
     const senderPhone = (payload.contact?.phone || payload.phone || contactLid).split('@')[0];
     const providerMsgId = payload.messageId || payload.id || crypto.randomUUID();
 

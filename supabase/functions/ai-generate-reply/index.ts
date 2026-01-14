@@ -151,6 +151,14 @@ serve(async (req) => {
     const recentText = messagesNoSystem.slice(-6).map((m: any) => m.content).join(" ");
 
     // --- TIER 4: DETERMINISTIC (Bulletproof Context-Aware) ---
+    const { data: convData } = await supabase
+      .from('conversations')
+      .select('active_condominium_id')
+      .eq('id', conversationId)
+      .maybeSingle();
+
+    const hasIdentifiedCondo = Boolean(convData?.active_condominium_id);
+
     const lastIssueMsg = [...messagesNoSystem].reverse().find(m => m.role === 'user' && isOperationalIssue(m.content));
     const hasOperationalContext = isOperationalIssue(recentText);
     const aptCandidate = [...messagesNoSystem]
@@ -160,7 +168,18 @@ serve(async (req) => {
 
     const isProvidingApartment = looksLikeApartment(lastUserMsgText) && hasOperationalContext;
     const needsApartment = /(interfone|tv|controle|apartamento|apto|unidade)/i.test(recentText);
-    const canOpenNow = hasOperationalContext && (!needsApartment || Boolean(aptCandidate));
+    const canOpenNow = hasIdentifiedCondo && hasOperationalContext && (!needsApartment || Boolean(aptCandidate));
+
+    if (!hasIdentifiedCondo && hasOperationalContext && conversationId) {
+      console.log('[TICKET] Deterministic block: Missing condominium identification.');
+      return new Response(JSON.stringify({
+        text: "Para que eu possa abrir o chamado corretamente, poderia me confirmar qual é o seu condomínio?",
+        finish_reason: 'NEED_CONDO_IDENTIFICATION',
+        provider: 'deterministic',
+        model: 'keyword-detection',
+        request_id: crypto.randomUUID()
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
 
     if (conversationId && (canOpenNow || isProvidingApartment)) {
       if (needsApartment && !aptCandidate) {
