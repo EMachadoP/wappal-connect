@@ -189,6 +189,16 @@ serve(async (req) => {
     if (isEmployee && hasCommand && conversationId) {
       console.log('[AI] Employee command detected, extracting structured data...');
 
+      // Load conversation's linked condominium (if any)
+      const { data: convoWithCondo } = await supabase
+        .from('conversations')
+        .select('active_condominium_id, condominiums(name)')
+        .eq('id', conversationId)
+        .maybeSingle();
+
+      const linkedCondoName = (convoWithCondo?.condominiums as any)?.name ?? null;
+      const linkedCondoId = convoWithCondo?.active_condominium_id ?? null;
+
       // Load known condominiums to help extraction
       const { data: condos } = await supabase.from('condominiums').select('name').limit(500);
       const knownCondominiums = (condos ?? []).map((c: any) => c.name).filter(Boolean);
@@ -198,6 +208,14 @@ serve(async (req) => {
         isEmployee: true,
         knownCondominiums
       });
+
+      // Auto-fill condominium from conversation link if not in text
+      if (!extracted.fields.condominium_name && linkedCondoName) {
+        console.log('[AI] Using linked condominium from conversation:', linkedCondoName);
+        extracted.fields.condominium_name = linkedCondoName;
+        extracted.missing_fields = extracted.missing_fields.filter(f => f !== 'condominium_name');
+        extracted.draft = extracted.missing_fields.length > 0;
+      }
 
       if (extracted.intent === 'create_schedule' || extracted.intent === 'create_protocol') {
         // If missing required fields, ask for them

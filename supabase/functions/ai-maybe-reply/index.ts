@@ -216,6 +216,22 @@ serve(async (req) => {
     const aiData = await aiResponse.json();
     if (!aiData.text) throw new Error('IA não gerou texto');
 
+    // 6.5. DEDUPLICATION: Check if identical message was sent recently
+    const { data: recentDuplicate } = await supabase
+      .from('messages')
+      .select('id')
+      .eq('conversation_id', conversation_id)
+      .eq('sender_type', 'assistant')
+      .eq('content', aiData.text)
+      .gte('sent_at', new Date(Date.now() - 60 * 1000).toISOString())
+      .limit(1)
+      .maybeSingle();
+
+    if (recentDuplicate) {
+      console.log('[ai-maybe-reply] Dedupe: Identical message sent recently, skipping.');
+      return new Response(JSON.stringify({ success: false, reason: 'Deduplicated' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
     // 7. Enviar via Z-API
     console.log('[ai-maybe-reply] Enviando resposta via Z-API');
     await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {

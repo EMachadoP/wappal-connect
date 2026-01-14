@@ -210,15 +210,18 @@ serve(async (req: Request) => {
       }
     }
 
-    // IDEMPOTENCY
+    // IDEMPOTENCY - Only block if there's a RECENT open/draft protocol (prevent double-click, not block new issues)
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
     const { data: existingProtocol } = await supabaseClient
       .from('protocols')
       .select('*')
       .eq('conversation_id', conversation_id)
-      .eq('status', 'open')
+      .in('status', ['open', 'draft'])
+      .gte('created_at', fiveMinutesAgo)
       .maybeSingle();
 
     if (existingProtocol) {
+      log(`[create-protocol] Recent protocol exists (${existingProtocol.protocol_code}), returning it.`);
       return new Response(JSON.stringify({
         success: true,
         already_existed: true,
