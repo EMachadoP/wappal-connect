@@ -53,6 +53,7 @@ serve(async (req: Request) => {
 
     const json = await req.json();
     let { content, chatId, recipient: inputRecipient, isGroup } = json;
+    conversation_id = json.conversation_id;
     const { message_type, media_url, sender_name: overrideSenderName } = json;
 
     if (inputRecipient && !chatId) chatId = inputRecipient;
@@ -61,6 +62,7 @@ serve(async (req: Request) => {
     let conv: any = null;
     let recipient = chatId;
 
+    // UI-PROOFING: If conservation_id is provided but recipient is missing, lookup in DB
     if (conversation_id) {
       const { data: foundConv } = await supabaseAdmin
         .from('conversations')
@@ -69,7 +71,12 @@ serve(async (req: Request) => {
         .single();
 
       conv = foundConv;
-      if (!conv) throw new Error('Conversa não localizada no banco');
+      if (!conv) {
+        return new Response(JSON.stringify({ error: 'Conversa não localizada no banco', details: { conversation_id } }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
 
       const contact = conv.contacts;
       if (!recipient) {
@@ -77,7 +84,17 @@ serve(async (req: Request) => {
       }
     }
 
-    if (!recipient) throw new Error('O destinatário não possui um identificador válido (chatId ou conversation_id)');
+    // DEFENSIVE CHECK: Return 400 instead of 500
+    if (!recipient) {
+      console.error('[Send Message] Falha: Destinatário não identificado', { conversation_id, chatId });
+      return new Response(JSON.stringify({
+        error: 'O destinatário não possui um identificador válido (chatId ou conversation_id)',
+        code: 'MISSING_RECIPIENT'
+      }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
 
     // Credenciais - Tenta Env Var primeiro, depois banco
     const { data: zapiSettings } = await supabaseAdmin.from('zapi_settings').select('*').limit(1).single();
@@ -92,23 +109,21 @@ serve(async (req: Request) => {
       throw new Error('Configurações de WhatsApp incompletas no servidor');
     }
 
-    // Z-API FORMAT RESTORATION
-    // Our DB stores normalized IDs (e.g., "5511999999999")
-    // But Z-API requires full format for individuals: "5511999999999@s.whatsapp.net"
-    // Groups already have "@g.us" so we keep them as-is
-    const formatForZAPI = (phone: string): string => {
+    // Z-API SMART FORMATTING (from user rules)
+    // 1. Se terminar com @g.us → é grupo, não mexe.
+    // 2. Se terminar com @s.whatsapp.net → é pessoa, não mexe.
+    // 3. Se vier só números e isGroup=true → adiciona @g.us
+    // 4. Se vier só números e isGroup=false → adiciona @s.whatsapp.net
+    const formatForZAPI = (phone: string, isGrp: boolean): string => {
       if (!phone) return phone;
-
-      // If already has suffix, return as-is
       if (phone.includes('@')) return phone;
 
-      // For individual chats, append @s.whatsapp.net
-      return `${phone}@s.whatsapp.net`;
+      return isGrp ? `${phone}@g.us` : `${phone}@s.whatsapp.net`;
     };
 
-    const formattedRecipient = formatForZAPI(recipient);
+    const formattedRecipient = formatForZAPI(recipient, !!isGroup);
 
-    console.log(`[Send Message] Enviando para ${formattedRecipient} (original: ${recipient}) via instância ${instanceId}`);
+    console.log(`[Send Message] Enviando para ${formattedRecipient} (original: ${recipient}, isGroup: ${!!isGroup}) via instância ${instanceId}`);
 
     // Formatar mensagem
     // Se for áudio, não adiciona prefixo de nome

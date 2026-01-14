@@ -65,10 +65,13 @@ serve(async (req: Request): Promise<Response> => {
     // ========== NOTIFICAÇÃO DO GRUPO (TÉCNICOS) ==========
     if (settings?.whatsapp_notifications_enabled) {
       // ✅ ENV primeiro, depois banco
-      const techGroupId = Deno.env.get("ZAPI_TECH_GROUP_CHAT_ID") || settings.whatsapp_group_id;
+      const envGroupId = Deno.env.get("ZAPI_TECH_GROUP_CHAT_ID");
+      const dbGroupId = settings.whatsapp_group_id;
+      const techGroupId = envGroupId || dbGroupId;
 
       console.log('=== GROUP NOTIFICATION ===');
       console.log('Enabled:', settings.whatsapp_notifications_enabled);
+      console.log('Source:', envGroupId ? 'Environment (ZAPI_TECH_GROUP_CHAT_ID)' : 'Database (integrations_settings)');
       console.log('Group ID:', techGroupId);
 
       if (!techGroupId) {
