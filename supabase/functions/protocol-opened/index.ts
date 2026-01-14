@@ -159,7 +159,30 @@ serve(async (req) => {
   }
 
   try {
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    // Validate secrets before proceeding
+    if (!supabaseUrl || !supabaseServiceKey) {
+      console.error("[protocol-opened] Missing configuration");
+      return new Response(JSON.stringify({ error: "Missing configuration" }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    // Internal auth: verify service role key
+    const auth = req.headers.get("authorization") || "";
+    const token = auth.replace("Bearer ", "").trim();
+
+    if (token !== supabaseServiceKey) {
+      console.error("[protocol-opened] Unauthorized call - invalid token");
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: { persistSession: false }
+    });
 
     const { protocol_id, protocol_code, notify_group } = await req.json();
 

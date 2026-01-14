@@ -433,7 +433,11 @@ serve(async (req: Request) => {
       try {
         const groupResponse = await fetch(`${supabaseUrl}/functions/v1/protocol-opened`, {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
+          headers: {
+            'Authorization': `Bearer ${supabaseServiceKey}`,
+            'apikey': supabaseServiceKey,
+            'Content-Type': 'application/json'
+          },
           body: JSON.stringify({ protocol_id: protocolRecord.id, protocol_code: protocolCode, notify_group: true })
         });
         const groupText = await groupResponse.text();
@@ -455,7 +459,11 @@ serve(async (req: Request) => {
       try {
         const clientResponse = await fetch(`${supabaseUrl}/functions/v1/protocol-client`, {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
+          headers: {
+            'Authorization': `Bearer ${supabaseServiceKey}`,
+            'apikey': supabaseServiceKey,
+            'Content-Type': 'application/json'
+          },
           body: JSON.stringify({ protocol_id: protocolRecord.id, protocol_code: protocolCode })
         });
         const clientText = await clientResponse.text();

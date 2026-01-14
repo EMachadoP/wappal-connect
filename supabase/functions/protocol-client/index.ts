@@ -73,6 +73,18 @@ serve(async (req) => {
             });
         }
 
+        // Internal auth: verify service role key
+        const auth = req.headers.get("authorization") || "";
+        const token = auth.replace("Bearer ", "").trim();
+
+        if (token !== supabaseServiceKey) {
+            console.error("[protocol-client] Unauthorized call - invalid token");
+            return new Response(JSON.stringify({ error: "Unauthorized" }), {
+                status: 401,
+                headers: { ...corsHeaders, "Content-Type": "application/json" }
+            });
+        }
+
         // Create admin client (accepts service role auth)
         const supabase = createClient(supabaseUrl, supabaseServiceKey, {
             auth: { persistSession: false }
