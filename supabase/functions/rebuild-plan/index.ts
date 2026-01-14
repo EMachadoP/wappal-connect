@@ -76,11 +76,16 @@ serve(async (req) => {
             // 4. Clean up
             await admin.from('plan_items').delete().gte('plan_date', start_date).lte('plan_date', endDate);
 
+            // Reset previously planned items to open and clear their assignment group
+            await admin.from('protocol_work_items')
+                .update({ assignment_group_id: null, status: 'open' })
+                .in('status', ['planned']);
+
             // 5. Load Work Items
             const { data: workItems, error: wiErr } = await admin
                 .from('protocol_work_items')
                 .select('*')
-                .eq('status', 'open');
+                .in('status', ['open', 'planned']);
 
             if (wiErr) throw wiErr;
             if (!workItems || workItems.length === 0) return json(200, { scheduled: 0 });
@@ -143,7 +148,7 @@ serve(async (req) => {
 
                     // Match Slot
                     let commonSlot = null;
-                    const duration = wi.estimated_minutes;
+                    const duration = wi.estimated_minutes || 60;
                     for (let startMin = MORNING_START; startMin <= AFTERNOON_END - duration; startMin += 15) {
                         if (startMin < MORNING_END && startMin + duration > MORNING_END) continue;
                         if (startMin >= MORNING_END && startMin < AFTERNOON_START) continue;
