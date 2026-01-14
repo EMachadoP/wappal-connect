@@ -14,16 +14,13 @@ serve(async (req: Request) => {
   const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
 
-  // Initialize admin client early so it's available in catch block
   const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
-  // Declare variables outside try so they're accessible in catch
   let userId = 'system';
   let conversation_id: string | undefined, content: string | undefined, senderName: string | undefined;
 
   try {
     const authHeader = req.headers.get('Authorization');
-    // Permitir chamada interna com service key OU chamada de cliente com token de usuário
     const isServiceKey = authHeader?.includes(supabaseServiceKey);
 
     if (!isServiceKey) {
@@ -36,7 +33,6 @@ serve(async (req: Request) => {
       userId = user.id;
     }
 
-    // Obter nome do atendente
     senderName = 'Atendente G7';
     if (userId !== 'system') {
       const { data: profile } = await supabaseAdmin
@@ -62,7 +58,6 @@ serve(async (req: Request) => {
     let conv: any = null;
     let recipient = chatId;
 
-    // UI-PROOFING: If conservation_id is provided but recipient is missing, lookup in DB
     if (conversation_id) {
       const { data: foundConv } = await supabaseAdmin
         .from('conversations')
@@ -80,26 +75,24 @@ serve(async (req: Request) => {
 
       const contact = conv.contacts;
       if (!recipient) {
-        recipient = conv.chat_id || contact?.chat_lid || contact?.phone || contact?.lid;
+        recipient = conv.chat_id || contact?.chat_lid || contact?.lid || contact?.phone;
       }
     }
 
-    // DEFENSIVE CHECK: Return 400 instead of 500
     if (!recipient) {
       console.error('[Send Message] Falha: Destinatário não identificado', { conversation_id, chatId });
       return new Response(JSON.stringify({
         error: 'O destinatário não possui um identificador válido (chatId ou conversation_id)',
-        code: 'MISSING_RECIPIENT'
+        code: 'MISSING_RECIPIENT',
+        details: { conversation_id, chatId }
       }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
-    // Credenciais - Tenta Env Var primeiro, depois banco
     const { data: zapiSettings } = await supabaseAdmin.from('zapi_settings').select('*').limit(1).single();
 
-    // Prioridade: Env Var > Banco
     const instanceId = Deno.env.get('ZAPI_INSTANCE_ID') || zapiSettings?.zapi_instance_id;
     const token = Deno.env.get('ZAPI_TOKEN') || zapiSettings?.zapi_token;
     const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN') || zapiSettings?.zapi_security_token;
@@ -109,35 +102,24 @@ serve(async (req: Request) => {
       throw new Error('Configurações de WhatsApp incompletas no servidor');
     }
 
-    // Z-API SMART FORMATTING (from user rules)
-    // 1. Se terminar com @g.us → é grupo, não mexe.
-    // 2. Se terminar com @s.whatsapp.net → é pessoa, não mexe.
-    // 3. Se vier só números e isGroup=true → adiciona @g.us
-    // 4. Se vier só números e isGroup=false → adiciona @s.whatsapp.net
-    const formatForZAPI = (phone: string, isGrp: boolean): string => {
-      if (!phone) return phone;
-      if (phone.includes('@')) return phone;
-
-      return isGrp ? `${phone}@g.us` : `${phone}@s.whatsapp.net`;
+    const formatForZAPI = (id: string, isGrp: boolean): string => {
+      if (!id) return id;
+      if (id.includes('@')) return id;
+      return isGrp ? `${id}@g.us` : `${id}@s.whatsapp.net`;
     };
 
     const formattedRecipient = formatForZAPI(recipient, !!isGroup);
 
     console.log(`[Send Message] Enviando para ${formattedRecipient} (original: ${recipient}, isGroup: ${!!isGroup}) via instância ${instanceId}`);
 
-    // Formatar mensagem
-    // Se for áudio, não adiciona prefixo de nome
     let finalContent = content;
     let endpoint = '/send-text';
     let body: any = { phone: formattedRecipient };
 
-    if (message_type === 'text') {
-      // Adicionar nome do remetente apenas se não for IA automática (opcional, aqui estamos colocando sempre)
-      // Mas para IA (system), às vezes queremos parecer mais natural
+    if (message_type === 'text' || !message_type) {
       if (userId !== 'system') {
         finalContent = `*${senderName}:*\n${content}`;
       } else {
-        // Para IA, não colocar prefixo de nome se o conteúdo já tiver formato de protocolo ou se quisermos ser mais limpos
         finalContent = content;
       }
       body.message = finalContent;
@@ -151,7 +133,6 @@ serve(async (req: Request) => {
     } else if (message_type === 'document' || message_type === 'file') {
       endpoint = '/send-document';
       body.document = media_url;
-      // Tentar extrair extensão/nome se possível, ou usar padrão
       body.fileName = 'documento';
     }
 
@@ -172,67 +153,37 @@ serve(async (req: Request) => {
     }
 
     // Salvar registro no banco
+    // ATENÇÃO: Salvamos sempre formattedRecipient no chat_id para garantir consistência da thread
     await supabaseAdmin.from('messages').insert({
       conversation_id,
-      sender_type: userId === 'system' ? 'agent' : 'agent', // 'agent' para ambos visualmente
+      sender_type: 'agent',
       sender_id: userId === 'system' ? null : userId,
       agent_name: senderName,
-      content: content, // Salvar conteúdo original sem prefixo no banco
+      content: content,
       message_type: message_type || 'text',
       media_url,
       sent_at: new Date().toISOString(),
       provider: 'zapi',
       provider_message_id: result.messageId || result.zapiMessageId,
       status: 'sent',
-      direction: 'outbound'
+      direction: 'outbound',
+      chat_id: formattedRecipient // <--- FIX: Ensure chat_id is never NULL for outbound
     });
 
-    // AUTO-PAUSE AI: Se um humano (não system) enviou mensagem, pausar IA por 30min
-    if (userId && userId !== 'system') {
-      console.log('[Auto-Pause] Human operator sent message, pausing AI for 30min');
-
-      const pauseUntil = new Date(Date.now() + 30 * 60 * 1000); // 30 minutos
-
-      await supabaseAdmin
-        .from('conversations')
-        .update({
+    if (conversation_id) {
+      if (userId && userId !== 'system') {
+        const pauseUntil = new Date(Date.now() + 30 * 60 * 1000);
+        await supabaseAdmin.from('conversations').update({
           human_control: true,
           ai_mode: 'OFF',
           ai_paused_until: pauseUntil.toISOString(),
           last_message_at: new Date().toISOString(),
-        })
-        .eq('id', conversation_id);
-
-      // Log evento
-      await supabaseAdmin.from('ai_events').insert({
-        conversation_id,
-        event_type: 'human_intervention',
-        message: '👤 Operador assumiu conversa. IA pausada por 30min.',
-        metadata: {
-          user_id: userId,
-          paused_until: pauseUntil.toISOString(),
-        },
-      });
-
-      // SLA TRACKING: Register first_response_at on protocols that don't have it yet
-      // This is the first human response after protocol creation
-      const now = new Date().toISOString();
-      const { data: updatedProtocols } = await supabaseAdmin
-        .from('protocols')
-        .update({ first_response_at: now })
-        .eq('conversation_id', conversation_id)
-        .is('first_response_at', null)
-        .select('id, protocol_code');
-
-      if (updatedProtocols && updatedProtocols.length > 0) {
-        console.log(`[SLA] First response recorded for ${updatedProtocols.length} protocol(s):`,
-          updatedProtocols.map(p => p.protocol_code).join(', '));
+        }).eq('id', conversation_id);
+      } else {
+        await supabaseAdmin.from('conversations').update({
+          last_message_at: new Date().toISOString(),
+        }).eq('id', conversation_id);
       }
-    } else {
-      // Apenas atualizar timestamp se for IA
-      await supabaseAdmin.from('conversations').update({
-        last_message_at: new Date().toISOString(),
-      }).eq('id', conversation_id);
     }
 
     return new Response(JSON.stringify({ success: true, messageId: result.messageId }), {
@@ -241,20 +192,6 @@ serve(async (req: Request) => {
 
   } catch (error: any) {
     console.error('[Send Message Error]', error.message);
-
-    // Log detalhado no banco para debug remoto (com proteção contra crash)
-    try {
-      await supabaseAdmin.from('ai_logs').insert({
-        function_name: 'zapi-send-message',
-        input_data: { conversation_id: conversation_id || null, content: content || null, userId: userId || 'unknown' },
-        output_data: {},
-        error_message: error.message + (error.stack ? ` | ${error.stack}` : ''),
-        execution_time: 0
-      });
-    } catch (logError) {
-      console.error('[Failed to log error]', logError);
-    }
-
     return new Response(JSON.stringify({ error: error.message, details: error }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }

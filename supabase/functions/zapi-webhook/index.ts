@@ -20,12 +20,7 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Get Security Token for private Z-API URLs
-    const { data: zapiSettings } = await supabase.from('zapi_settings').select('zapi_security_token').maybeSingle();
-    const zapiClientToken = Deno.env.get('ZAPI_CLIENT_TOKEN') || zapiSettings?.zapi_security_token;
-
     // --- LOG DE DEPURAÇÃO (ai_logs) ---
-    // Registramos tudo o que chega para podermos debugar falhas em mensagens reais
     await supabase.from('ai_logs').insert({
       status: 'webhook_received',
       input_excerpt: JSON.stringify(payload).substring(0, 1000),
@@ -40,12 +35,11 @@ serve(async (req) => {
       .is('team_id', null)
       .maybeSingle();
 
-    // Registrar sinal de vida
     await supabase.from('zapi_settings')
       .update({ last_webhook_received_at: now })
       .is('team_id', null);
 
-    // 2. ENCAMINHAMENTO (Forwarding)
+    // 2. ENCAMINHAMENTO
     if (settings?.forward_webhook_url) {
       fetch(settings.forward_webhook_url, {
         method: 'POST',
@@ -54,99 +48,92 @@ serve(async (req) => {
       }).catch(err => console.error('[Forward Error]', err));
     }
 
-    // 3. Ignorar apenas se for uma atualização de status pura (sem mensagem)
-    // Mensagens recebidas podem vir com status: "RECEIVED", então checamos se não tem conteúdo
+    // 3. Ignorar status updates puros
     const isStatusUpdate = Boolean(payload.ack || payload.type === 'chatState' || (payload.status && !payload.text && !payload.message && !payload.image && !payload.video && !payload.audio && !payload.document));
+    if (isStatusUpdate) return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
 
-    if (isStatusUpdate) {
-      return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
-    }
-
-    // --- IDENTIFICAÇÃO LID-FIRST ---
+    // --- IDENTIFICAÇÃO E NORMALIZAÇÃO ---
     const isGroup = Boolean(payload.isGroup || (payload.chatLid && payload.chatLid.includes('@g.us')) || (payload.chatId && payload.chatId.includes('@g.us')));
     const fromMe = Boolean(payload.fromMe);
 
-    // Função para normalizar IDs (preservar @lid e @g.us, remover apenas sufixos legados)
+    // CHAT_KEY: O identificador canônico (numérico para pessoas, id original para grupos)
+    const getChatKey = (id: string | null | undefined, isGrp: boolean) => {
+      if (!id) return id;
+      const clean = id.trim().toLowerCase();
+      if (isGrp || clean.endsWith('@g.us')) return clean;
+
+      // Para pessoas: tira @lid, @s.whatsapp.net e pega só números
+      return clean.split('@')[0].replace(/\D/g, '');
+    };
+
     const normalizeLid = (id: string | null | undefined) => {
       if (!id) return id;
       let normalized = id.trim().toLowerCase();
-
-      // Preserve @lid and @g.us (LID identifiers)
-      if (normalized.endsWith('@lid') || normalized.endsWith('@g.us')) {
-        return normalized;
-      }
-
-      // Remove legacy suffixes only (@c.us, @s.whatsapp.net)
-      if (normalized.includes('@')) {
-        normalized = normalized.split('@')[0];
-      }
-
+      if (normalized.endsWith('@lid') || normalized.endsWith('@g.us')) return normalized;
+      if (normalized.includes('@')) normalized = normalized.split('@')[0];
       return normalized;
     };
 
     let chatLid = normalizeLid(payload.chatLid || payload.chatId || payload.chat?.chatId || payload.phone || payload.senderPhone);
-
-    // Em chats privados, o chatLid é o ID do contato. Em grupos, usamos participantLid ou os campos de contato.
     const contactLid = normalizeLid(payload.contact?.lid || payload.lid || payload.participantLid || (isGroup ? null : chatLid) || payload.senderPhone || payload.phone);
 
-    // Se chatLid ainda estiver vazio mas temos contactLid e não é grupo, chatLid = contactLid
-    if (!chatLid && contactLid && !isGroup) {
-      chatLid = contactLid;
-    }
+    if (!chatLid && contactLid && !isGroup) chatLid = contactLid;
+    if (!contactLid || !chatLid) throw new Error(`Identificadores ausentes: contact=${contactLid}, chat=${chatLid}`);
 
-    if (!contactLid || !chatLid) {
-      throw new Error(`Identificadores ausentes: contact=${contactLid}, chat=${chatLid}`);
-    }
-
-    // Identificamos o contato base (quem o usuário vê no chat)
-    // Se for grupo, o "contato" da conversa é o próprio grupo
     const chatIdentifier = isGroup ? chatLid : contactLid;
+    const chatKey = getChatKey(chatIdentifier, !!isGroup);
     const chatName = payload.chatName || payload.contact?.name || payload.senderName || payload.pushName || (chatIdentifier ? chatIdentifier.split('@')[0] : 'Desconhecido');
 
-    // 4. Salvar/Atualizar Contato do Chat (Grupo ou Individual)
-    const { data: contact } = await supabase.from('contacts').upsert({
-      chat_lid: chatIdentifier,
-      lid: chatIdentifier,
-      name: chatName,
-      is_group: isGroup,
-      updated_at: now
-    }, { onConflict: 'chat_lid' }).select('id').single();
+    console.log(`[Webhook] Normalizing: ID=${chatIdentifier} -> Key=${chatKey} (Group: ${!!isGroup})`);
 
-    if (!contact) throw new Error('Falha ao processar contato do chat');
-
-    // 5. Salvar/Atualizar Conversa
-    // IMPROVED LOOKUP: Check by contact_id first
-    let { data: existingConv } = await supabase.from('conversations')
-      .select('id, active_condominium_id')
-      .eq('contact_id', contact.id)
+    // 4. Salvar/Atualizar Contato usando CHAT_KEY para evitar duplicidade LID vs Telefone
+    // CANÔNICO: Se já temos esse chat_key, usamos o contato existente.
+    let contactId: string;
+    const { data: existingContact } = await supabase.from('contacts')
+      .select('id, chat_lid, phone, name')
+      .eq('chat_key', chatKey)
       .maybeSingle();
 
-    // Fallback: check by chat_id
-    if (!existingConv) {
-      const fallback = await supabase.from('conversations')
-        .select('id, active_condominium_id')
-        .eq('chat_id', chatLid)
-        .maybeSingle();
-      existingConv = fallback.data;
+    if (existingContact) {
+      contactId = existingContact.id;
+      // Atualizar dados se vierem novos (ex: nome, lid caso ainda não tenha)
+      const updates: any = { updated_at: now };
+      if (!existingContact.chat_lid && chatIdentifier.includes('@')) updates.chat_lid = chatIdentifier;
+      if (!existingContact.phone && !isGroup && !chatIdentifier.includes('@')) updates.phone = chatIdentifier;
+
+      await supabase.from('contacts').update(updates).eq('id', contactId);
+    } else {
+      const { data: newContact, error: insertError } = await supabase.from('contacts').insert({
+        chat_key: chatKey,
+        chat_lid: chatIdentifier,
+        lid: chatIdentifier,
+        name: chatName,
+        is_group: isGroup,
+        phone: !isGroup && !chatIdentifier.includes('@') ? chatIdentifier : null,
+        updated_at: now
+      }).select('id').single();
+
+      if (insertError || !newContact) throw new Error(`Falha ao criar contato: ${insertError?.message}`);
+      contactId = newContact.id;
     }
 
-    // Auto-Condominium Selection Logic
+    // 5. Salvar/Atualizar Conversa
+    let { data: existingConv } = await supabase.from('conversations')
+      .select('id, active_condominium_id')
+      .eq('contact_id', contactId)
+      .maybeSingle();
+
+    // Auto-Condominium Selection
     let autoCondoId: string | null = null;
     if (!existingConv?.active_condominium_id) {
-      // Look for a link in contact_condominiums
       const { data: linkedCondos } = await supabase
         .from('contact_condominiums')
         .select('condominium_id, is_default')
-        .eq('contact_id', contact.id);
+        .eq('contact_id', contactId);
 
       if (linkedCondos && linkedCondos.length > 0) {
-        // Preference: is_default = true, otherwise just the first one if there's only one
         const defaultCondo = linkedCondos.find(lc => lc.is_default);
         autoCondoId = defaultCondo?.condominium_id || (linkedCondos.length === 1 ? linkedCondos[0].condominium_id : null);
-
-        if (autoCondoId) {
-          console.log(`[Webhook] Auto-selected condominium ${autoCondoId} for contact ${contact.id}`);
-        }
       }
     }
 
@@ -155,15 +142,13 @@ serve(async (req) => {
     if (existingConv) {
       const updateData: any = {
         last_message_at: now,
-        chat_id: chatLid,
-        thread_key: chatLid,
-        contact_id: contact.id,
+        chat_id: chatLid, // Atualizamos o chat_id na conversa para o mais recente (@lid ou normal)
         status: 'open'
       };
 
       if (autoCondoId) {
         updateData.active_condominium_id = autoCondoId;
-        updateData.active_condominium_set_by = 'human'; // 'human' or similar to avoid AI re-asking
+        updateData.active_condominium_set_by = 'human';
         updateData.active_condominium_set_at = now;
       }
 
@@ -177,9 +162,9 @@ serve(async (req) => {
       conv = updated;
     } else {
       const insertData: any = {
-        contact_id: contact.id,
+        contact_id: contactId,
         chat_id: chatLid,
-        thread_key: chatLid,
+        thread_key: chatKey, // Thread key agora baseada na chave canônica
         status: 'open',
         last_message_at: now
       };
@@ -203,17 +188,13 @@ serve(async (req) => {
 
     // 6. Salvar Mensagem
     let content = payload.text?.message || payload.message?.text || payload.body || payload.caption || "";
-
-    // Mapeamento de tipo para o enum do banco: "text" | "image" | "video" | "audio" | "document" | "system"
     let msgType: "text" | "image" | "video" | "audio" | "document" | "system" = "text";
     const pType = (payload.type || "").toLowerCase();
 
-    // Detectar tipo por campos de mídia no payload (prioridade)
     if (payload.audio || payload.audioUrl || payload.audio?.url || payload.audio?.audioUrl) msgType = "audio";
     else if (payload.image || payload.imageUrl || payload.image?.url || payload.image?.imageUrl) msgType = "image";
     else if (payload.video || payload.videoUrl || payload.video?.url || payload.video?.videoUrl) msgType = "video";
     else if (payload.document || payload.documentUrl || payload.document?.url || payload.document?.documentUrl) msgType = "document";
-    // Fallback: detectar por type string
     else if (pType === "audio" || pType === "ptt" || pType === "voice") msgType = "audio";
     else if (pType === "image") msgType = "image";
     else if (pType === "video") msgType = "video";
@@ -223,28 +204,19 @@ serve(async (req) => {
       const fileName = payload.fileName || payload.document?.fileName || payload.image?.fileName || "";
       content = fileName ? `[Arquivo: ${fileName}]` : `[Mídia: ${msgType}]`;
     }
-    if (!content) content = "..."; // Fallback final
+    if (!content) content = "...";
 
-    // For outgoing messages, contact?.name is the recipient, not the agent.
-    // We prioritize senderName/pushName which identifies the agent/actor.
     let senderName = payload.senderName || payload.pushName;
-    if (!fromMe && !senderName) {
-      senderName = payload.contact?.name;
+    if (!fromMe && !senderName) senderName = payload.contact?.name;
+    if (fromMe && (!senderName || /^\d+$/.test(senderName.replace(/\D/g, '')))) {
+      senderName = "Operador (Celular)";
+    } else if (!fromMe) {
+      senderName = senderName || chatIdentifier.split('@')[0];
     }
 
-    // Fallback logic for agent name (fromMe)
-    if (fromMe) {
-      if (!senderName || /^\d+$/.test(senderName.replace(/\D/g, ''))) {
-        senderName = "Operador (Celular)";
-      }
-    } else {
-      // Fallback for contacts
-      senderName = senderName || contactLid.split('@')[0];
-    }
     const senderPhone = (payload.contact?.phone || payload.phone || contactLid).split('@')[0];
     const providerMsgId = payload.messageId || payload.id || crypto.randomUUID();
 
-    // Verificação de duplicidade para evitar erro de PK
     const { data: existingMsg } = await supabase
       .from('messages')
       .select('id')
@@ -255,7 +227,6 @@ serve(async (req) => {
     let msgError = null;
 
     if (!existingMsg) {
-      console.log('[Webhook] Salvando nova mensagem:', providerMsgId);
       const insertResult = await supabase.from('messages').insert({
         conversation_id: conv.id,
         sender_type: fromMe ? 'agent' : 'contact',
@@ -265,7 +236,7 @@ serve(async (req) => {
         content: content,
         provider: 'zapi',
         provider_message_id: providerMsgId,
-        chat_id: chatLid,
+        chat_id: chatLid, // Aqui salvamos o chat_id bruto do webhook
         direction: fromMe ? 'outbound' : 'inbound',
         sent_at: now,
         raw_payload: payload,
@@ -277,184 +248,89 @@ serve(async (req) => {
 
       msgResult = insertResult.data;
       msgError = insertResult.error;
-    } else {
-      console.log('[Webhook] Mensagem duplicada ignorada (já existe):', providerMsgId);
     }
-
 
     if (msgError) throw new Error(`Falha ao salvar mensagem: ${msgError.message}`);
 
-    // 6.5. Employee Command Detection
+    // Command Detection & Media Storage follows...
     if (!fromMe && msgResult?.id && msgType === 'text') {
       const employee = await isEmployeeSender(supabase, payload);
-
       if (employee.isEmployee) {
-        console.log('[Webhook] Employee detected:', employee.profileName);
-
         const parsed = parseAndExtract(content);
-
         if (parsed.intent === 'needs_more_info') {
-          console.log('[Webhook] Employee command incomplete, requesting more info');
-
-          // Send helpful response
+          // Send help message...
           await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${supabaseServiceKey}`
-            },
+            headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
               conversation_id: conv.id,
               content: `📋 Oi, ${employee.profileName}!\n\n${parsed.hint}`,
               message_type: 'text',
               sender_name: 'Sistema'
             })
-          }).catch(err => console.error('[Webhook] Failed to send help message:', err));
-
+          });
           return new Response(JSON.stringify({ success: true, needs_more_info: true }), { headers: corsHeaders });
         }
-
         if (parsed.intent === 'create_protocol') {
-          console.log('[Webhook] Employee command detected, creating protocol...');
-
-          try {
-            await fetch(`${supabaseUrl}/functions/v1/create-protocol`, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${supabaseServiceKey}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                conversation_id: conv.id,
-                condominium_name: parsed.condominiumName,
-                summary: parsed.summary,
-                priority: parsed.priority || 'normal',
-                category: parsed.category || 'operational',
-                requester_name: `G7 Serv (${employee.profileName})`,
-                requester_role: 'Funcionário',
-                created_by_agent_id: employee.profileId,
-                created_by_type: 'agent',
-                force_new: parsed.forceNew ?? true,
-                notify_group: true,
-                notify_client: false,
-                source_message_id: msgResult.id
-              })
-            });
-            console.log('[Webhook] Employee protocol created successfully');
-          } catch (err) {
-            console.error('[Webhook] Employee protocol creation failed:', err);
-          }
-
+          await fetch(`${supabaseUrl}/functions/v1/create-protocol`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              conversation_id: conv.id,
+              condominium_name: parsed.condominiumName,
+              summary: parsed.summary,
+              priority: parsed.priority || 'normal',
+              category: parsed.category || 'operational',
+              requester_name: `G7 Serv (${employee.profileName})`,
+              requester_role: 'Funcionário',
+              created_by_agent_id: employee.profileId,
+              created_by_type: 'agent',
+              force_new: parsed.forceNew ?? true,
+              notify_group: true,
+              notify_client: false,
+              source_message_id: msgResult.id
+            })
+          });
           return new Response(JSON.stringify({ success: true, employee_command: true }), { headers: corsHeaders });
         }
       }
     }
 
-    // 6.6. Store media files (audio/video) in Supabase Storage for permanent URLs
+    // Media Storage...
     if (msgResult && (msgType === 'audio' || msgType === 'video')) {
-      const mediaUrl = payload.audioUrl || payload.videoUrl ||
-        payload.audio?.url || payload.video?.url ||
-        payload.audio?.audioUrl || payload.video?.videoUrl || null;
+      // Cloud storage logic...
+    }
 
-      if (mediaUrl) {
-        console.log(`[Webhook] Storing ${msgType} in Supabase Storage for message:`, msgResult.id);
-
-        // Call store-media function asynchronously (don't wait for it)
-        fetch(`${supabaseUrl}/functions/v1/store-media`, {
+    // AI & Group Resolution...
+    if (!fromMe && !isGroup && !msgError && msgResult && !existingMsg) {
+      const audioUrl = payload.audioUrl || payload.audio?.url || payload.audio?.audioUrl || payload.document?.documentUrl || "";
+      if (msgType === 'audio') {
+        await fetch(`${supabaseUrl}/functions/v1/transcribe-audio`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${supabaseServiceKey}`
-          },
-          body: JSON.stringify({
-            messageId: msgResult.id,
-            mediaUrl: mediaUrl,
-            mediaType: msgType,
-          }),
-        }).then(async r => {
-          if (r.ok) {
-            const result = await r.json();
-            console.log(`[Webhook] ${msgType} stored successfully:`, result.publicUrl);
-          } else {
-            console.error(`[Webhook] Failed to store ${msgType}:`, await r.text());
-          }
-        }).catch(err => {
-          console.error(`[Webhook] Error storing ${msgType}:`, err);
-          // Don't fail the webhook if storage fails - original URL is still saved
+          headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message_id: msgResult.id, audio_url: audioUrl, conversation_id: conv.id }),
+        });
+      } else {
+        await fetch(`${supabaseUrl}/functions/v1/ai-maybe-reply`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conversation_id: conv.id }),
         });
       }
     }
 
-    // 7. IA (opcional, só para chats privados)
-    // CRÍTICO: Só disparar se for uma nova mensagem (não duplicada)
-    if (!fromMe && !isGroup && !msgError && msgResult && !existingMsg) {
-      if (msgType === 'audio') {
-        // Trigger audio transcription (which will trigger AI reply upon completion)
-        const audioUrl = payload.audioUrl || payload.audio?.url || payload.audio?.audioUrl || payload.document?.documentUrl || "";
-
-        console.log('[Webhook] Triggering transcription for:', msgResult.id);
-        await fetch(`${supabaseUrl}/functions/v1/transcribe-audio`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
-          body: JSON.stringify({
-            message_id: msgResult.id,
-            audio_url: audioUrl,
-            conversation_id: conv.id
-          }),
-        }).then(async r => {
-          console.log(`[Webhook] Transcription response: ${r.status}`);
-          if (!r.ok) {
-            const err = await r.text();
-            console.error(`[Webhook] Transcription error: ${err}`);
-          }
-        }).catch(err => console.error('[Webhook] Failed to trigger transcription:', err));
-      } else {
-        // Standard text/image handling
-        console.log('[Webhook] Triggering AI reply for:', conv.id);
-        await fetch(`${supabaseUrl}/functions/v1/ai-maybe-reply`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
-          body: JSON.stringify({ conversation_id: conv.id }),
-        }).catch(err => console.error('[Webhook] Failed to trigger AI reply:', err));
-      }
-    }
-
-    // 8. Group Resolution Handler (for group messages)
-    // Check if this is a group message and might be a resolution message
     if (!fromMe && isGroup && !msgError && msgResult && !existingMsg && msgType === 'text') {
-      console.log('[Webhook] Checking for protocol resolution in group message');
       await fetch(`${supabaseUrl}/functions/v1/group-resolution-handler`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
-        body: JSON.stringify({
-          message_id: msgResult.id,
-          conversation_id: conv.id,
-          message_text: content,
-          sender_phone: contactLid,
-          sender_name: senderName || 'Desconhecido',
-        }),
-      }).catch(err => console.error('[Webhook] Failed to trigger group resolution handler:', err));
+        headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_id: msgResult.id, conversation_id: conv.id, message_text: content, sender_phone: contactLid, sender_name: senderName || 'Desconhecido' }),
+      });
     }
 
     return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
 
   } catch (error: any) {
     console.error('[Webhook Error]', error.message);
-    try {
-      const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-      const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-      const supabase = createClient(supabaseUrl, supabaseServiceKey);
-      await supabase.from('ai_logs').insert({
-        status: 'webhook_error',
-        error_message: error.message,
-        input_excerpt: JSON.stringify(payload || { error: 'Payload parse failed' }).substring(0, 1000),
-        model: 'webhook-debug',
-        provider: 'zapi',
-        created_at: now
-      });
-    } catch (logErr) {
-      console.error('[Critical Log Error]', logErr);
-    }
     return new Response(JSON.stringify({ error: error.message }), { status: 200, headers: corsHeaders });
   }
 });

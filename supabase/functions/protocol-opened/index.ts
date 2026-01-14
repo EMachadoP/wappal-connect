@@ -88,7 +88,7 @@ serve(async (req: Request): Promise<Response> => {
 
       console.log('Invocando zapi-send-message para grupo...');
 
-      // ✅ Usar recipient padronizado (não chatId)
+      // ✅ Usar recipient padronizado (wrapper vai formatar para @g.us se isGroup for true)
       const groupRes = await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
         method: "POST",
         headers: {
@@ -97,7 +97,7 @@ serve(async (req: Request): Promise<Response> => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          recipient: techGroupId,  // Já deve estar com @g.us
+          recipient: techGroupId,
           content: groupMsg,
           isGroup: true,
           sender_name: "G7"
@@ -128,8 +128,6 @@ serve(async (req: Request): Promise<Response> => {
     // ========== NOTIFICAÇÃO DO CLIENTE ==========
     if (conv?.id) {
       console.log('=== CLIENT NOTIFICATION ===');
-      console.log('Conversation ID:', conv.id);
-
       const clientMsg = `📋 *Protocolo aberto*\n\n` +
         `🔖 *Número:* G7-${protocol_code}\n` +
         `🏢 *Condomínio:* ${condoName}\n` +
@@ -152,39 +150,17 @@ serve(async (req: Request): Promise<Response> => {
 
       const clientResult = await clientRes.json();
       console.log('Client Response:', JSON.stringify(clientResult, null, 2));
-
-      if (clientResult.success) {
-        console.log('✅ Enviado com sucesso para o cliente!');
-      } else {
-        console.error('❌ Falha ao enviar para cliente:', clientResult.error);
-      }
-    } else {
-      console.log('ℹ️ Sem conversation_id, pulando notificação do cliente');
     }
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        protocol_code
-      }),
-      {
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
-      }
-    );
+    return new Response(JSON.stringify({ success: true, protocol_code }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" }
+    });
 
   } catch (err: any) {
     console.error('[Protocol Opened Error]', err.message);
-    console.error('Stack:', err.stack);
-
-    return new Response(
-      JSON.stringify({
-        success: false,
-        error: err.message
-      }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
-      }
-    );
+    return new Response(JSON.stringify({ success: false, error: err.message }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" }
+    });
   }
 });
