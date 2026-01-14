@@ -295,11 +295,13 @@ ${priorityEmoji} *Prioridade:* ${priority || 'normal'}
 ➡️ *Para encerrar, responda:*
 G7-${protocol_code} - Resolvido`;
 
-          console.log(`[protocol-opened] Sending group message to ${settings.whatsapp_group_id}...`);
+          const techGroupChatId = Deno.env.get("ZAPI_TECH_GROUP_CHAT_ID") || settings.whatsapp_group_id;
+
+          console.log(`[protocol-opened] Sending group message to ${techGroupChatId}...`);
 
           const zapiResponse = await supabase.functions.invoke("zapi-send-message", {
             body: {
-              chatId: settings.whatsapp_group_id,
+              chatId: techGroupChatId,
               content: whatsappMessage,
               message_type: "text",
               isGroup: true,
@@ -309,6 +311,16 @@ G7-${protocol_code} - Resolvido`;
 
           const zapiResult = zapiResponse.data;
           console.log("WhatsApp group message sent via wrapper:", zapiResult);
+
+          // LOG NOTIFICATION ATTEMPT
+          await supabase.from('protocol_notifications').insert({
+            protocol_id: protocolId,
+            channel: 'group',
+            status: zapiResult?.success ? 'success' : 'error',
+            recipient: techGroupChatId,
+            error: zapiResult?.error || (zapiResult?.success ? null : 'Unknown error'),
+            sent_at: new Date().toISOString()
+          });
 
           if (zapiResult.zapiMessageId || zapiResult.messageId) {
             whatsappMessageId = zapiResult.zapiMessageId || zapiResult.messageId;
@@ -400,21 +412,29 @@ G7-${protocol_code} - Resolvido`;
 
               console.log('[Pending Summary] Sending message with', openProtocols.length, 'items');
 
-              // Send the summary message to the group
-              const summaryResponse = await fetch(zapiUrl, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  "Client-Token": zapiClientToken,
+              // Send the summary message to the group via wrapper
+              const summaryResponse = await supabase.functions.invoke("zapi-send-message", {
+                body: {
+                  chatId: techGroupChatId,
+                  content: summaryMessage,
+                  message_type: "text",
+                  isGroup: true,
+                  sender_name: "G7",
                 },
-                body: JSON.stringify({
-                  phone: settings.whatsapp_group_id,
-                  message: summaryMessage,
-                }),
               });
 
-              const summaryResult = await summaryResponse.json();
+              const summaryResult = summaryResponse.data;
               console.log('[Pending Summary] WhatsApp response:', summaryResult);
+
+              // LOG SUMMARY ATTEMPT
+              await supabase.from('protocol_notifications').insert({
+                protocol_id: protocolId,
+                channel: 'group_summary',
+                status: summaryResult?.success ? 'success' : 'error',
+                recipient: techGroupChatId,
+                error: summaryResult?.error || (summaryResult?.success ? null : 'Unknown error'),
+                sent_at: new Date().toISOString()
+              });
             } else {
               console.log('[Pending Summary] No open protocols found');
             }

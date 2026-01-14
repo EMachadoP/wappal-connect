@@ -176,10 +176,14 @@ O protocolo foi aberto em nosso sistema e o responsável fará a tratativa.`;
 
         console.log('[protocol-client] Message sent:', sendResult.data);
 
-        // Mark as notified
+        // Mark as notified with details
         await supabase.from('protocol_notifications').insert({
             protocol_id: protocol.id,
-            channel: 'client'
+            channel: 'client',
+            status: sendResult.data?.success ? 'success' : 'error',
+            recipient: conversation.chat_id || contact.chat_lid || contact.phone,
+            error: sendResult.data?.error || (sendResult.data?.success ? null : 'Unknown error'),
+            sent_at: new Date().toISOString()
         });
 
         return new Response(JSON.stringify({ success: true }), {
