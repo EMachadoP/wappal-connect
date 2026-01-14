@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { isEmployeeSender } from "../_shared/is-employee.ts";
+import { parseAndExtract } from "../_shared/parse-extract.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -149,6 +151,98 @@ serve(async (req) => {
     const lastUserMsg = getLastByRole(messagesNoSystem, 'user');
     const lastUserMsgText = (lastUserMsg?.content || "").trim();
     const recentText = messagesNoSystem.slice(-6).map((m: any) => m.content).join(" ");
+
+    // --- EMPLOYEE DETECTION & STRUCTURED EXTRACTION ---
+    // Load the last message's raw_payload for employee detection
+    const { data: lastMsg } = await supabase
+      .from('messages')
+      .select('id, content, transcript, raw_payload')
+      .eq('conversation_id', conversationId)
+      .order('sent_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const rawPayload = lastMsg?.raw_payload ?? {};
+    const employee = await isEmployeeSender(supabase, rawPayload);
+    const isEmployee = employee.isEmployee;
+
+    // Use transcript if available (audio messages), otherwise content
+    const textForExtraction = (lastMsg?.transcript ?? lastMsg?.content ?? lastUserMsgText).replace(/^🎤\s*/, '').trim();
+
+    // Check for employee command patterns
+    const hasCommand = /^CRIAR\s+AGENDAMENTO\b|^ABRIR\s+CHAMADO\b|^ABRIR\s+PROTOCOLO\b|^CHAMADO\s*:|^AGENDA\s*:/i.test(textForExtraction);
+
+    // If employee WITHOUT command → skip AI response (just register the message)
+    if (isEmployee && !hasCommand) {
+      console.log('[AI] Employee message without command, skipping AI response.');
+      return new Response(JSON.stringify({
+        text: null,
+        skipped: 'employee_no_command',
+        finish_reason: 'SKIPPED',
+        provider: 'employee-detection',
+        model: 'none',
+        request_id: crypto.randomUUID()
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    // If employee WITH command → structured extraction
+    if (isEmployee && hasCommand && conversationId) {
+      console.log('[AI] Employee command detected, extracting structured data...');
+
+      // Load known condominiums to help extraction
+      const { data: condos } = await supabase.from('condominiums').select('name').limit(500);
+      const knownCondominiums = (condos ?? []).map((c: any) => c.name).filter(Boolean);
+
+      const extracted = await parseAndExtract(null, {
+        text: textForExtraction,
+        isEmployee: true,
+        knownCondominiums
+      });
+
+      if (extracted.intent === 'create_schedule' || extracted.intent === 'create_protocol') {
+        // If missing required fields, ask for them
+        if (extracted.draft && extracted.missing_fields.length > 0) {
+          const missing = extracted.missing_fields[0];
+          let question = '';
+          if (missing === 'condominium_name') question = 'Qual é o condomínio?';
+          else if (missing === 'category') question = 'Qual é o tipo do serviço? (Portão, CFTV, Interfone, TV Coletiva)';
+          else if (missing === 'summary') question = 'Descreva em uma frase o problema a ser atendido.';
+          else question = `Por favor, informe: ${missing}`;
+
+          return new Response(JSON.stringify({
+            text: `📋 Entendido, ${employee.profileName}. ${question}`,
+            finish_reason: 'NEED_EMPLOYEE_INPUT',
+            provider: 'employee-extraction',
+            model: 'parse-extract',
+            request_id: crypto.randomUUID(),
+            extracted
+          }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+
+        // All data available - create the protocol
+        try {
+          const ticketData = await executeCreateProtocol(supabase, supabaseUrl, supabaseServiceKey, conversationId, participant_id, {
+            summary: extracted.fields.summary || 'Agendamento solicitado via funcionário',
+            priority: extracted.fields.urgency === 'high' ? 'critical' : 'normal',
+            category: extracted.fields.category || 'operational',
+            requester_name: `G7 Serv (${employee.profileName})`,
+            requester_role: 'Funcionário',
+          });
+
+          const protocolCode = ticketData.protocol?.protocol_code || ticketData.protocol_code;
+          return new Response(JSON.stringify({
+            text: `✅ Pronto, ${employee.profileName}! Protocolo **${protocolCode}** criado com sucesso.\n\n📍 ${extracted.fields.condominium_name || 'Condomínio não especificado'}\n🔧 ${extracted.fields.category || 'Categoria não especificada'}\n📝 ${extracted.fields.summary}`,
+            finish_reason: 'EMPLOYEE_PROTOCOL_CREATED',
+            provider: 'employee-extraction',
+            model: 'parse-extract',
+            request_id: crypto.randomUUID()
+          }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        } catch (e) {
+          console.error('[AI] Employee protocol creation failed:', e);
+          // Fall through to normal flow
+        }
+      }
+    }
 
     // --- TIER 4: DETERMINISTIC (Bulletproof Context-Aware) ---
     const { data: convData } = await supabase
