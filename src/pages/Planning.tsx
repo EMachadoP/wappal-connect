@@ -41,6 +41,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useDroppable } from '@dnd-kit/core';
+import { EditPlanItemModal } from '@/components/planning/EditPlanItemModal';
 
 // Interface matches v_planning_week VIEW
 interface PlanItem {
@@ -96,10 +97,11 @@ interface SortableItemProps {
     item: PlanItem;
     openConversation: (id: string) => void;
     handleUpdateStatus: (itemId: string, status: string, e: React.MouseEvent) => void;
+    onEditItem: (item: PlanItem) => void;
     otherTechs: string[];
 }
 
-const SortableItem = ({ item, openConversation, handleUpdateStatus, otherTechs }: SortableItemProps) => {
+const SortableItem = ({ item, openConversation, handleUpdateStatus, onEditItem, otherTechs }: SortableItemProps) => {
     const {
         attributes,
         listeners,
@@ -121,8 +123,20 @@ const SortableItem = ({ item, openConversation, handleUpdateStatus, otherTechs }
             ref={setNodeRef}
             style={style}
             className={`p-2 rounded text-xs cursor-pointer hover:shadow-md transition-all border group ${priorityColors[item.work_item_priority || 'normal']} ${statusStyles[item.work_item_status || 'open']}`}
-            onClick={() => openConversation(item.conversation_id || '')}
-            title={`${item.protocol_code || ''} - Clique para abrir conversa`}
+            onClick={(e) => {
+                // Right-click or Ctrl+click to edit
+                if (e.ctrlKey || e.button === 2) {
+                    e.preventDefault();
+                    onEditItem(item);
+                } else {
+                    openConversation(item.conversation_id || '');
+                }
+            }}
+            onContextMenu={(e) => {
+                e.preventDefault();
+                onEditItem(item);
+            }}
+            title={`${item.protocol_code || ''} - Clique para abrir | Ctrl+Click ou botão direito para editar`}
         >
             <div className="flex items-center justify-between gap-1 mb-1">
                 <div className="flex items-center gap-1">
@@ -230,6 +244,8 @@ export default function Planning() {
     const [loading, setLoading] = useState(true);
     const [rebuilding, setRebuilding] = useState(false);
     const [activeId, setActiveId] = useState<string | null>(null);
+    const [editingItem, setEditingItem] = useState<PlanItem | null>(null);
+    const [editModalOpen, setEditModalOpen] = useState(false);
 
     const sensors = useSensors(
         useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -455,6 +471,10 @@ export default function Planning() {
                                                                     item={item}
                                                                     openConversation={(id) => navigate(`/inbox/${id}`)}
                                                                     handleUpdateStatus={handleUpdateStatus}
+                                                                    onEditItem={(item) => {
+                                                                        setEditingItem(item);
+                                                                        setEditModalOpen(true);
+                                                                    }}
                                                                     otherTechs={getOtherTechs(item)}
                                                                 />
                                                             ))}
@@ -496,6 +516,14 @@ export default function Planning() {
                     </div>
                 )}
             </div>
+
+            {/* Edit Modal */}
+            <EditPlanItemModal
+                item={editingItem}
+                open={editModalOpen}
+                onOpenChange={setEditModalOpen}
+                onSaved={fetchData}
+            />
         </AppLayout>
     );
 }
