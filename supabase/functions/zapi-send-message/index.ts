@@ -7,7 +7,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-serve(async (req) => {
+serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -52,9 +52,10 @@ serve(async (req) => {
     }
 
     const json = await req.json();
-    let { conversation_id, content, chatId, isGroup } = json;
+    let { content, chatId, recipient: inputRecipient, isGroup } = json;
     const { message_type, media_url, sender_name: overrideSenderName } = json;
 
+    if (inputRecipient && !chatId) chatId = inputRecipient;
     if (overrideSenderName) senderName = overrideSenderName;
 
     let conv: any = null;
