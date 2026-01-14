@@ -75,8 +75,9 @@ DECLARE
     v_drop_conv UUID;
 BEGIN
     -- Primeiro, garante que todos os chat_key estão populados com a nova lógica
+    -- PRIORIDADE: Phone > Lid > Chat_Lid > Name
     UPDATE public.contacts 
-    SET chat_key = normalize_chat_key(COALESCE(lid, chat_lid, phone, name))
+    SET chat_key = normalize_chat_key(COALESCE(phone, lid, chat_lid, name))
     WHERE chat_key IS NULL OR chat_key = '';
 
     -- Loop por grupos duplicados
@@ -161,9 +162,19 @@ END $$;
 -- =====================================================
 -- 5. CONSISTÊNCIA DE MENSAGENS (BACKLOG)
 -- =====================================================
+-- Vincula mensagens de saída que ficaram sem chat_id
 UPDATE public.messages m
 SET chat_id = c.chat_id
 FROM public.conversations c
 WHERE m.conversation_id = c.id
   AND (m.chat_id IS NULL OR m.chat_id = '')
   AND c.chat_id IS NOT NULL;
+
+-- Vincula mensagens inbound que ficaram sem contact_id (Caso A do log)
+-- Isso garante que mensagens "fantasmas" apareçam no Inbox
+UPDATE public.messages m
+SET contact_id = c.contact_id
+FROM public.conversations c
+WHERE m.conversation_id = c.id
+  AND m.direction = 'inbound'
+  AND m.contact_id IS NULL;

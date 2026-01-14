@@ -75,7 +75,8 @@ serve(async (req: Request) => {
 
       const contact = conv.contacts;
       if (!recipient) {
-        recipient = conv.chat_id || contact?.chat_lid || contact?.lid || contact?.phone;
+        // Prioritiza o Telefone para garantir unificação na thread canônica
+        recipient = contact?.phone || conv.chat_id || contact?.chat_lid || contact?.lid;
       }
     }
 

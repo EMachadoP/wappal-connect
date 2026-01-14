@@ -80,8 +80,8 @@ serve(async (req) => {
       return normalized;
     };
 
-    let chatLid = normalizeLid(payload.chatLid || payload.chatId || payload.chat?.chatId || payload.phone || payload.senderPhone);
-    const contactLid = normalizeLid(payload.contact?.lid || payload.lid || payload.participantLid || (isGroup ? null : chatLid) || payload.senderPhone || payload.phone);
+    let chatLid = normalizeLid(payload.phone || payload.senderPhone || payload.chatLid || payload.chatId || payload.chat?.chatId);
+    const contactLid = normalizeLid(payload.phone || payload.senderPhone || payload.contact?.phone || payload.contact?.lid || payload.lid || payload.participantLid || (isGroup ? null : chatLid));
 
     if (!chatLid && contactLid && !isGroup) chatLid = contactLid;
     if (!contactLid || !chatLid) throw new Error(`Identificadores ausentes: contact=${contactLid}, chat=${chatLid}`);
