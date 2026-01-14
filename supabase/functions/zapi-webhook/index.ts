@@ -187,7 +187,12 @@ serve(async (req) => {
     }
     if (!content) content = "..."; // Fallback final
 
-    let senderName = payload.contact?.name || payload.senderName || payload.pushName;
+    // For outgoing messages, contact?.name is the recipient, not the agent.
+    // We prioritize senderName/pushName which identifies the agent/actor.
+    let senderName = payload.senderName || payload.pushName;
+    if (!fromMe && !senderName) {
+      senderName = payload.contact?.name;
+    }
 
     // Fallback logic for agent name (fromMe)
     if (fromMe) {

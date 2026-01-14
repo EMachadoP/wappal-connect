@@ -180,7 +180,7 @@ export function MessageList({
           let name: string | null = null;
 
           if (isOutgoing) {
-            name = msg.agent_name || getAgentName(msg.sender_id || msg.agent_id);
+            name = msg.agent_name || getAgentName(msg.sender_id || msg.agent_id) || msg.sender_name;
           } else {
             if (msg.sender_name && !isPhoneNumber(msg.sender_name)) {
               name = msg.sender_name;
