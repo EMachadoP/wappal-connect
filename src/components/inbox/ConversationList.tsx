@@ -56,9 +56,12 @@ export function ConversationList({
     .filter((conv) => {
       if (!conv.contact) return false;
       const contactName = conv.contact.name || "";
-      const matchesSearch = contactName.toLowerCase().includes(search.toLowerCase());
+      if (!contactName.toLowerCase().includes(search.toLowerCase())) return false;
 
-      if (!matchesSearch) return false;
+      // HIDE EMPTY SHELLS: Only show conversations that have been interacted with
+      // (either have a last_message_at timestamp or are explicitly resolved)
+      const hasHistory = conv.last_message_at || conv.status === 'resolved';
+      if (!hasHistory) return false;
 
       switch (activeTab) {
         case 'mine':
