@@ -35,19 +35,20 @@ function json(status: number, body: unknown) {
 }
 
 serve(async (req) => {
+    const reqId = crypto.randomUUID();
     if (req.method === 'OPTIONS') {
         return new Response('ok', { headers: corsHeaders });
     }
 
     try {
-        console.log('--- [rebuild-plan] START v5 ---');
+        console.log(`--- [rebuild-plan] START v5.1 reqId=${reqId} ---`);
 
         const supabaseUrl = Deno.env.get('SUPABASE_URL');
         const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
         if (!supabaseUrl || !serviceRoleKey) {
             console.error('[rebuild-plan] Missing env vars');
-            return json(500, { error: "Missing config" });
+            throw new Error("Missing database configuration (SUPABASE_URL/SERVICE_ROLE_KEY)");
         }
 
         const admin = createClient(supabaseUrl, serviceRoleKey);
@@ -60,10 +61,19 @@ serve(async (req) => {
         if (authErr || !user) return json(401, { error: 'Invalid JWT' });
 
         // 2. Parse request
-        const { start_date, days = 7 } = await req.json().catch(() => ({}));
-        if (!start_date) return json(400, { error: "start_date required" });
+        const body = await req.json().catch(() => ({}));
+        const { start_date, days = 7 } = body;
+
+        if (!start_date) {
+            console.warn(`[rebuild-plan] reqId=${reqId} No start_date in body:`, body);
+            return json(400, { error: "start_date required", reqId });
+        }
 
         const start = new Date(start_date);
+        if (isNaN(start.getTime())) {
+            return json(400, { error: "Invalid start_date format", reqId });
+        }
+
         const dates: string[] = [];
         for (let i = 0; i < days; i++) {
             const d = new Date(start);
@@ -75,7 +85,7 @@ serve(async (req) => {
         // 3. Lock
         const lockKey = `plan:${start_date}:${days}`;
         const { error: lockErr } = await admin.from('planner_locks').insert({ lock_key: lockKey });
-        if (lockErr) return json(409, { error: "Already running" });
+        if (lockErr) return json(409, { error: "Already running (lock exists)", reqId });
 
         try {
             // 4. Clean up
@@ -92,8 +102,8 @@ serve(async (req) => {
                 .select('*')
                 .in('status', ['open', 'planned']);
 
-            if (wiErr) throw wiErr;
-            if (!workItems || workItems.length === 0) return json(200, { scheduled: 0 });
+            if (wiErr) throw new Error(`Error loading work items: ${wiErr.message}`);
+            if (!workItems || workItems.length === 0) return json(200, { scheduled: 0, reqId });
 
             // Sort: Critical -> Priority -> CreatedAt
             workItems.sort((a, b) => {
@@ -114,9 +124,21 @@ serve(async (req) => {
                 .select('id, name, dispatch_priority, is_wildcard, technician_skills(skills(code))')
                 .eq('is_active', true);
 
-            if (techErr) throw techErr;
+            // If is_wildcard is missing, retry without it to avoid 500
+            let finalTechs = technicians;
+            if (techErr && techErr.message.includes('is_wildcard')) {
+                console.warn(`[rebuild-plan] reqId=${reqId} Column is_wildcard missing, falling back.`);
+                const { data: techDataRetry, error: techErrRetry } = await admin
+                    .from('technicians')
+                    .select('id, name, dispatch_priority, technician_skills(skills(code))')
+                    .eq('is_active', true);
+                if (techErrRetry) throw new Error(`Error loading technicians (retry): ${techErrRetry.message}`);
+                finalTechs = techDataRetry;
+            } else if (techErr) {
+                throw new Error(`Error loading technicians: ${techErr.message}`);
+            }
 
-            const techWithSkills = technicians.map((t: any) => ({
+            const techWithSkills = (finalTechs || []).map((t: any) => ({
                 id: t.id,
                 name: t.name,
                 is_wildcard: t.is_wildcard || false,
@@ -221,13 +243,17 @@ serve(async (req) => {
                 await admin.from('protocol_work_items').update({ status: 'planned' }).in('id', scheduledIds);
             }
 
-            return json(200, { ok: true, scheduled: scheduledIds.length });
+            return json(200, { ok: true, scheduled: scheduledIds.length, reqId });
 
         } finally {
             await admin.from('planner_locks').delete().eq('lock_key', lockKey);
         }
     } catch (e) {
-        console.error('[rebuild-plan] Error:', e);
-        return json(500, { error: (e as Error).message });
+        console.error(`[rebuild-plan] ERROR reqId=${reqId}:`, e);
+        return json(500, {
+            ok: false,
+            message: (e as Error).message,
+            reqId
+        });
     }
 });
