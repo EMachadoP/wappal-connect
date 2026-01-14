@@ -230,7 +230,12 @@ export default function InboxPage() {
     try {
       const { error } = await supabase
         .from('conversations')
-        .update({ status: 'open' })
+        .update({
+          status: 'open',
+          assigned_to: null,
+          resolved_at: null,
+          reopened_at: new Date().toISOString()
+        })
         .eq('id', activeConversationId);
 
       if (error) throw error;

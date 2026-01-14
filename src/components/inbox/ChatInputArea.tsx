@@ -3,7 +3,7 @@
 import React, { useState, useRef } from 'react';
 import { Send, Paperclip } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { EmojiPicker } from './EmojiPicker';
 import { cn } from '@/lib/utils';
 
@@ -17,6 +17,7 @@ interface ChatInputAreaProps {
 export function ChatInputArea({ onSendMessage, onSendFile, isResolved, isMobile }: ChatInputAreaProps) {
   const [message, setMessage] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleSend = () => {
     if (message.trim()) {
@@ -25,10 +26,35 @@ export function ChatInputArea({ onSendMessage, onSendFile, isResolved, isMobile 
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter') {
+      const isModifierPressed = e.ctrlKey || e.shiftKey || e.metaKey;
+
+      if (isModifierPressed) {
+        // BREAK LINE: Allow Shift+Enter or Ctrl+Enter to insert a newline
+        // Standard textarea handles newline on Enter, but since we preventDefault for Send,
+        // we might need to manually insert it if we want to support specifically Ctrl+Enter.
+        // Actually, just NOT calls preventDefault() when modifier is pressed would work
+        // for Shift+Enter. For Ctrl+Enter, we might need manual injection.
+
+        // Let's use the robust manual injection to be safe
+        e.preventDefault();
+        const cursorPosition = e.currentTarget.selectionStart;
+        const textBefore = message.substring(0, cursorPosition);
+        const textAfter = message.substring(cursorPosition);
+        setMessage(textBefore + '\n' + textAfter);
+
+        // Reset cursor position after state update
+        setTimeout(() => {
+          if (textareaRef.current) {
+            textareaRef.current.selectionStart = textareaRef.current.selectionEnd = cursorPosition + 1;
+          }
+        }, 0);
+      } else {
+        // SEND: Standard Enter sends the message
+        e.preventDefault();
+        handleSend();
+      }
     }
   };
 
@@ -84,14 +110,16 @@ export function ChatInputArea({ onSendMessage, onSendFile, isResolved, isMobile 
             if (fileInputRef.current) fileInputRef.current.value = '';
           }}
         />
-        <Input
-          placeholder="Digite uma mensagem... (Ctrl+V para colar imagem)"
+        <Textarea
+          ref={textareaRef}
+          placeholder="Digite uma mensagem... (Enter envia, Ctrl+Enter quebra linha)"
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          className="flex-1"
+          className="flex-1 min-h-[40px] max-h-[200px] resize-none py-2"
           autoComplete="off"
+          rows={1}
         />
         <Button
           onClick={handleSend}

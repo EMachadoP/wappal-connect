@@ -42,11 +42,10 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
             is_primary
           )
         )
-      `)
-      .order('last_message_at', { ascending: false });
+      `);
 
     if (!error && data) {
-      setConversations(data.map((conv: any) => {
+      const mapped = data.map((conv: any) => {
         // Get primary participant name if available
         const participants = conv.contacts?.participants || [];
         const primaryParticipant = participants.find((p: any) => p.is_primary) || participants[0];
@@ -62,12 +61,28 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
           last_message: conv.last_message_content || 'Nenhuma mensagem',
           last_message_type: 'text',
           last_message_at: conv.last_message_at,
+          reopened_at: conv.reopened_at,
           unread_count: conv.unread_count,
           assigned_to: conv.assigned_to,
           status: conv.status,
           priority: conv.priority,
         };
-      }));
+      });
+
+      // Sort by greatest of last_message_at or reopened_at
+      mapped.sort((a, b) => {
+        const timeA = Math.max(
+          a.last_message_at ? new Date(a.last_message_at).getTime() : 0,
+          a.reopened_at ? new Date(a.reopened_at).getTime() : 0
+        );
+        const timeB = Math.max(
+          b.last_message_at ? new Date(b.last_message_at).getTime() : 0,
+          b.reopened_at ? new Date(b.reopened_at).getTime() : 0
+        );
+        return timeB - timeA;
+      });
+
+      setConversations(mapped);
     }
     setLoading(false);
   }, []);
