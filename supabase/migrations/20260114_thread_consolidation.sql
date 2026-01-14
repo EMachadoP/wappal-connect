@@ -47,6 +47,13 @@ BEGIN
     -- Delete the duplicate conversation and contact
     DELETE FROM public.conversations WHERE id = v_drop_conv;
     DELETE FROM public.contacts WHERE id = v_drop_contact;
+
+    -- Recalculate last_message_at and unread_count for keeper
+    UPDATE public.conversations c
+    SET 
+      last_message_at = (SELECT MAX(sent_at) FROM public.messages WHERE conversation_id = v_keep_conv),
+      unread_count = (SELECT COUNT(*) FROM public.messages WHERE conversation_id = v_keep_conv AND sender_type = 'contact' AND (read_at IS NULL))
+    WHERE id = v_keep_conv;
   END IF;
 END $$;
 
