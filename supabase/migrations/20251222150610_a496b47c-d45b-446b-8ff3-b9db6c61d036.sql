@@ -1,5 +1,9 @@
--- Enum para roles de usuário
-CREATE TYPE public.app_role AS ENUM ('admin', 'agent');
+-- Enum para roles de usuário (seguro contra duplicatas)
+DO $$ BEGIN
+    CREATE TYPE public.app_role AS ENUM ('admin', 'agent');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- Tabela de roles (segurança - separada de profiles)
 CREATE TABLE public.user_roles (

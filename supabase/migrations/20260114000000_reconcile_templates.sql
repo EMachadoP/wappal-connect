@@ -1,7 +1,40 @@
--- Migration: Seed Task Templates V3 (Idempotent & Categorized)
--- Purpose: Populates task_templates with specific category keys
--- Uses UPSERT pattern to prevent duplicates
+-- Migration: Reconcile Task Templates Schema & Seed
+-- Created: 2026-01-14
+-- Purpose: Ensures all columns exist and applies the normalized V3 seed data
 
+-- 1) Ensure schema is complete
+DO $$ 
+BEGIN
+  -- Add match_keywords if missing
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='task_templates' AND column_name='match_keywords') THEN
+    ALTER TABLE task_templates ADD COLUMN match_keywords text[] DEFAULT '{}';
+  END IF;
+
+  -- Add match_priority if missing
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='task_templates' AND column_name='match_priority') THEN
+    ALTER TABLE task_templates ADD COLUMN match_priority INT DEFAULT 0;
+  END IF;
+
+  -- Add criticality if missing
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='task_templates' AND column_name='criticality') THEN
+    ALTER TABLE task_templates ADD COLUMN criticality text NOT NULL DEFAULT 'non_critical';
+  END IF;
+
+  -- Add sla_business_days if missing
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='task_templates' AND column_name='sla_business_days') THEN
+    ALTER TABLE task_templates ADD COLUMN sla_business_days int NOT NULL DEFAULT 2;
+  END IF;
+END $$;
+
+-- 2) Ensure unique constraint for UPSERT
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'uq_task_templates_key') THEN
+        CREATE UNIQUE INDEX uq_task_templates_key ON task_templates (category, title);
+    END IF;
+END $$;
+
+-- 3) Apply Seed Data (Idempotent V3)
 WITH templates AS (
   SELECT *
   FROM (
@@ -41,7 +74,7 @@ WITH templates AS (
     ),
 
     ('gate_motor','Portão veicular – trilho/roldanas/desalinhamento', 180, 2, 'critical', 0, ARRAY['PORTAO'],
-      ARRAY['desalinhado','trilho','roldana','arrastando','raspando','portão pesado','portao pesado'],
+      ARRAY['desalinhado','trilho','roldana','arrastando','raspando','portao pesado','portão pesado'],
       jsonb_build_array(
         jsonb_build_object('name','Parafusos e buchas (kit)','qty',1,'unit','kit','sku','KIT-PAR','optional',false),
         jsonb_build_object('name','Engrenagem','qty',1,'unit','un','sku','MTR-ENG','optional',true),
@@ -122,64 +155,9 @@ WITH templates AS (
         jsonb_build_object('name','DVR/NVR','qty',1,'unit','un','sku','DVR','optional',true),
         jsonb_build_object('name','HD para DVR/NVR','qty',1,'unit','un','sku','HDD-SURV','optional',true),
         jsonb_build_object('name','Conector BNC','qty',10,'unit','un','sku','BNC','optional',true),
-        jsonb_build_object('name','Conector RJ45','qty',10,'unit','un','sku','RJ45','optional',true),
-        jsonb_build_object('name','Monitor','qty',1,'unit','un','sku','MON','optional',true),
-        jsonb_build_object('name','Cabo HDMI','qty',1,'unit','un','sku','HDMI','optional',true),
-        jsonb_build_object('name','PC (diagnóstico/configuração)','qty',1,'unit','un','sku','PC','optional',true)
+        jsonb_build_object('name','Conector RJ45','qty',10,'unit','un','sku','RJ45','optional',true)
       ),
       11, true
-    ),
-
-    ('cctv','DVR/NVR bip intermitente / falha de HD', 120, 1, 'critical', 0, ARRAY['CFTV'],
-      ARRAY['bip','beep','hd','falha hd','dvr','nvr','armazenamento'],
-      jsonb_build_array(
-        jsonb_build_object('name','HD para DVR/NVR','qty',1,'unit','un','sku','HDD-SURV','optional',true),
-        jsonb_build_object('name','DVR/NVR','qty',1,'unit','un','sku','DVR','optional',true),
-        jsonb_build_object('name','Monitor','qty',1,'unit','un','sku','MON','optional',true),
-        jsonb_build_object('name','Cabo HDMI','qty',1,'unit','un','sku','HDMI','optional',true),
-        jsonb_build_object('name','PC (diagnóstico/configuração)','qty',1,'unit','un','sku','PC','optional',true)
-      ),
-      10, true
-    ),
-
-    ('cctv','Acesso remoto (app) não funciona', 60, 1, 'non_critical', 2, ARRAY['CFTV'],
-      ARRAY['acesso remoto','app','icloud','p2p','offline','não conecta','nao conecta'],
-      jsonb_build_array(
-        jsonb_build_object('name','PC (diagnóstico/configuração)','qty',1,'unit','un','sku','PC','optional',true)
-      ),
-      5, true
-    ),
-
-    ('cctv','Instalação de novo ponto de câmera', 180, 2, 'non_critical', 2, ARRAY['CFTV'],
-      ARRAY['novo ponto','instalar camera','instalação camera','passar cabo camera','ponto camera'],
-      jsonb_build_array(
-        jsonb_build_object('name','Conector BNC','qty',10,'unit','un','sku','BNC','optional',true),
-        jsonb_build_object('name','Conector RJ45','qty',10,'unit','un','sku','RJ45','optional',true),
-        jsonb_build_object('name','Fonte 12V (câmera)','qty',1,'unit','un','sku','PSU-12V','optional',true)
-      ),
-      6, true
-    ),
-
-    -- ANTENA
-    ('antenna','Sem sinal geral de TV (prédio todo)', 120, 1, 'critical', 0, ARRAY['ANTENACOLETIVA'],
-      ARRAY['tv','sem sinal','antena','prédio todo','predio todo','todos os canais'],
-      jsonb_build_array(
-        jsonb_build_object('name','Conector F','qty',10,'unit','un','sku','CONN-F','optional',false),
-        jsonb_build_object('name','Splitter (divisor) 2/4/8','qty',1,'unit','un','sku','SPLIT-COAX','optional',true),
-        jsonb_build_object('name','Módulo de potência (amplificador)','qty',1,'unit','un','sku','AMP-PWR','optional',true),
-        jsonb_build_object('name','Antena coletiva (UHF/VHF)','qty',1,'unit','un','sku','ANT-COL','optional',true),
-        jsonb_build_object('name','Cabo coaxial RG6','qty',30,'unit','m','sku','RG6','optional',true)
-      ),
-      10, true
-    ),
-
-    ('antenna','Falha em canais específicos / ajustes', 60, 1, 'non_critical', 2, ARRAY['ANTENACOLETIVA'],
-      ARRAY['canal','canais','alguns canais','ajuste','tv'],
-      jsonb_build_array(
-        jsonb_build_object('name','Conector F','qty',10,'unit','un','sku','CONN-F','optional',false),
-        jsonb_build_object('name','Splitter (divisor) 2/4/8','qty',1,'unit','un','sku','SPLIT-COAX','optional',true)
-      ),
-      5, true
     ),
 
     -- ACESSO
@@ -189,9 +167,7 @@ WITH templates AS (
         jsonb_build_object('name','Fecho magnético','qty',1,'unit','un','sku','FECHO-MAG','optional',true),
         jsonb_build_object('name','Fonte 12V/24V','qty',1,'unit','un','sku','PSU-12-24','optional',true),
         jsonb_build_object('name','Botoeira','qty',1,'unit','un','sku','BOTOEIRA','optional',true),
-        jsonb_build_object('name','Mola aérea','qty',1,'unit','un','sku','MOLA-AEREA','optional',true),
-        jsonb_build_object('name','Cabo CCI','qty',20,'unit','m','sku','CCI','optional',true),
-        jsonb_build_object('name','Módulo de acesso','qty',1,'unit','un','sku','MOD-ACESSO','optional',true)
+        jsonb_build_object('name','Mola aérea','qty',1,'unit','un','sku','MOLA-AEREA','optional',true)
       ),
       10, true
     ),
@@ -201,37 +177,31 @@ WITH templates AS (
       jsonb_build_array(
         jsonb_build_object('name','TAG de acesso','qty',10,'unit','un','sku','TAG','optional',true),
         jsonb_build_object('name','Controle remoto','qty',2,'unit','un','sku','CTRL','optional',true),
-        jsonb_build_object('name','Strobe / Sinaleiro','qty',1,'unit','un','sku','STROBE','optional',true),
-        jsonb_build_object('name','Módulo de acesso','qty',1,'unit','un','sku','MOD-ACESSO','optional',true),
-        jsonb_build_object('name','Cabo CCI','qty',20,'unit','m','sku','CCI','optional',true)
+        jsonb_build_object('name','Strobe / Sinaleiro','qty',1,'unit','un','sku','STROBE','optional',true)
       ),
       9, true
     ),
 
-    -- PASSAGEM CABO
+    -- INFRA
     ('infra','Passagem de cabo (curta)', 120, 2, 'non_critical', 2, ARRAY['CFTV','INTERFONE'],
       ARRAY['passagem de cabo','puxar cabo','um ponto','ponto proximo','ponto próximo','curta'],
       jsonb_build_array(
-        jsonb_build_object('name','Cabo','qty',50,'unit','m','sku','CABO','optional',true),
-        jsonb_build_object('name','Canaleta','qty',10,'unit','m','sku','CANALETA','optional',true),
-        jsonb_build_object('name','Conector BNC','qty',10,'unit','un','sku','BNC','optional',true),
-        jsonb_build_object('name','Conector RJ45','qty',10,'unit','un','sku','RJ45','optional',true),
-        jsonb_build_object('name','Conectores/terminais','qty',10,'unit','un','sku','TERM','optional',true)
+        jsonb_build_object('name','Cabo','qty',20,'unit','m','sku','CABO','optional',true)
       ),
       4, true
     ),
 
     ('infra','Passagem de cabo (longa)', 240, 2, 'non_critical', 2, ARRAY['CFTV','INTERFONE'],
-      ARRAY['passagem de cabo longa','muitos metros','vários pontos','varios pontos','infraestrutura','canaleta grande','caminho longo','longa'],
+      ARRAY['passagem de cabo longa','muitos metros','vários pontos','varios pontos','infraestrutura','longa'],
       jsonb_build_array(
-        jsonb_build_object('name','Cabo','qty',100,'unit','m','sku','CABO','optional',true),
-        jsonb_build_object('name','Canaleta','qty',20,'unit','m','sku','CANALETA','optional',true),
-        jsonb_build_object('name','Conector BNC','qty',10,'unit','un','sku','BNC','optional',true),
-        jsonb_build_object('name','Conector RJ45','qty',10,'unit','un','sku','RJ45','optional',true),
-        jsonb_build_object('name','Conectores/terminais','qty',10,'unit','un','sku','TERM','optional',true)
+        jsonb_build_object('name','Cabo','qty',100,'unit','m','sku','CABO','optional',true)
       ),
       3, true
-    )
+    ),
+
+    -- GENERICOS
+    ('admin', 'Atendimento administrativo', 30, 1, 'non_critical', 2, ARRAY['ADMIN'], ARRAY['administrativo','cadastro','assembleia'], '[]'::jsonb, 1, true),
+    ('financial', 'Atendimento financeiro', 30, 1, 'non_critical', 2, ARRAY['FIN'], ARRAY['financeiro','boleto','pagamento','cobrança','cobranca'], '[]'::jsonb, 2, true)
 
   ) AS t(
     category, title, default_minutes, required_people, 

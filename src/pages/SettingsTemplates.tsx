@@ -42,6 +42,7 @@ interface Template {
     default_materials: Material[];
     criticality: string;
     sla_business_days: number;
+    match_priority: number;
     active: boolean;
     created_at: string;
 }
@@ -110,6 +111,7 @@ export default function SettingsTemplates() {
         default_materials: [] as Material[],
         criticality: 'non_critical',
         sla_business_days: 2,
+        match_priority: 0,
         active: true,
     });
 
@@ -164,6 +166,7 @@ export default function SettingsTemplates() {
                 default_materials: template.default_materials || [],
                 criticality: template.criticality || 'non_critical',
                 sla_business_days: template.sla_business_days ?? 2,
+                match_priority: template.match_priority ?? 0,
                 active: template.active,
             });
         } else {
@@ -178,6 +181,7 @@ export default function SettingsTemplates() {
                 default_materials: [],
                 criticality: 'non_critical',
                 sla_business_days: 2,
+                match_priority: 0,
                 active: true,
             });
         }
@@ -217,6 +221,7 @@ export default function SettingsTemplates() {
                 default_materials: form.default_materials,
                 criticality: form.criticality,
                 sla_business_days: form.sla_business_days,
+                match_priority: form.match_priority,
                 active: form.active,
             };
 
@@ -505,7 +510,18 @@ export default function SettingsTemplates() {
                             </div>
 
                             <div>
-                                <Label>Palavras-chave (busca automática)</Label>
+                                <div className="flex items-center justify-between">
+                                    <Label>Palavras-chave (busca automática)</Label>
+                                    <div className="flex items-center gap-2">
+                                        <Label className="text-xs">Prioridade:</Label>
+                                        <Input
+                                            type="number"
+                                            className="w-16 h-7 text-xs"
+                                            value={form.match_priority}
+                                            onChange={(e) => setForm({ ...form, match_priority: parseInt(e.target.value) || 0 })}
+                                        />
+                                    </div>
+                                </div>
                                 <Input
                                     placeholder="Ex: portão, travado, motor (separados por vírgula)"
                                     value={form.match_keywords.join(', ')}
@@ -516,7 +532,7 @@ export default function SettingsTemplates() {
                                     className="mt-2"
                                 />
                                 <p className="text-xs text-muted-foreground mt-1">
-                                    Usadas para selecionar este template automaticamente no chamado.
+                                    Usadas para selecionar este template automaticamente. Prioridade maior (ex: 10) vence as menores.
                                 </p>
                             </div>
 

@@ -46,6 +46,7 @@ interface Template {
   title: string;
   category: string;
   match_keywords: string[];
+  match_priority?: number;
 }
 
 interface GenerateProtocolModalProps {
@@ -96,7 +97,7 @@ export function GenerateProtocolModal({
     try {
       const { data } = await supabase
         .from('task_templates' as any)
-        .select('id, title, category, match_keywords')
+        .select('id, title, category, match_keywords, match_priority')
         .eq('active', true)
         .order('title');
       setTemplates((data as any) || []);
@@ -114,15 +115,21 @@ export function GenerateProtocolModal({
 
     const lowerSummary = summary.toLowerCase();
     let best = null;
-    let max = 0;
+    let maxMatches = 0;
+    let maxPriority = -1;
 
     for (const t of templates) {
       let matches = 0;
       for (const kw of (t.match_keywords || [])) {
         if (lowerSummary.includes(kw.toLowerCase())) matches++;
       }
-      if (matches > max) {
-        max = matches;
+
+      const priority = t.match_priority || 0;
+
+      // Higher matches wins, or same matches but higher priority wins
+      if (matches > maxMatches || (matches > 0 && matches === maxMatches && priority > maxPriority)) {
+        maxMatches = matches;
+        maxPriority = priority;
         best = t.id;
       }
     }
