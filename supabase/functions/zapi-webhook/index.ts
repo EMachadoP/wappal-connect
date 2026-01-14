@@ -115,32 +115,60 @@ serve(async (req) => {
     if (!contact) throw new Error('Falha ao processar contato do chat');
 
     // 5. Salvar/Atualizar Conversa
-    // IMPROVED LOOKUP: Check by contact_id first to avoid duplicates from ID normalization changes
+    // IMPROVED LOOKUP: Check by contact_id first
     let { data: existingConv } = await supabase.from('conversations')
-      .select('id')
+      .select('id, active_condominium_id')
       .eq('contact_id', contact.id)
       .maybeSingle();
 
-    // Fallback: check by chat_id if contact didn't match (handles edge cases)
+    // Fallback: check by chat_id
     if (!existingConv) {
       const fallback = await supabase.from('conversations')
-        .select('id')
+        .select('id, active_condominium_id')
         .eq('chat_id', chatLid)
         .maybeSingle();
       existingConv = fallback.data;
     }
 
+    // Auto-Condominium Selection Logic
+    let autoCondoId: string | null = null;
+    if (!existingConv?.active_condominium_id) {
+      // Look for a link in contact_condominiums
+      const { data: linkedCondos } = await supabase
+        .from('contact_condominiums')
+        .select('condominium_id, is_default')
+        .eq('contact_id', contact.id);
+
+      if (linkedCondos && linkedCondos.length > 0) {
+        // Preference: is_default = true, otherwise just the first one if there's only one
+        const defaultCondo = linkedCondos.find(lc => lc.is_default);
+        autoCondoId = defaultCondo?.condominium_id || (linkedCondos.length === 1 ? linkedCondos[0].condominium_id : null);
+
+        if (autoCondoId) {
+          console.log(`[Webhook] Auto-selected condominium ${autoCondoId} for contact ${contact.id}`);
+        }
+      }
+    }
+
     let conv: { id: string };
 
     if (existingConv) {
+      const updateData: any = {
+        last_message_at: now,
+        chat_id: chatLid,
+        thread_key: chatLid,
+        contact_id: contact.id,
+        status: 'open'
+      };
+
+      if (autoCondoId) {
+        updateData.active_condominium_id = autoCondoId;
+        updateData.active_condominium_set_by = 'human'; // 'human' or similar to avoid AI re-asking
+        updateData.active_condominium_set_at = now;
+      }
+
       const { data: updated, error: updateErr } = await supabase.from('conversations')
-        .update({
-          last_message_at: now,
-          chat_id: chatLid,      // Update to latest normalized format
-          thread_key: chatLid,   // Sync to current standard
-          contact_id: contact.id, // Ensure contact link is current
-          status: 'open'
-        })
+        .update(updateData)
         .eq('id', existingConv.id)
         .select('id')
         .single();
@@ -148,14 +176,22 @@ serve(async (req) => {
       if (updateErr || !updated) throw new Error(`Erro ao atualizar conversa: ${updateErr?.message}`);
       conv = updated;
     } else {
+      const insertData: any = {
+        contact_id: contact.id,
+        chat_id: chatLid,
+        thread_key: chatLid,
+        status: 'open',
+        last_message_at: now
+      };
+
+      if (autoCondoId) {
+        insertData.active_condominium_id = autoCondoId;
+        insertData.active_condominium_set_by = 'human';
+        insertData.active_condominium_set_at = now;
+      }
+
       const { data: created, error: createErr } = await supabase.from('conversations')
-        .upsert({
-          contact_id: contact.id,
-          chat_id: chatLid,
-          thread_key: chatLid,
-          status: 'open',
-          last_message_at: now
-        }, { onConflict: 'thread_key' })
+        .upsert(insertData, { onConflict: 'thread_key' })
         .select('id')
         .single();
 

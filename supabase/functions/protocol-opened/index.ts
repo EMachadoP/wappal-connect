@@ -196,7 +196,7 @@ serve(async (req) => {
         conversations (
           id,
           contact_id,
-          condominium_id,
+          active_condominium_id,
           condominiums (name),
           contacts (name, phone, chat_lid)
         )
