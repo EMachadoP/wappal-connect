@@ -7,12 +7,20 @@ const corsHeaders = {
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+// Load secrets with guards
+const supabaseUrl = Deno.env.get("SUPABASE_URL");
+const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-// Get SLA message based on priority
+if (!supabaseUrl || !supabaseServiceKey) {
+    console.error("[protocol-client] Missing required secrets", {
+        hasUrl: !!supabaseUrl,
+        hasServiceKey: !!supabaseServiceKey
+    });
+}
+
+// Get SLA message based on priority  
 function getSLAMessage(priority: string): string {
-    const slaMessages = {
+    const slaMessages: Record<string, string[]> = {
         critical: [
             "Vamos resolver isso hoje mesmo!",
             "Nossa equipe está priorizando seu atendimento para hoje.",
@@ -57,7 +65,18 @@ serve(async (req) => {
     }
 
     try {
-        const supabase = createClient(supabaseUrl, supabaseServiceKey);
+        // Validate secrets
+        if (!supabaseUrl || !supabaseServiceKey) {
+            return new Response(JSON.stringify({ error: "Missing configuration" }), {
+                status: 500,
+                headers: { ...corsHeaders, "Content-Type": "application/json" }
+            });
+        }
+
+        // Create admin client (accepts service role auth)
+        const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+            auth: { persistSession: false }
+        });
 
         const { protocol_id, protocol_code } = await req.json();
 
