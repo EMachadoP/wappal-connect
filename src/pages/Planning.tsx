@@ -141,9 +141,11 @@ const SortableItem = ({ item, openConversation, handleUpdateStatus, otherTechs }
             <div className="text-sm font-semibold truncate">
                 {item.condominium_name || 'Condomínio não identificado'}
             </div>
-            <div className="text-[11px] text-muted-foreground line-clamp-2 leading-tight mb-1">
-                {item.protocol_summary || item.work_item_title}
-            </div>
+            {item.protocol_summary && item.protocol_summary !== item.work_item_title && (
+                <div className="text-[11px] text-muted-foreground line-clamp-2 leading-tight mb-1">
+                    {item.protocol_summary}
+                </div>
+            )}
             <div className="text-[10px] opacity-70 flex justify-between items-center">
                 <span>{item.protocol_code}</span>
                 <span className="font-medium">
