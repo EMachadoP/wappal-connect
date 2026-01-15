@@ -102,30 +102,36 @@ const formatForZAPI = (id: string, isGrp: boolean): string => {
 
 // ✅ GATEKEEPER DEFINITIVO: Normaliza e valida destinatário antes de enviar
 function normalizeRecipient(input: { recipient: string; isGroup?: boolean }): { to_chat_id: string; isGroup: boolean } {
-  const raw = (input.recipient || "").trim();
+  const raw0 = (input.recipient || "").trim();
+  if (!raw0) throw new Error("Destinatário vazio.");
 
-  // Grupo
-  if (raw.includes("@g.us")) return { to_chat_id: raw, isGroup: true };
+  // Remove u:/g: e normaliza caixa
+  const raw = stripPrefix(raw0).trim().toLowerCase();
 
-  // Se caller marcou isGroup mas não veio @g.us, ainda assim bloqueia
-  if (input.isGroup) {
-    throw new Error("Destinatário de grupo inválido (esperado ...@g.us).");
+  // Detectar grupo por marcação OU formato
+  const isGroup = !!input.isGroup || looksLikeGroup(raw) || raw.includes("@g.us");
+
+  if (isGroup) {
+    // Aceita "551199...-123", "551199...-123@g.us", "g:...."
+    const jid = normalizeGroupJid(raw);
+    if (!jid.endsWith("@g.us")) throw new Error(`Grupo inválido: "${raw0}"`);
+    return { to_chat_id: jid, isGroup: true };
   }
 
   // Pessoa: bloquear LID
   if (raw.includes("@lid")) {
-    throw new Error("Contato sem telefone válido. Não é permitido enviar por LID. Identifique o contato e salve o telefone.");
+    throw new Error("Contato sem telefone válido. Não é permitido enviar por LID. Cadastre o phone do contato.");
   }
 
-  // Remover sufixo legado, se aparecer
+  // Remover sufixo legado
   const withoutSuffix = raw.replace(/@s\.whatsapp\.net$/i, "");
 
   // Só dígitos
   const digits = withoutSuffix.replace(/\D/g, "");
 
-  // Validação BR/E.164 (ajuste se você aceitar fora do BR)
-  if (!digits.startsWith("55") || digits.length < 12 || digits.length > 13) {
-    throw new Error(`Telefone inválido para envio: "${raw}" -> "${digits}"`);
+  // BR/E.164 (12 ou 13 dígitos com 55)
+  if (!digits.startsWith("55") || (digits.length !== 12 && digits.length !== 13)) {
+    throw new Error(`Telefone inválido para envio: "${raw0}" -> "${digits}" (esperado 55 + DDD + 8/9 dígitos)`);
   }
 
   return { to_chat_id: digits, isGroup: false };
@@ -153,7 +159,8 @@ serve(async (req: Request) => {
 
   try {
     const authHeader = req.headers.get("Authorization");
-    const isServiceKey = authHeader?.includes(supabaseServiceKey);
+    // ✅ FIX: Validação exata do service key (não usar includes())
+    const isServiceKey = authHeader?.trim() === `Bearer ${supabaseServiceKey}`;
 
     if (!isServiceKey) {
       if (!authHeader) throw new Error("Não autorizado: Sessão ausente");
@@ -301,9 +308,10 @@ serve(async (req: Request) => {
 
     // ✅ ROBUST CONVERSATION RESOLUTION (App Sync Fix)
     const cleanJid = formattedRecipient.trim().toLowerCase().replace(/^(u:|g:)/i, "");
+    // ✅ FIX: Remover duplicate cleanJid
     const candidateKeys = finalIsGroup
       ? [cleanJid, `g:${cleanJid}`]
-      : [cleanJid, `u:${cleanJid}`, cleanJid];
+      : [cleanJid, `u:${cleanJid}`];
 
     const { data: convRow } = await supabaseAdmin
       .from("conversations")
@@ -345,6 +353,7 @@ serve(async (req: Request) => {
     const { data: outboxRow, error: outboxErr } = await supabaseAdmin
       .from("message_outbox")
       .upsert({
+
         idempotency_key,
         provider: "zapi",
         conversation_id: resolvedConversationId,
