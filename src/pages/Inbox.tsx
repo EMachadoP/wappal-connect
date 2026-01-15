@@ -50,9 +50,21 @@ export default function InboxPage() {
       setActiveConvData(data);
       setActiveContact(data.contacts);
 
-      // Marcar como lida se houver mensagens não lidas
+      // ✅ Marcar mensagens como lidas
       if (data.unread_count > 0) {
-        await supabase.from('conversations').update({ unread_count: 0 }).eq('id', id);
+        // Marcar todas as mensagens não lidas como lidas
+        await supabase
+          .from('messages')
+          .update({ read_at: new Date().toISOString() })
+          .eq('conversation_id', id)
+          .is('read_at', null)
+          .neq('sender_type', 'agent'); // Não marcar mensagens do próprio agente
+
+        // Zerar contador na conversa
+        await supabase
+          .from('conversations')
+          .update({ unread_count: 0 })
+          .eq('id', id);
       }
     }
   }, []);

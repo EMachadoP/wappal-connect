@@ -83,7 +83,7 @@ ${protocol.summary || "Sem descrição adicional."}
 
 _Nosso time já foi notificado e em breve retornaremos._
 
-*G7 Serv* | Gestão de Condomínios`;
+*G7 Serv*`;
 
         const recipient = recipientPhone || recipientLid;
 

@@ -93,22 +93,26 @@ export function MessageList({
     const isPrepended = messages.length > prevLength.current && messages[0]?.sent_at !== (prevLength.current > 0 ? messages[0]?.sent_at : null);
 
     if (isInitialLoad.current && messages.length > 0) {
-      // ✅ FIX: Scroll to first unread message or bottom
-      const firstUnreadIndex = messages.findIndex(msg => !msg.read_at && msg.sender_type !== 'agent');
+      // ✅ FIX: Wait for DOM to render before scrolling
+      setTimeout(() => {
+        if (!containerRef.current) return;
 
-      if (firstUnreadIndex !== -1) {
-        // Scroll to first unread message
-        const messageElements = containerRef.current.querySelectorAll('[data-message-id]');
-        const targetElement = messageElements[firstUnreadIndex];
-        if (targetElement) {
-          targetElement.scrollIntoView({ behavior: 'auto', block: 'start' });
+        const firstUnreadIndex = messages.findIndex(msg => !msg.read_at && msg.sender_type !== 'agent');
+
+        if (firstUnreadIndex !== -1) {
+          // Scroll to first unread message
+          const messageElements = containerRef.current.querySelectorAll('[data-message-id]');
+          const targetElement = messageElements[firstUnreadIndex];
+          if (targetElement) {
+            targetElement.scrollIntoView({ behavior: 'auto', block: 'start' });
+          } else {
+            scrollToBottom('auto');
+          }
         } else {
+          // All read or no incoming messages - scroll to bottom
           scrollToBottom('auto');
         }
-      } else {
-        // All read or no incoming messages - scroll to bottom
-        scrollToBottom('auto');
-      }
+      }, 100); // Small delay to ensure DOM is ready
 
       isInitialLoad.current = false;
     } else if (isPrepended && scrollSnapshot.current) {
