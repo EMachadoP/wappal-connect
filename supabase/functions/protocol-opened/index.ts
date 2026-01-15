@@ -9,6 +9,8 @@ const corsHeaders = {
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
 const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+const stripPrefix = (s: string) => (s || '').trim().replace(/^(u:|g:)/i, '');
+
 serve(async (req: Request): Promise<Response> => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -48,7 +50,8 @@ serve(async (req: Request): Promise<Response> => {
     if (error || !protocol) throw new Error("Protocolo não encontrado");
 
     const { data: settings } = await supabase.from("integrations_settings").select("*").maybeSingle();
-    const techGroupId = Deno.env.get("ZAPI_TECH_GROUP_CHAT_ID") || settings?.whatsapp_group_id;
+    const techGroupIdRaw = Deno.env.get("ZAPI_TECH_GROUP_CHAT_ID") || settings?.whatsapp_group_id;
+    const techGroupId = stripPrefix(techGroupIdRaw || '');
 
     if (!settings?.whatsapp_notifications_enabled) {
       return new Response(JSON.stringify({ success: true, skipped: true, reason: "notifications disabled" }), {

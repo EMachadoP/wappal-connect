@@ -12,7 +12,7 @@ type Json = Record<string, any>;
 
 const toBool = (v: any) => v === true || v === "true" || v === 1 || v === "1";
 
-const stripPrefix = (s: string) => s.replace(/^(u:|g:)/, "");
+const stripPrefix = (s: string) => (s || '').trim().replace(/^(u:|g:)/i, '');
 
 const isLikelyGroupId = (raw: string) => {
   const s = (raw ?? "").trim().toLowerCase();
@@ -65,13 +65,19 @@ const getChatKey = (id: string | null | undefined, isGrp: boolean) => {
   return `u:${digits}`;
 };
 
+const looksLikeGroup = (raw: string) => {
+  const s = stripPrefix((raw || "").trim().toLowerCase());
+  return s.endsWith("@g.us") || /^\d{10,14}-\d+$/.test(s.split("@")[0]);
+};
+
 const formatForZAPI = (id: string, isGrp: boolean): string => {
-  const clean = (id ?? "").trim().toLowerCase();
-  if (!clean) return clean;
-  if (clean.includes("@")) {
-    // preserva @lid, @g.us e @s.whatsapp.net
-    return clean;
-  }
+  if (!id) return id as any;
+
+  let clean = stripPrefix(id.trim().toLowerCase());
+
+  // se já tem sufixo (@g.us / @lid / @s.whatsapp.net), retorna limpo (sem g:/u:)
+  if (clean.includes('@')) return clean;
+
   return isGrp ? `${clean}@g.us` : `${clean}@s.whatsapp.net`;
 };
 
@@ -208,8 +214,10 @@ serve(async (req: Request) => {
     if (!instanceId || !token) throw new Error("Configurações de WhatsApp incompletas no servidor");
 
     // infer group if not provided
-    const inferredIsGroup = isGroupInput || isLikelyGroupId(recipient) || String(recipient).endsWith("@g.us");
-    const formattedRecipient = formatForZAPI(recipient, inferredIsGroup);
+    const inferredIsGroup =
+      typeof isGroupInput === 'boolean' ? isGroupInput : looksLikeGroup(String(recipient));
+
+    const formattedRecipient = formatForZAPI(recipient!, inferredIsGroup);
     const chatKey = getChatKey(formattedRecipient, inferredIsGroup);
 
     // Resolve conversation_id by chatKey if needed
