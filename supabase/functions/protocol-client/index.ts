@@ -1,203 +1,132 @@
+// supabase/functions/protocol-client/index.ts
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { toZapiRecipient } from "../_shared/ids.ts";
+
+declare const Deno: any;
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Load secrets with guards
-const supabaseUrl = Deno.env.get("SUPABASE_URL");
-const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+serve(async (req: Request): Promise<Response> => {
+    if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
-if (!supabaseUrl || !supabaseServiceKey) {
-    console.error("[protocol-client] Missing required secrets", {
-        hasUrl: !!supabaseUrl,
-        hasServiceKey: !!supabaseServiceKey
-    });
-}
-
-// Get SLA message based on priority  
-function getSLAMessage(priority: string): string {
-    const slaMessages: Record<string, string[]> = {
-        critical: [
-            "Vamos resolver isso hoje mesmo!",
-            "Nossa equipe está priorizando seu atendimento para hoje.",
-            "Atendimento urgente - resolveremos no mesmo dia.",
-        ],
-        high: [
-            "Vamos resolver isso hoje mesmo!",
-            "Nossa equipe está priorizando seu atendimento para hoje.",
-            "Atendimento prioritário - resolveremos no mesmo dia.",
-        ],
-        normal: [
-            "Daremos retorno em até 2 dias úteis.",
-            "Você terá uma resposta em até 2 dias úteis.",
-            "Resolveremos em até 2 dias úteis.",
-        ],
-        low: [
-            "Daremos retorno em até 2 dias úteis.",
-            "Você terá uma resposta em até 2 dias úteis.",
-            "Atenderemos em até 2 dias úteis.",
-        ],
-    };
-
-    const messages = slaMessages[priority] || slaMessages.normal;
-    return messages[Math.floor(Math.random() * messages.length)];
-}
-
-// Translate category to Portuguese
-function translateCategory(category: string): string {
-    const map: Record<string, string> = {
-        operational: "Operacional",
-        support: "Suporte",
-        financial: "Financeiro",
-        commercial: "Comercial",
-        admin: "Administrativo",
-    };
-    return map[category] || "Operacional";
-}
-
-serve(async (req) => {
-    if (req.method === "OPTIONS") {
-        return new Response(null, { headers: corsHeaders });
-    }
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
     try {
-        // Validate secrets
-        if (!supabaseUrl || !supabaseServiceKey) {
-            return new Response(JSON.stringify({ error: "Missing configuration" }), {
-                status: 500,
-                headers: { ...corsHeaders, "Content-Type": "application/json" }
-            });
-        }
+        const body = await req.json();
+        const protocol_id = body.protocol_id;
+        const idempotency_key = body.idempotency_key || `protocol-client:${protocol_id}`;
 
-        // Internal auth: verify service role key
-        const auth = req.headers.get("authorization") || "";
-        const token = auth.replace("Bearer ", "").trim();
+        const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-        if (token !== supabaseServiceKey) {
-            console.error("[protocol-client] Unauthorized call - invalid token");
-            return new Response(JSON.stringify({ error: "Unauthorized" }), {
-                status: 401,
-                headers: { ...corsHeaders, "Content-Type": "application/json" }
-            });
-        }
-
-        // Create admin client (accepts service role auth)
-        const supabase = createClient(supabaseUrl, supabaseServiceKey, {
-            auth: { persistSession: false }
-        });
-
-        const { protocol_id, protocol_code, idempotency_key: bodyIdempotencyKey } = await req.json();
-        const idempotency_key = bodyIdempotencyKey || (protocol_id ? `protocol-client:${protocol_id}` : protocol_code ? `protocol-client:${protocol_code}` : undefined);
-
-        console.log('[protocol-client] Notifying client for protocol:', protocol_code);
-
-        // DB-FIRST: Load all data from database
-        const { data: protocolData } = await supabase
-            .from('protocols')
+        // ✅ FIX: JOIN com condominiums
+        const { data: protocol, error } = await supabase
+            .from("protocols")
             .select(`
-        *,
-        conversations (
-          id,
-          contact_id,
-          active_condominium_id,
-          condominiums (name),
-          contacts (name, phone, chat_lid)
+        id, 
+        protocol_code, 
+        summary, 
+        priority, 
+        category,
+        requester_name, 
+        due_date,
+        condominium_id,
+        condominiums!inner(name),
+        conversations(
+          id, 
+          contact_id, 
+          contacts(id, name, phone, chat_lid, lid, chat_key, is_group)
         )
       `)
-            .eq('protocol_code', protocol_code)
+            .eq("id", protocol_id)
             .maybeSingle();
 
-        if (!protocolData) {
-            console.error('[protocol-client] Protocol not found:', protocol_code);
-            return new Response(JSON.stringify({ error: 'Protocol not found' }), {
-                status: 404,
-                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-            });
+        if (error || !protocol) {
+            console.error("[protocol-client] Query error:", error);
+            throw new Error(`Protocolo não encontrado: ${error?.message || 'unknown'}`);
         }
 
-        const protocol = protocolData;
-        const conversation = (protocol.conversations as any) ?? {};
-        const condominium = ((conversation.condominiums as any) ?? {}) as { name?: string };
-        const contact = ((conversation.contacts as any) ?? {}) as { name?: string; phone?: string; chat_lid?: string };
+        // ✅ FIX: Acessar condominium via JOIN
+        const condominiumName = protocol.condominiums?.name || "Não informado";
+        const contact = protocol.conversations?.contacts;
 
-        const condominiumName = condominium.name || "Não Identificado";
-        const category = translateCategory(protocol.category || "operational");
-        const summary = protocol.summary || "Sem descrição";
-        const conversation_id = conversation.id;
+        if (!contact) throw new Error("Contato do protocolo não encontrado");
 
-        if (!conversation_id || !contact) {
-            console.warn('[protocol-client] No conversation or contact found');
-            return new Response(JSON.stringify({ error: 'No conversation/contact' }), {
-                status: 400,
-                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-            });
+        const recipientPhone = contact.phone;
+        const recipientLid = contact.chat_lid || contact.lid;
+
+        if (!recipientPhone && !recipientLid) {
+            throw new Error("Cliente sem telefone ou LID para envio");
         }
 
-        // Check deduplication
-        const { data: existingNotif } = await supabase
-            .from('protocol_notifications')
-            .select('id')
-            .eq('protocol_id', protocol.id)
-            .eq('channel', 'client')
-            .maybeSingle();
+        const code = protocol.protocol_code.startsWith("G7-")
+            ? protocol.protocol_code
+            : `G7-${protocol.protocol_code}`;
 
-        if (existingNotif) {
-            console.log('[protocol-client] Client already notified, skipping');
-            return new Response(JSON.stringify({ success: true, skipped: true }), {
-                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-            });
-        }
+        const clientMsg = `🎯 *Protocolo Gerado*
 
-        const slaMessage = getSLAMessage(protocol.priority || 'normal');
+Olá ${contact.name || "Cliente"}!
 
-        const clientMessage = `📋 *Protocolo aberto*
+Seu chamado foi registrado com sucesso:
 
-🔖 *Número:* G7-${protocol_code}
+✅ *Protocolo:* ${code}
 🏢 *Condomínio:* ${condominiumName}
-📂 *Categoria:* ${category}
-📝 *Chamado:* ${summary}
+📌 *Categoria:* ${protocol.category || "Operacional"}
+🟢 *Prioridade:* ${protocol.priority || "normal"}
+⏰ *Vencimento:* ${protocol.due_date ? String(protocol.due_date).slice(0, 10) : "—"}
 
-${slaMessage}
+📝 *Resumo:*
+${protocol.summary || "Sem descrição adicional."}
 
-O protocolo foi aberto em nosso sistema e o responsável fará a tratativa.`;
+_Nosso time já foi notificado e em breve retornaremos._
 
-        // Send via zapi-send-message
-        const sendResult = await supabase.functions.invoke("zapi-send-message", {
-            body: {
-                conversation_id,
-                content: clientMessage,
-                message_type: "text",
-                sender_name: "G7",
-                idempotency_key
+*G7 Serv* | Gestão de Condomínios`;
+
+        const recipient = recipientPhone || recipientLid;
+
+        console.log(`[protocol-client] Enviando para cliente: ${recipient}`);
+
+        const zapiResp = await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${supabaseServiceKey}`,
+                "Content-Type": "application/json"
             },
+            body: JSON.stringify({
+                recipient,
+                content: clientMsg,
+                isGroup: false,
+                idempotency_key
+            }),
         });
 
-        console.log('[protocol-client] Message sent:', sendResult.data);
+        const result = await zapiResp.json();
 
-        // Mark as notified with details
-        await supabase.from('protocol_notifications').insert({
-            protocol_id: protocol.id,
-            channel: 'client',
-            status: sendResult.data?.success ? 'success' : 'error',
-            recipient: conversation.chat_id || contact.chat_lid || contact.phone,
-            error: sendResult.data?.error || (sendResult.data?.success ? null : 'Unknown error'),
-            sent_at: new Date().toISOString()
-        });
+        if (!zapiResp.ok && !result.deduped) {
+            throw new Error(`Falha Z-API: ${zapiResp.status} - ${JSON.stringify(result)}`);
+        }
 
-        return new Response(JSON.stringify({ success: true }), {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
+        console.log(`[protocol-client] Mensagem enviada: ${result.deduped ? "deduped" : "sent"}`);
 
-    } catch (error) {
-        console.error('[protocol-client] Error:', error);
-        const errorMessage = error instanceof Error ? error.message : "Unknown error";
-        return new Response(JSON.stringify({ error: errorMessage }), {
-            status: 500,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
+        return new Response(
+            JSON.stringify({ success: true, recipient, messageId: result.messageId }),
+            {
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+                status: 200
+            }
+        );
+
+    } catch (err: any) {
+        console.error("[protocol-client] Error:", err.message, err.stack);
+        return new Response(
+            JSON.stringify({ error: err.message }),
+            {
+                status: 500,
+                headers: { ...corsHeaders, "Content-Type": "application/json" }
+            }
+        );
     }
 });
