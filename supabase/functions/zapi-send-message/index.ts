@@ -350,41 +350,54 @@ serve(async (req: Request) => {
       }).eq("id", outboxRow.id);
     }
 
-    // Save message
-    await supabaseAdmin.from("messages").insert({
-      conversation_id: finalConvId,
-      sender_type: "agent",
-      sender_id: userId === "system" ? null : userId,
-      agent_name: senderName,
-      content: content,
-      message_type: message_type || "text",
-      media_url,
-      sent_at: new Date().toISOString(),
-      provider: "zapi",
-      provider_message_id: providerMessageId,
-      status: "sent",
-      direction: "outbound",
-      chat_id: formattedRecipient,
-    });
-
-    // Update conversation
+    // ✅ IMMEDIATE VISIBILITY: Insert into public.messages and update conversation preview
     if (finalConvId) {
+      const nowIso = new Date().toISOString();
+      const isSystem = userId === "system";
+
+      // 1) Save to public.messages
+      const { error: msgErr } = await supabaseAdmin.from("messages").insert({
+        conversation_id: finalConvId,
+        sender_type: "agent",
+        agent_id: isSystem ? null : userId,
+        agent_name: senderName || (isSystem ? "G7" : "Atendente"),
+        content: content || null,
+        message_type: message_type || "text",
+        media_url: media_url || null,
+        provider: "zapi",
+        provider_message_id: providerMessageId,
+        direction: "outbound",
+        status: "sent",
+        chat_id: formattedRecipient,
+        sent_at: nowIso,
+      });
+
+      if (msgErr) {
+        console.error("[zapi-send-message] Error inserting to messages:", msgErr.message);
+      }
+
+      // 2) Update conversation preview
       const updateData: any = {
-        last_message: (content || "").slice(0, 255),
+        last_message: (content || "").slice(0, 500) || (message_type !== 'text' ? `[${message_type}]` : ""),
         last_message_type: message_type || "text",
-        last_message_at: new Date().toISOString(),
+        last_message_at: nowIso,
+        chat_id: formattedRecipient,
       };
 
-      if (userId !== "system") {
+      if (!isSystem) {
         updateData.human_control = true;
         updateData.ai_mode = "OFF";
         updateData.ai_paused_until = new Date(Date.now() + 30 * 60 * 1000).toISOString();
       }
 
-      await supabaseAdmin
+      const { error: convErr } = await supabaseAdmin
         .from("conversations")
         .update(updateData)
         .eq("id", finalConvId);
+
+      if (convErr) {
+        console.error("[zapi-send-message] Error updating conversation:", convErr.message);
+      }
     }
 
     return new Response(

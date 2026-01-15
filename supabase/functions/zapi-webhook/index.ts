@@ -183,7 +183,7 @@ serve(async (req: Request): Promise<Response> => {
     else if (pType.includes("video") || payload.video) msgType = "video";
     else if (pType.includes("document") || payload.document) msgType = "document";
 
-    const lastMessagePreview = (content || "").slice(0, 255) || (msgType !== 'text' ? `[${msgType}]` : "");
+    const lastMessagePreview = (content || "").slice(0, 500) || (msgType !== 'text' ? `[${msgType}]` : "");
 
     // 6. Salvar/Atualizar Conversa
     let { data: existingConv } = await supabase.from('conversations')
