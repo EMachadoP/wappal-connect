@@ -173,7 +173,19 @@ serve(async (req: Request): Promise<Response> => {
       contactId = newContact.id;
     }
 
-    // 5. Salvar/Atualizar Conversa
+    // 5. Message Metadata Resolution (Moved up for Conversation Update)
+    let content = payload.text?.message || payload.message?.text || payload.body || payload.caption || "";
+    let msgType: "text" | "image" | "video" | "audio" | "document" | "system" = "text";
+    const pType = (payload.type || "").toLowerCase();
+
+    if (payload.audio || payload.audioUrl || payload.audio?.url || payload.audio?.audioUrl) msgType = "audio";
+    else if (pType.includes("image") || payload.image) msgType = "image";
+    else if (pType.includes("video") || payload.video) msgType = "video";
+    else if (pType.includes("document") || payload.document) msgType = "document";
+
+    const lastMessagePreview = (content || "").slice(0, 255) || (msgType !== 'text' ? `[${msgType}]` : "");
+
+    // 6. Salvar/Atualizar Conversa
     let { data: existingConv } = await supabase.from('conversations')
       .select('id, active_condominium_id')
       .eq('contact_id', contactId)
@@ -198,6 +210,8 @@ serve(async (req: Request): Promise<Response> => {
     if (existingConv) {
       const updateData: any = {
         last_message_at: now,
+        last_message: lastMessagePreview,
+        last_message_type: msgType,
         chat_id: chatLid, // Atualizamos o chat_id na conversa para o mais recente (@lid ou normal)
         status: 'open'
       };
@@ -222,7 +236,9 @@ serve(async (req: Request): Promise<Response> => {
         chat_id: chatLid,
         thread_key: chatKey, // Thread key agora baseada na chave canônica
         status: 'open',
-        last_message_at: now
+        last_message_at: now,
+        last_message: lastMessagePreview,
+        last_message_type: msgType
       };
 
       if (autoCondoId) {
@@ -242,12 +258,7 @@ serve(async (req: Request): Promise<Response> => {
 
     if (!fromMe) await supabase.rpc('increment_unread_count', { conv_id: conv.id });
 
-    // 6. Salvar Mensagem
-    let content = payload.text?.message || payload.message?.text || payload.body || payload.caption || "";
-    let msgType: "text" | "image" | "video" | "audio" | "document" | "system" = "text";
-    const pType = (payload.type || "").toLowerCase();
-
-    if (payload.audio || payload.audioUrl || payload.audio?.url || payload.audio?.audioUrl) msgType = "audio";
+    // 7. Salvar Mensagem
     else if (payload.image || payload.imageUrl || payload.image?.url || payload.image?.imageUrl) msgType = "image";
     else if (payload.video || payload.videoUrl || payload.video?.url || payload.video?.videoUrl) msgType = "video";
     else if (payload.document || payload.documentUrl || payload.document?.url || payload.document?.documentUrl) msgType = "document";

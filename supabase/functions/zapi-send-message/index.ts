@@ -279,12 +279,9 @@ serve(async (req: Request) => {
     // Upsert to lock key
     const outboxPayload = {
       endpoint,
-      body: bodyOut,
-      senderName,
-      message_type: message_type || "text",
+      preview: (content || "").slice(0, 120) + (content && content.length > 120 ? "..." : ""),
       media_url: media_url || null,
-      content: content || "",
-      conversation_id: finalConvId || null,
+      message_type: message_type || "text",
     };
 
     const { data: outboxRow, error: outboxErr } = await supabaseAdmin
@@ -372,19 +369,22 @@ serve(async (req: Request) => {
 
     // Update conversation
     if (finalConvId) {
+      const updateData: any = {
+        last_message: (content || "").slice(0, 255),
+        last_message_type: message_type || "text",
+        last_message_at: new Date().toISOString(),
+      };
+
       if (userId !== "system") {
-        const pauseUntil = new Date(Date.now() + 30 * 60 * 1000);
-        await supabaseAdmin.from("conversations").update({
-          human_control: true,
-          ai_mode: "OFF",
-          ai_paused_until: pauseUntil.toISOString(),
-          last_message_at: new Date().toISOString(),
-        }).eq("id", finalConvId);
-      } else {
-        await supabaseAdmin.from("conversations").update({
-          last_message_at: new Date().toISOString(),
-        }).eq("id", finalConvId);
+        updateData.human_control = true;
+        updateData.ai_mode = "OFF";
+        updateData.ai_paused_until = new Date(Date.now() + 30 * 60 * 1000).toISOString();
       }
+
+      await supabaseAdmin
+        .from("conversations")
+        .update(updateData)
+        .eq("id", finalConvId);
     }
 
     return new Response(
