@@ -53,47 +53,75 @@ serve(async (req) => {
     if (isStatusUpdate) return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
 
     // --- IDENTIFICAÇÃO E NORMALIZAÇÃO ---
-    const isGroup = Boolean(payload.isGroup || (payload.chatLid && payload.chatLid.includes('@g.us')) || (payload.chatId && payload.chatId.includes('@g.us')));
-    const fromMe = Boolean(payload.fromMe);
+    // --- HELPERS E NORMALIZAÇÃO BLINDADA ---
+    const stripPrefix = (s: string) => s.replace(/^(u:|g:)/, '');
 
-    // CHAT_KEY: O identificador canônico (numérico para pessoas, id original para grupos)
-    // Regras BR: 10/11 dígitos -> prefixa 55. 12/13 com 55 -> mantém.
-    const getChatKey = (id: string | null | undefined, isGrp: boolean) => {
-      if (!id) return id;
-      const clean = id.trim().toLowerCase();
+    const isLikelyGroupId = (raw: string) => {
+      const s = raw.trim().toLowerCase();
+      return s.endsWith('@g.us') || s.endsWith('-group') || /^\d{10,14}-\d+$/.test(stripPrefix(s));
+    };
 
-      if (isGrp) {
-        // Garantir sufixo @g.us para grupos
-        const base = clean.includes('@') ? clean.split('@')[0] : clean;
-        return `g:${base}@g.us`;
-      }
+    const normalizeGroupJid = (id: string) => {
+      let s = (id ?? '').trim().toLowerCase();
+      if (!s) return s;
+      s = stripPrefix(s);
+      s = s.replace(/\s+/g, '');
+      const base = s.includes('@') ? s.split('@')[0] : s;
+      const base2 = base.endsWith('-group') ? base.slice(0, -'-group'.length) : base;
+      return `${base2}@g.us`;
+    };
 
-      const numeric = clean.split('@')[0].replace(/\D/g, '');
-      if (!numeric) return numeric;
-
-      let finalPhone = numeric;
-      if (numeric.length === 10 || numeric.length === 11) finalPhone = '55' + numeric;
-
-      return `u:${finalPhone}`;
+    const normalizeUserId = (id: string) => {
+      let s = (id ?? '').trim().toLowerCase();
+      if (!s) return s;
+      s = stripPrefix(s);
+      if (s.endsWith('@lid')) return s;
+      if (s.includes('@')) s = s.split('@')[0];
+      return s.replace(/\D/g, '');
     };
 
     const normalizeLid = (id: string | null | undefined, isGrp: boolean) => {
-      if (!id) return id;
-      let normalized = id.trim().toLowerCase();
-      if (isGrp) {
-        const base = normalized.includes('@') ? normalized.split('@')[0] : normalized;
-        return `${base}@g.us`;
-      }
-      if (normalized.endsWith('@lid') || normalized.endsWith('@g.us')) return normalized;
-      if (normalized.includes('@')) normalized = normalized.split('@')[0];
-      return normalized;
+      if (!id) return id as any;
+      const raw = id.trim().toLowerCase();
+      const group = !!isGrp || isLikelyGroupId(raw);
+      if (group) return normalizeGroupJid(raw);
+      return normalizeUserId(raw);
     };
 
-    let chatLid = normalizeLid(payload.phone || payload.senderPhone || payload.chatLid || payload.chatId || payload.chat?.chatId, isGroup);
-    const contactLid = normalizeLid(payload.phone || payload.senderPhone || payload.contact?.phone || payload.contact?.lid || payload.lid || payload.participantLid || (isGroup ? null : chatLid), isGroup);
+    const getChatKey = (id: string | null | undefined, isGrp: boolean) => {
+      if (!id) return id as any;
+      const raw = id.trim().toLowerCase();
 
-    if (!chatLid && contactLid && !isGroup) chatLid = contactLid;
-    if (!contactLid || !chatLid) throw new Error(`Identificadores ausentes: contact=${contactLid}, chat=${chatLid}`);
+      if (raw.startsWith('g:')) {
+        const jid = normalizeGroupJid(raw);
+        return `g:${jid}`;
+      }
+      if (raw.startsWith('u:')) {
+        let digits = normalizeUserId(raw);
+        if (!digits) return null as any;
+        if (digits.length === 10 || digits.length === 11) digits = '55' + digits;
+        return `u:${digits}`;
+      }
+
+      const group = !!isGrp || isLikelyGroupId(raw);
+      if (group) {
+        const jid = normalizeGroupJid(raw);
+        return `g:${jid}`;
+      }
+
+      let digits = normalizeUserId(raw);
+      if (!digits) return null as any;
+      if (digits.length === 10 || digits.length === 11) digits = '55' + digits;
+      return `u:${digits}`;
+    };
+
+    const fromMe = Boolean(payload.fromMe);
+    const rawChatId = payload.chatId || payload.chat?.chatId || payload.phone || payload.chatLid || payload.senderPhone;
+    const isGroup = !!payload.isGroup || (typeof rawChatId === 'string' && isLikelyGroupId(rawChatId));
+    const chatLid = normalizeLid(rawChatId, isGroup);
+
+    const contactRaw = payload.senderPhone || payload.contact?.phone || payload.contact?.lid || payload.lid || payload.participantLid || rawChatId;
+    const contactLid = normalizeLid(contactRaw, false);
 
     const chatIdentifier = isGroup ? chatLid : contactLid;
     const chatKey = getChatKey(chatIdentifier, !!isGroup);
