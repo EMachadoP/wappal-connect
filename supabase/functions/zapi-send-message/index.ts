@@ -77,16 +77,59 @@ const formatForZAPI = (id: string, isGrp: boolean): string => {
 
   let clean = stripPrefix(id.trim().toLowerCase());
 
-  // ✅ FIX: Z-API rejects suffixes like @s.whatsapp.net and @g.us
+  // ✅ FIX: Rejeitar LIDs para usuários individuais - Z-API não aceita
+  if (!isGrp && clean.includes('@lid')) {
+    throw new Error(`Tentativa de enviar para LID (${clean}) sem telefone real. Contato precisa ter phone cadastrado.`);
+  }
+
   // Remove any existing suffix first
   if (clean.includes('@')) {
     clean = clean.split('@')[0];
+  }
+
+  // ✅ Validar se é um número válido (13 dígitos: 55 + DDD + 9 dígitos)
+  if (!isGrp) {
+    const onlyDigits = clean.replace(/\D/g, '');
+    if (onlyDigits.length < 11 || onlyDigits.length > 14) {
+      throw new Error(`Número inválido para Z-API: ${clean} (após sanitização: ${onlyDigits}). Deve ter 11-14 dígitos.`);
+    }
   }
 
   // Para grupos, adicionar @g.us (Z-API aceita para grupos)
   // Para usuários individuais, retornar apenas os dígitos (Z-API rejeita @s.whatsapp.net)
   return isGrp ? `${clean}@g.us` : clean;
 };
+
+// ✅ GATEKEEPER DEFINITIVO: Normaliza e valida destinatário antes de enviar
+function normalizeRecipient(input: { recipient: string; isGroup?: boolean }): { to_chat_id: string; isGroup: boolean } {
+  const raw = (input.recipient || "").trim();
+
+  // Grupo
+  if (raw.includes("@g.us")) return { to_chat_id: raw, isGroup: true };
+
+  // Se caller marcou isGroup mas não veio @g.us, ainda assim bloqueia
+  if (input.isGroup) {
+    throw new Error("Destinatário de grupo inválido (esperado ...@g.us).");
+  }
+
+  // Pessoa: bloquear LID
+  if (raw.includes("@lid")) {
+    throw new Error("Contato sem telefone válido. Não é permitido enviar por LID. Identifique o contato e salve o telefone.");
+  }
+
+  // Remover sufixo legado, se aparecer
+  const withoutSuffix = raw.replace(/@s\.whatsapp\.net$/i, "");
+
+  // Só dígitos
+  const digits = withoutSuffix.replace(/\D/g, "");
+
+  // Validação BR/E.164 (ajuste se você aceitar fora do BR)
+  if (!digits.startsWith("55") || digits.length < 12 || digits.length > 13) {
+    throw new Error(`Telefone inválido para envio: "${raw}" -> "${digits}"`);
+  }
+
+  return { to_chat_id: digits, isGroup: false };
+}
 
 // idempotency_key determinístico (fallback) — evita duplicar em chamadas iguais
 const stableKey = (obj: any) => {
@@ -213,16 +256,14 @@ serve(async (req: Request) => {
 
     if (!instanceId || !token) throw new Error("Configurações de WhatsApp incompletas no servidor");
 
-    // ✅ PATCH: Robust Group Inference & Prefix Stripping
-    const inferIsGroup = (id: string) => {
-      const x = stripPrefix((id || '').trim().toLowerCase());
-      return x.endsWith('@g.us') || /^\d{10,14}-\d+$/.test(x.replace(/@g\.us$/, ''));
-    };
+    // ✅ GATEKEEPER: Normaliza e valida destinatário ANTES de qualquer processamento
+    const normalized = normalizeRecipient({
+      recipient: String(recipient),
+      isGroup: isGroupInput
+    });
 
-    const cleanRecipient = stripPrefix(String(recipient));
-    const finalIsGroup = typeof isGroupInput === 'boolean' ? isGroupInput : inferIsGroup(cleanRecipient);
-
-    const formattedRecipient = formatForZAPI(cleanRecipient, finalIsGroup);
+    const formattedRecipient = normalized.to_chat_id;
+    const finalIsGroup = normalized.isGroup;
     const chatKey = getChatKey(formattedRecipient, finalIsGroup);
 
     // Resolve conversation_id by chatKey if needed
