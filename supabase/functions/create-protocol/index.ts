@@ -440,15 +440,10 @@ serve(async (req: Request) => {
 
     // Notify group (tech)
     if (notify_group) {
-      log(`[create-protocol] Calling protocol-opened for ${protocolCode}...`);
       try {
         const groupResponse = await fetch(`${supabaseUrl}/functions/v1/protocol-opened`, {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${supabaseServiceKey}`,
-            'apikey': supabaseServiceKey,
-            'Content-Type': 'application/json'
-          },
+          headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             protocol_id: protocolRecord.id,
             protocol_code: protocolCode,
@@ -456,18 +451,13 @@ serve(async (req: Request) => {
             idempotency_key: `protocol-opened:${protocolRecord.id}`
           })
         });
-
-        const groupText = await groupResponse.text();
-        log(`[create-protocol] protocol-opened status: ${groupResponse.status}, body: ${groupText}`);
-
         if (!groupResponse.ok) {
-          throw new Error(`Falha ao notificar grupo (protocol-opened): ${groupResponse.status} ${groupText}`);
+          const groupText = await groupResponse.text();
+          throw new Error(`Falha ao notificar grupo: ${groupResponse.status} ${groupText}`);
         }
-
         groupNotified = true;
       } catch (groupError: any) {
-        log(`[create-protocol] ERROR calling protocol-opened: ${groupError.message}`);
-        throw groupError; // Escalate error to prevent "silent" failures
+        throw groupError; // Escala o erro para o 500 final
       }
     }
 
