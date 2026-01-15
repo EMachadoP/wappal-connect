@@ -64,11 +64,14 @@ export function MessageList({
 
   const isInitialLoad = useRef(true);
   const scrollSnapshot = useRef<{ height: number; top: number } | null>(null);
+  const stickToBottom = useRef(false); // ✅ Flag para manter no fim quando imagens carregam
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const el = containerRef.current;
     if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior });
+    // ✅ FIX: Calcular top correto para evitar overflow
+    const top = Math.max(0, el.scrollHeight - el.clientHeight);
+    el.scrollTo({ top, behavior });
   }, []);
 
   const isNearBottom = useCallback(() => {
@@ -87,6 +90,10 @@ export function MessageList({
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
 
+    // ✅ Atualiza stickToBottom: se usuário saiu do fim, desliga auto-scroll
+    const distance = target.scrollHeight - (target.scrollTop + target.clientHeight);
+    stickToBottom.current = distance < 120;
+
     if (target.scrollTop < 100 && hasMore && !loadingMore && onLoadMore && !loading) {
       console.log("[MessageList] Scrolled to top, fetching more...");
       scrollSnapshot.current = { height: target.scrollHeight, top: target.scrollTop };
@@ -100,7 +107,24 @@ export function MessageList({
     scrollSnapshot.current = null;
     prevFirstId.current = null;
     prevLastId.current = null;
+    stickToBottom.current = false;
   }, [conversationId]);
+
+  // ✅ ResizeObserver: mantém scroll no fim quando imagens carregam
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const ro = new ResizeObserver(() => {
+      // Só "gruda" no fim quando stickToBottom está ativo
+      if (stickToBottom.current) {
+        scrollToBottom('auto');
+      }
+    });
+
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [scrollToBottom]);
 
   // Scroll behavior AFTER render (mais confiável que setTimeout)
   useLayoutEffect(() => {
@@ -127,11 +151,15 @@ export function MessageList({
         );
 
         if (firstUnreadIndex !== -1) {
+          // ✅ Tem mensagens não lidas: rolar até primeira e NÃO stick
+          stickToBottom.current = false;
           const wrappers = el2.querySelectorAll("[data-message-id]");
           const target = wrappers[firstUnreadIndex] as HTMLElement | undefined;
           if (target) target.scrollIntoView({ behavior: "auto", block: "start" });
           else scrollToBottom("auto");
         } else {
+          // ✅ Tudo lido: rolar pro fim E ativar stick (para imagens)
+          stickToBottom.current = true;
           scrollToBottom("auto");
         }
 
