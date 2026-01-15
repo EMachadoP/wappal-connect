@@ -52,14 +52,8 @@ serve(async (req: Request): Promise<Response> => {
     const isStatusUpdate = Boolean(payload.ack || payload.type === 'chatState' || (payload.status && !payload.text && !payload.message && !payload.image && !payload.video && !payload.audio && !payload.document));
     if (isStatusUpdate) return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
 
-    // --- IDENTIFICAÇÃO E NORMALIZAÇÃO ---
     // --- HELPERS E NORMALIZAÇÃO BLINDADA ---
     const stripPrefix = (s: string) => s.replace(/^(u:|g:)/, '');
-
-    const isLikelyGroupId = (raw: string) => {
-      const s = raw.trim().toLowerCase();
-      return s.endsWith('@g.us') || s.endsWith('-group') || /^\d{10,14}-\d+$/.test(stripPrefix(s));
-    };
 
     const normalizeGroupJid = (id: string) => {
       let s = (id ?? '').trim().toLowerCase();
@@ -71,49 +65,10 @@ serve(async (req: Request): Promise<Response> => {
       return `${base2}@g.us`;
     };
 
-    const normalizeUserId = (id: string) => {
-      let s = (id ?? '').trim().toLowerCase();
-      if (!s) return s;
-      s = stripPrefix(s);
-      if (s.endsWith('@lid')) return s;
-      if (s.includes('@')) s = s.split('@')[0];
-      return s.replace(/\D/g, '');
-    };
-
-    const normalizeLid = (id: string | null | undefined, isGrp: boolean) => {
-      if (!id) return id as any;
-      const raw = id.trim().toLowerCase();
-      const group = !!isGrp || isLikelyGroupId(raw);
-      if (group) return normalizeGroupJid(raw);
-      return normalizeUserId(raw);
-    };
-
-    const getChatKey = (id: string | null | undefined, isGrp: boolean) => {
-      if (!id) return id as any;
-      const raw = id.trim().toLowerCase();
-
-      if (raw.startsWith('g:')) {
-        const jid = normalizeGroupJid(raw);
-        return `g:${jid}`;
-      }
-      if (raw.startsWith('u:')) {
-        let digits = normalizeUserId(raw);
-        if (!digits) return null as any;
-        if (digits.length === 10 || digits.length === 11) digits = '55' + digits;
-        return `u:${digits}`;
-      }
-
-      const group = !!isGrp || isLikelyGroupId(raw);
-      if (group) {
-        const jid = normalizeGroupJid(raw);
-        return `g:${jid}`;
-      }
-
-      let digits = normalizeUserId(raw);
-      if (!digits) return null as any;
-      if (digits.length === 10 || digits.length === 11) digits = '55' + digits;
-      return `u:${digits}`;
-    };
+    // --- IDENTIFICAÇÃO E NORMALIZAÇÃO (PATCH DEFINITIVO) ---
+    const onlyDigits = (v?: string | null) => (v ?? "").replace(/\D/g, "");
+    const isGroup = (id?: string | null) => !!id && (id.endsWith("@g.us") || id.includes("-")); // Expanded group check
+    const isLid = (id?: string | null) => !!id && id.endsWith("@lid");
 
     const fromMe =
       payload.fromMe === true ||
@@ -121,36 +76,81 @@ serve(async (req: Request): Promise<Response> => {
       payload.fromMe === "true" ||
       payload.fromMe === "1" ||
       Boolean(payload.fromMe);
-    const rawChatId = payload.chatId || payload.chat?.chatId || payload.phone || payload.chatLid || payload.senderPhone;
-    const isGroup = !!payload.isGroup || (typeof rawChatId === 'string' && isLikelyGroupId(rawChatId));
-    const chatLid = normalizeLid(rawChatId, isGroup);
 
-    // ✅ PATCH 1.1: Quando fromMe=true, usar número real do destinatário
-    let contactRaw: string;
-    if (fromMe) {
-      // Mensagem enviada: usar destinatário real (não LID)
-      contactRaw = payload.phone || payload.to || payload.chatId || payload.senderPhone || rawChatId;
-    } else {
-      // Mensagem recebida: usar remetente
-      contactRaw = payload.senderPhone || payload.contact?.phone || payload.contact?.lid || payload.lid || payload.participantLid || rawChatId;
+    // Extrai o melhor telefone possível do payload
+    function extractPhone(payload: any, fromMe: boolean) {
+      // Quando fromMe, procurar destinatário primeiro (priorizando 'to' e 'recipient')
+      // Ajuste: 'phone' muitas vezes é o remetente, então deixamos por último no fromMe
+      const candidates = fromMe
+        ? [payload.to, payload.recipient, payload.chatName, payload.chatId, payload.phone]
+        : [payload.senderPhone, payload.contact?.phone, payload.from, payload.participantPhone, payload.phone, payload.chatId];
+
+      for (const c of candidates) {
+        if (!c || typeof c !== 'string') continue;
+        // Se for LID ou Grupo, ignora números curtos, pega só se parecer telefone
+        if (c.endsWith('@lid') || c.endsWith('@g.us')) continue;
+
+        const d = onlyDigits(c);
+        if (d.length >= 10) return d; // 10+ dígitos (BR normalmente 12-13 com DDI 55)
+      }
+      return null;
     }
 
-    const contactLid = normalizeLid(contactRaw, false);
+    const rawChatId = payload.chatId || payload.chat?.chatId || payload.id || null;
 
-    // ✅ PATCH 1.1 EXTRA: Extrair número real de LID se necessário
-    let resolvedPhone = contactLid;
-    if (fromMe && contactLid.endsWith('@lid')) {
-      // Se fromMe e veio LID, tentar extrair número real do payload
-      const rawPhone = payload.to || payload.phone || payload.chatId;
-      if (rawPhone && !rawPhone.endsWith('@lid')) {
-        resolvedPhone = normalizeUserId(rawPhone);
-        console.log(`[Webhook] fromMe detected, extracting real phone: ${contactLid} -> ${resolvedPhone}`);
+    // 1. Determinar Thread Key (Identidade Canônica)
+    let threadKey: string | null = null;
+    let chatIdAlias: string | null = rawChatId;
+    let isGroupChat = false;
+
+    if (isGroup(rawChatId) || payload.isGroup) {
+      isGroupChat = true;
+      const gId = normalizeGroupJid(rawChatId || payload.phone || "");
+      threadKey = `g:${gId.replace('@g.us', '')}@g.us`;
+      chatIdAlias = threadKey.substring(2); // Remove g:
+    } else {
+      // 1:1: threadKey deve ser telefone (estável)
+      const phone = extractPhone(payload, fromMe);
+
+      if (phone) {
+        // Normalizar BR
+        let finalPhone = phone;
+        if (finalPhone.startsWith("55") && finalPhone.length > 11) {
+          // Aceita
+        } else if (finalPhone.length === 10 || finalPhone.length === 11) {
+          finalPhone = "55" + finalPhone;
+        }
+        threadKey = `u:${finalPhone}`;
+      } else {
+        // Se só temos LID e não conseguimos extrair telefone
+        if (!chatIdAlias || isLid(chatIdAlias)) {
+          // Tentar recuperar do alias se for o único ID disponível
+          console.warn(`[Webhook] Identidade não resolvida. Raw: ${JSON.stringify({ rawChatId, fromMe })}`);
+          threadKey = null;
+        } else {
+          // Se o chatIdAlias parece um telefone
+          const d = onlyDigits(chatIdAlias);
+          if (d.length >= 10) threadKey = `u:${d.startsWith('55') ? d : '55' + d}`;
+        }
       }
     }
 
-    const chatIdentifier = isGroup ? chatLid : resolvedPhone;
-    const chatKey = getChatKey(chatIdentifier, !!isGroup);
-    const chatName = payload.chatName || payload.contact?.name || payload.senderName || payload.pushName || (chatIdentifier ? chatIdentifier.split('@')[0] : 'Desconhecido');
+    // Fallback de segurança para não quebrar o fluxo se não achar nada (cria "unidentified")
+    let finalChatKey = threadKey;
+    let finalChatIdentifier = chatIdAlias || "unknown";
+
+    if (!finalChatKey && chatIdAlias) {
+      // Último recurso: usa o que tem (mesmo que seja LID) para não perder a msg, 
+      // mas loga warning. O ideal seria não usar LID como chave.
+      finalChatKey = `u:${chatIdAlias}`; // Temporário
+    }
+
+    // Campos auxiliares legacy
+    const chatKey = finalChatKey;
+    const chatIdentifier = finalChatIdentifier;
+    const chatName = payload.chatName || payload.contact?.name || payload.senderName || payload.pushName || 'Desconhecido';
+
+    console.log(`[Webhook] Identity: ${fromMe ? 'OUT' : 'IN'} | Key=${finalChatKey} | Alias=${finalChatIdentifier}`);
 
     const providerMsgId = payload.messageId || payload.id || crypto.randomUUID();
 
@@ -245,7 +245,7 @@ serve(async (req: Request): Promise<Response> => {
         last_message_at: now,
         last_message: lastMessagePreview,
         last_message_type: msgType,
-        chat_id: chatLid, // Atualizamos o chat_id na conversa para o mais recente (@lid ou normal)
+        chat_id: finalChatIdentifier, // Atualizamos o chat_id na conversa para o mais recente (@lid ou normal)
         status: 'open'
       };
 
@@ -273,8 +273,8 @@ serve(async (req: Request): Promise<Response> => {
     } else {
       const insertData: any = {
         contact_id: contactId,
-        chat_id: chatLid,
-        thread_key: chatKey, // Thread key agora baseada na chave canônica
+        chat_lid: finalChatIdentifier,
+        lid: finalChatIdentifier,
         status: 'open',
         last_message_at: now,
         last_message: lastMessagePreview,
@@ -321,7 +321,7 @@ serve(async (req: Request): Promise<Response> => {
       senderName = senderName || chatIdentifier.split('@')[0];
     }
 
-    const senderPhone = (payload.contact?.phone || payload.phone || contactLid).split('@')[0];
+    const senderPhone = (payload.contact?.phone || payload.phone || finalChatIdentifier).split('@')[0];
 
     let msgResult = null;
     let msgError = null;
@@ -336,7 +336,7 @@ serve(async (req: Request): Promise<Response> => {
         content: content,
         provider: 'zapi',
         provider_message_id: providerMsgId,
-        chat_id: chatLid, // Aqui salvamos o chat_id bruto do webhook
+        chat_id: finalChatIdentifier, // Aqui salvamos o chat_id bruto do webhook
         direction: fromMe ? 'outbound' : 'inbound',
         sent_at: payload.timestamp ? new Date(payload.timestamp).toISOString() : now,
         raw_payload: payload,
@@ -427,8 +427,8 @@ serve(async (req: Request): Promise<Response> => {
           message_id: msgResult.id,
           conversation_id: conv.id,
           message_text: content,
-          group_id: chatLid,
-          sender_phone: contactLid,
+          group_id: finalChatKey || finalChatIdentifier,
+          sender_phone: senderPhone,
           sender_name: senderName || 'Desconhecido'
         }),
       });
