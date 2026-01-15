@@ -1,5 +1,5 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { isEmployeeSender } from "../_shared/employee.ts";
 import { parseAndExtract } from "../_shared/parse.ts";
 
@@ -8,7 +8,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-serve(async (req) => {
+serve(async (req: Request): Promise<Response> => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   const now = new Date().toISOString();
@@ -188,7 +188,7 @@ serve(async (req) => {
         .eq('contact_id', contactId);
 
       if (linkedCondos && linkedCondos.length > 0) {
-        const defaultCondo = linkedCondos.find(lc => lc.is_default);
+        const defaultCondo = linkedCondos.find((lc: any) => lc.is_default);
         autoCondoId = defaultCondo?.condominium_id || (linkedCondos.length === 1 ? linkedCondos[0].condominium_id : null);
       }
     }

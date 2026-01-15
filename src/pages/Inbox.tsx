@@ -208,7 +208,10 @@ export default function InboxPage() {
     try {
       const { error } = await supabase
         .from('conversations')
-        .update({ status: 'resolved' })
+        .update({
+          status: 'resolved',
+          resolved_at: new Date().toISOString()
+        })
         .eq('id', activeConversationId);
 
       if (error) throw error;
@@ -234,7 +237,8 @@ export default function InboxPage() {
           status: 'open',
           assigned_to: null,
           resolved_at: null,
-          reopened_at: new Date().toISOString()
+          reopened_at: new Date().toISOString(),
+          last_message_at: new Date().toISOString() // Bumps it to the top of "Entrada"
         })
         .eq('id', activeConversationId);
 

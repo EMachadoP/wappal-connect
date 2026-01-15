@@ -65,12 +65,13 @@ export function ConversationList({
 
       switch (activeTab) {
         case 'mine':
-          // Minhas: Atribuídas a mim
+          // Minhas: Apenas ABERTAS atribuídas a mim
           return conv.status === 'open' && conv.assigned_to === userId;
         case 'inbox':
-          // Entrada: Não atribuídas OU atribuídas a mim (não mostrar atribuídas a outros)
-          return conv.status === 'open' && (!conv.assigned_to || conv.assigned_to === userId);
+          // Entrada: Apenas ABERTAS SEM atribuição (fila)
+          return conv.status === 'open' && !conv.assigned_to;
         case 'resolved':
+          // Resolvidos: Apenas RESOLVIDAS
           return conv.status === 'resolved';
         default:
           return true;
@@ -79,7 +80,7 @@ export function ConversationList({
 
   const countByTab = {
     mine: conversations.filter(c => c.status === 'open' && c.assigned_to === userId).length,
-    inbox: conversations.filter(c => c.status === 'open' && (!c.assigned_to || c.assigned_to === userId)).length,
+    inbox: conversations.filter(c => c.status === 'open' && !c.assigned_to).length,
     resolved: conversations.filter(c => c.status === 'resolved').length,
   };
 
