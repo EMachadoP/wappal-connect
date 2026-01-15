@@ -174,11 +174,9 @@ serve(async (req: Request) => {
       const contact = foundConv.contacts as any;
 
       if (!recipient) {
-        // ✅ DESTINO DETERMINÍSTICO (LID-first e sem “conv.chat_id” como primeira opção)
         if (contact?.is_group) {
-          recipient = contact?.chat_lid || foundConv.chat_id; // chat_lid do grupo deve ser @g.us
+          recipient = contact?.chat_lid || foundConv.chat_id;
         } else {
-          // Prioriza @lid (estável pra thread do WhatsApp Business)
           const lid =
             (contact?.chat_lid && String(contact.chat_lid).endsWith("@lid"))
               ? contact.chat_lid
@@ -239,7 +237,7 @@ serve(async (req: Request) => {
       if (contact?.conversations?.length) finalConvId = contact.conversations[0].id;
     }
 
-    // Build Z-API request parameters (needed for outbox payload)
+    // Build Z-API request parameters
     let finalContent = content;
     let endpoint = "/send-text";
     const bodyOut: any = { phone: formattedRecipient };
@@ -259,6 +257,21 @@ serve(async (req: Request) => {
       bodyOut.document = media_url;
       bodyOut.fileName = "documento";
     }
+
+    // ✅ ROBUST CONVERSATION RESOLUTION (App Sync Fix)
+    const cleanJid = formattedRecipient.trim().toLowerCase().replace(/^(u:|g:)/i, "");
+    const candidateKeys = finalIsGroup
+      ? [cleanJid, `g:${cleanJid}`]
+      : [cleanJid, `u:${cleanJid}`, cleanJid];
+
+    const { data: convRow } = await supabaseAdmin
+      .from("conversations")
+      .select("id")
+      .in("thread_key", candidateKeys)
+      .limit(1)
+      .maybeSingle();
+
+    const resolvedConversationId = convRow?.id || finalConvId || null;
 
     // ✅ SYNCHRONOUS OUTBOX IDEMPOTENCY
     const { data: existingOutbox } = await supabaseAdmin
@@ -289,7 +302,7 @@ serve(async (req: Request) => {
       .upsert({
         idempotency_key,
         provider: "zapi",
-        conversation_id: finalConvId || null,
+        conversation_id: resolvedConversationId,
         to_chat_id: formattedRecipient,
         recipient: formattedRecipient, // compatibility
         payload: outboxPayload,
@@ -351,13 +364,13 @@ serve(async (req: Request) => {
     }
 
     // ✅ IMMEDIATE VISIBILITY: Insert into public.messages and update conversation preview
-    if (finalConvId) {
+    if (resolvedConversationId) {
       const nowIso = new Date().toISOString();
       const isSystem = userId === "system";
 
       // 1) Save to public.messages
       const { error: msgErr } = await supabaseAdmin.from("messages").insert({
-        conversation_id: finalConvId,
+        conversation_id: resolvedConversationId,
         sender_type: "agent",
         agent_id: isSystem ? null : userId,
         agent_name: senderName || (isSystem ? "G7" : "Atendente"),
@@ -378,7 +391,7 @@ serve(async (req: Request) => {
 
       // 2) Update conversation preview
       const updateData: any = {
-        last_message: (content || "").slice(0, 500) || (message_type !== 'text' ? `[${message_type}]` : ""),
+        last_message: (content || "").trim() ? content.slice(0, 500) : (message_type !== 'text' ? `[${message_type}]` : ""),
         last_message_type: message_type || "text",
         last_message_at: nowIso,
         chat_id: formattedRecipient,
@@ -393,7 +406,7 @@ serve(async (req: Request) => {
       const { error: convErr } = await supabaseAdmin
         .from("conversations")
         .update(updateData)
-        .eq("id", finalConvId);
+        .eq("id", resolvedConversationId);
 
       if (convErr) {
         console.error("[zapi-send-message] Error updating conversation:", convErr.message);
@@ -404,7 +417,9 @@ serve(async (req: Request) => {
       JSON.stringify({ success: true, messageId: providerMessageId, idempotency_key }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
+
   } catch (error: any) {
+    console.error("[zapi-send-message] Function error:", error.message);
     return new Response(
       JSON.stringify({ error: error.message }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
