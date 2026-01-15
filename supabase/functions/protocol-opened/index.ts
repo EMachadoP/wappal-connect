@@ -11,6 +11,20 @@ const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const stripPrefix = (s: string) => (s || '').trim().replace(/^(u:|g:)/i, '');
 
+const isValidGroupJid = (s: string) => {
+  const x = (s || '').trim().toLowerCase();
+  if (x.endsWith('@g.us')) return true;
+  // aceita formato sem sufixo (ex: 123-456) e vamos completar
+  return /^\d{10,14}-\d+$/.test(stripPrefix(x));
+};
+
+const normalizeGroupJid = (s: string) => {
+  let x = stripPrefix((s || '').trim().toLowerCase());
+  if (!x) return x;
+  if (x.includes('@')) return x;        // já é JID
+  return `${x}@g.us`;                   // completa
+};
+
 serve(async (req: Request): Promise<Response> => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -51,7 +65,11 @@ serve(async (req: Request): Promise<Response> => {
 
     const { data: settings } = await supabase.from("integrations_settings").select("*").maybeSingle();
     const techGroupIdRaw = Deno.env.get("ZAPI_TECH_GROUP_CHAT_ID") || settings?.whatsapp_group_id;
-    const techGroupId = stripPrefix(techGroupIdRaw || '');
+    const techGroupId = normalizeGroupJid(techGroupIdRaw || '');
+
+    if (!techGroupIdRaw || !isValidGroupJid(techGroupIdRaw)) {
+      throw new Error(`ID do grupo técnico inválido. Esperado algo como 123-456@g.us. Recebido: ${techGroupIdRaw}`);
+    }
 
     if (!settings?.whatsapp_notifications_enabled) {
       return new Response(JSON.stringify({ success: true, skipped: true, reason: "notifications disabled" }), {

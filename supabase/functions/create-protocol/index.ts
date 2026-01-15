@@ -456,11 +456,18 @@ serve(async (req: Request) => {
             idempotency_key: `protocol-opened:${protocolRecord.id}`
           })
         });
-        if (groupResponse.ok) groupNotified = true;
+
         const groupText = await groupResponse.text();
         log(`[create-protocol] protocol-opened status: ${groupResponse.status}, body: ${groupText}`);
+
+        if (!groupResponse.ok) {
+          throw new Error(`Falha ao notificar grupo (protocol-opened): ${groupResponse.status} ${groupText}`);
+        }
+
+        groupNotified = true;
       } catch (groupError: any) {
         log(`[create-protocol] ERROR calling protocol-opened: ${groupError.message}`);
+        throw groupError; // Escalate error to prevent "silent" failures
       }
     }
 
