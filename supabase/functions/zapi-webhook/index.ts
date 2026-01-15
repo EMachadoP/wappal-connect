@@ -115,7 +115,13 @@ serve(async (req: Request): Promise<Response> => {
       return `u:${digits}`;
     };
 
-    const fromMe = Boolean(payload.fromMe);
+    // ✅ PATCH 1: fromMe normalizado
+    const fromMe =
+      payload.fromMe === true ||
+      payload.fromMe === 1 ||
+      payload.fromMe === "true" ||
+      payload.fromMe === "1";
+
     const rawChatId = payload.chatId || payload.chat?.chatId || payload.phone || payload.chatLid || payload.senderPhone;
     const isGroup = !!payload.isGroup || (typeof rawChatId === 'string' && isLikelyGroupId(rawChatId));
     const chatLid = normalizeLid(rawChatId, isGroup);
@@ -127,21 +133,23 @@ serve(async (req: Request): Promise<Response> => {
     const chatKey = getChatKey(chatIdentifier, !!isGroup);
     const chatName = payload.chatName || payload.contact?.name || payload.senderName || payload.pushName || (chatIdentifier ? chatIdentifier.split('@')[0] : 'Desconhecido');
 
-    const providerMsgId = payload.messageId || payload.id || crypto.randomUUID();
+    const providerMsgId = payload.messageId || payload.id || null;
 
     // IDEMPOTÊNCIA: Ignorar se a mensagem já existe
-    const { data: existingMsg } = await supabase
-      .from('messages')
-      .select('id')
-      .eq('provider_message_id', providerMsgId)
-      .maybeSingle();
+    if (providerMsgId) {
+      const { data: existingMsg } = await supabase
+        .from('messages')
+        .select('id')
+        .eq('provider_message_id', providerMsgId)
+        .maybeSingle();
 
-    if (existingMsg) {
-      console.log(`[Webhook] Mensagem duplicada ignorada: ${providerMsgId}`);
-      return new Response(JSON.stringify({ success: true, duplicated: true }), { headers: corsHeaders });
+      if (existingMsg) {
+        console.log(`[Webhook] Mensagem duplicada ignorada: ${providerMsgId}`);
+        return new Response(JSON.stringify({ success: true, duplicated: true }), { headers: corsHeaders });
+      }
     }
 
-    console.log(`[Webhook] Normalizing: ID=${chatIdentifier} -> Key=${chatKey} (Group: ${!!isGroup})`);
+    console.log(`[Webhook] Normalizing: ID=${chatIdentifier} -> Key=${chatKey} (Group: ${!!isGroup}, fromMe: ${fromMe})`);
 
     // 4. Salvar/Atualizar Contato usando CHAT_KEY
     let contactId: string;
@@ -152,7 +160,6 @@ serve(async (req: Request): Promise<Response> => {
 
     if (existingContact) {
       contactId = existingContact.id;
-      // Atualizar dados se vierem novos (ex: nome, lid caso ainda não tenha)
       const updates: any = { updated_at: now };
       if (!existingContact.chat_lid && chatIdentifier.includes('@')) updates.chat_lid = chatIdentifier;
       if (!existingContact.phone && !isGroup && !chatIdentifier.includes('@')) updates.phone = chatIdentifier;
@@ -173,17 +180,25 @@ serve(async (req: Request): Promise<Response> => {
       contactId = newContact.id;
     }
 
-    // 5. Message Metadata Resolution (Moved up for Conversation Update)
+    // 5. Message Metadata Resolution
     let content = payload.text?.message || payload.message?.text || payload.body || payload.caption || "";
     let msgType: "text" | "image" | "video" | "audio" | "document" | "system" = "text";
     const pType = (payload.type || "").toLowerCase();
 
     if (payload.audio || payload.audioUrl || payload.audio?.url || payload.audio?.audioUrl) msgType = "audio";
-    else if (pType.includes("image") || payload.image) msgType = "image";
-    else if (pType.includes("video") || payload.video) msgType = "video";
-    else if (pType.includes("document") || payload.document) msgType = "document";
+    else if (pType.includes("image") || payload.image || payload.imageUrl || payload.image?.url || payload.image?.imageUrl) msgType = "image";
+    else if (pType.includes("video") || payload.video || payload.videoUrl || payload.video?.url || payload.video?.videoUrl) msgType = "video";
+    else if (pType.includes("document") || payload.document || payload.documentUrl || payload.document?.url || payload.document?.documentUrl) msgType = "document";
+    else if (pType === "audio" || pType === "ptt" || pType === "voice") msgType = "audio";
 
-    const lastMessagePreview = (content || "").slice(0, 500) || (msgType !== 'text' ? `[${msgType}]` : "");
+    // ✅ PATCH 1: Preview robusto com fallback de mídia
+    const lastMessagePreview =
+      (content && content.trim()) ||
+      (payload.imageUrl || payload.image?.url || payload.image?.imageUrl ? "📷 Foto" : "") ||
+      (payload.videoUrl || payload.video?.url || payload.video?.videoUrl ? "🎥 Vídeo" : "") ||
+      (payload.audioUrl || payload.audio?.url || payload.audio?.audioUrl ? "🎧 Áudio" : "") ||
+      (payload.documentUrl || payload.document?.url || payload.document?.documentUrl ? "📄 Documento" : "") ||
+      (msgType !== 'text' ? `[${msgType}]` : "📩 Mensagem");
 
     // 6. Salvar/Atualizar Conversa
     let { data: existingConv } = await supabase.from('conversations')
@@ -191,9 +206,9 @@ serve(async (req: Request): Promise<Response> => {
       .eq('contact_id', contactId)
       .maybeSingle();
 
-    // Auto-Condominium Selection
+    // Auto-Condominium Selection (apenas para inbound)
     let autoCondoId: string | null = null;
-    if (!existingConv?.active_condominium_id) {
+    if (!fromMe && !existingConv?.active_condominium_id) {
       const { data: linkedCondos } = await supabase
         .from('contact_condominiums')
         .select('condominium_id, is_default')
@@ -210,13 +225,21 @@ serve(async (req: Request): Promise<Response> => {
     if (existingConv) {
       const updateData: any = {
         last_message_at: now,
-        last_message: lastMessagePreview,
+        last_message: lastMessagePreview.slice(0, 500),
         last_message_type: msgType,
-        chat_id: chatLid, // Atualizamos o chat_id na conversa para o mais recente (@lid ou normal)
+        chat_id: chatLid,
         status: 'open'
       };
 
-      if (autoCondoId) {
+      // ✅ PATCH 1: Se fromMe, NÃO interferir em flags de IA/humano
+      if (fromMe) {
+        delete updateData.human_control;
+        delete updateData.ai_mode;
+        delete updateData.ai_paused_until;
+      }
+
+      // Só setar condomínio automaticamente para inbound
+      if (!fromMe && autoCondoId) {
         updateData.active_condominium_id = autoCondoId;
         updateData.active_condominium_set_by = 'human';
         updateData.active_condominium_set_at = now;
@@ -234,14 +257,14 @@ serve(async (req: Request): Promise<Response> => {
       const insertData: any = {
         contact_id: contactId,
         chat_id: chatLid,
-        thread_key: chatKey, // Thread key agora baseada na chave canônica
+        thread_key: chatKey,
         status: 'open',
         last_message_at: now,
-        last_message: lastMessagePreview,
+        last_message: lastMessagePreview.slice(0, 500),
         last_message_type: msgType
       };
 
-      if (autoCondoId) {
+      if (!fromMe && autoCondoId) {
         insertData.active_condominium_id = autoCondoId;
         insertData.active_condominium_set_by = 'human';
         insertData.active_condominium_set_at = now;
@@ -259,14 +282,6 @@ serve(async (req: Request): Promise<Response> => {
     if (!fromMe) await supabase.rpc('increment_unread_count', { conv_id: conv.id });
 
     // 7. Salvar Mensagem
-    else if (payload.image || payload.imageUrl || payload.image?.url || payload.image?.imageUrl) msgType = "image";
-    else if (payload.video || payload.videoUrl || payload.video?.url || payload.video?.videoUrl) msgType = "video";
-    else if (payload.document || payload.documentUrl || payload.document?.url || payload.document?.documentUrl) msgType = "document";
-    else if (pType === "audio" || pType === "ptt" || pType === "voice") msgType = "audio";
-    else if (pType === "image") msgType = "image";
-    else if (pType === "video") msgType = "video";
-    else if (pType === "document") msgType = "document";
-
     if (!content && msgType !== "text") {
       const fileName = payload.fileName || payload.document?.fileName || payload.image?.fileName || "";
       content = fileName ? `[Arquivo: ${fileName}]` : `[Mídia: ${msgType}]`;
@@ -286,29 +301,27 @@ serve(async (req: Request): Promise<Response> => {
     let msgResult = null;
     let msgError = null;
 
-    if (!existingMsg) {
-      const insertResult = await supabase.from('messages').insert({
-        conversation_id: conv.id,
-        sender_type: fromMe ? 'agent' : 'contact',
-        sender_name: senderName,
-        sender_phone: senderPhone,
-        message_type: msgType,
-        content: content,
-        provider: 'zapi',
-        provider_message_id: providerMsgId,
-        chat_id: chatLid, // Aqui salvamos o chat_id bruto do webhook
-        direction: fromMe ? 'outbound' : 'inbound',
-        sent_at: now,
-        raw_payload: payload,
-        media_url: payload.imageUrl || payload.audioUrl || payload.videoUrl || payload.documentUrl ||
-          payload.image?.url || payload.audio?.url || payload.video?.url || payload.document?.url ||
-          payload.image?.imageUrl || payload.audio?.audioUrl || payload.video?.videoUrl || payload.document?.documentUrl ||
-          null,
-      }).select('id').single();
+    const { data: insertedMsg, error: insertErr } = await supabase.from('messages').insert({
+      conversation_id: conv.id,
+      sender_type: fromMe ? 'agent' : 'contact',
+      sender_name: senderName,
+      sender_phone: senderPhone,
+      message_type: msgType,
+      content: content,
+      provider: 'zapi',
+      provider_message_id: providerMsgId,
+      chat_id: chatLid,
+      direction: fromMe ? 'outbound' : 'inbound',
+      sent_at: now,
+      raw_payload: payload,
+      media_url: payload.imageUrl || payload.audioUrl || payload.videoUrl || payload.documentUrl ||
+        payload.image?.url || payload.audio?.url || payload.video?.url || payload.document?.url ||
+        payload.image?.imageUrl || payload.audio?.audioUrl || payload.video?.videoUrl || payload.document?.documentUrl ||
+        null,
+    }).select('id').single();
 
-      msgResult = insertResult.data;
-      msgError = insertResult.error;
-    }
+    msgResult = insertedMsg;
+    msgError = insertErr;
 
     if (msgError) throw new Error(`Falha ao salvar mensagem: ${msgError.message}`);
 
@@ -318,7 +331,6 @@ serve(async (req: Request): Promise<Response> => {
       if (employee.isEmployee) {
         const parsed = parseAndExtract(content);
         if (parsed.intent === 'needs_more_info') {
-          // Send help message...
           await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
@@ -356,13 +368,8 @@ serve(async (req: Request): Promise<Response> => {
       }
     }
 
-    // Media Storage...
-    if (msgResult && (msgType === 'audio' || msgType === 'video')) {
-      // Cloud storage logic...
-    }
-
     // AI & Group Resolution...
-    if (!fromMe && !isGroup && !msgError && msgResult && !existingMsg) {
+    if (!fromMe && !isGroup && !msgError && msgResult) {
       const audioUrl = payload.audioUrl || payload.audio?.url || payload.audio?.audioUrl || payload.document?.documentUrl || "";
       if (msgType === 'audio') {
         await fetch(`${supabaseUrl}/functions/v1/transcribe-audio`, {
@@ -379,7 +386,7 @@ serve(async (req: Request): Promise<Response> => {
       }
     }
 
-    if (!fromMe && isGroup && !msgError && msgResult && !existingMsg && msgType === 'text') {
+    if (!fromMe && isGroup && !msgError && msgResult && msgType === 'text') {
       await fetch(`${supabaseUrl}/functions/v1/group-resolution-handler`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
