@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useRef, useEffect, useCallback, memo } from 'react';
-import { ChatMessage } from './ChatMessage';
-import { format, isToday, isYesterday, isSameDay } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
+import React, { useRef, useEffect, useCallback, memo, useLayoutEffect } from "react";
+import { ChatMessage } from "./ChatMessage";
+import { format, isToday, isYesterday, isSameDay } from "date-fns";
+import { ptBR } from "date-fns/locale";
 
 interface MessageListProps {
   messages: any[];
@@ -18,23 +18,20 @@ interface MessageListProps {
 
 const MemoizedChatMessage = memo(ChatMessage);
 
-// Função auxiliar para verificar se uma string parece um número de telefone
 const isPhoneNumber = (str: string | null | undefined): boolean => {
   if (!str) return false;
-  const digitsOnly = str.replace(/\D/g, '');
+  const digitsOnly = str.replace(/\D/g, "");
   return digitsOnly.length >= 8 && /^\d+$/.test(digitsOnly);
 };
 
-// Função para formatar a data do separador
 const formatDateSeparator = (date: Date): string => {
-  if (isToday(date)) return 'Hoje';
-  if (isYesterday(date)) return 'Ontem';
-  const dayOfWeek = format(date, 'EEEE', { locale: ptBR });
-  const formattedDate = format(date, 'dd/MM/yyyy');
+  if (isToday(date)) return "Hoje";
+  if (isYesterday(date)) return "Ontem";
+  const dayOfWeek = format(date, "EEEE", { locale: ptBR });
+  const formattedDate = format(date, "dd/MM/yyyy");
   return `${dayOfWeek.charAt(0).toUpperCase() + dayOfWeek.slice(1)}, ${formattedDate}`;
 };
 
-// Componente de separador de data
 const DateSeparator = ({ date }: { date: Date }) => (
   <div className="flex items-center justify-center my-4">
     <div className="flex-1 border-t border-border"></div>
@@ -45,6 +42,10 @@ const DateSeparator = ({ date }: { date: Date }) => (
   </div>
 );
 
+function raf2(cb: () => void) {
+  requestAnimationFrame(() => requestAnimationFrame(cb));
+}
+
 export function MessageList({
   messages,
   loading,
@@ -53,87 +54,115 @@ export function MessageList({
   onLoadMore,
   conversationId,
   profiles,
-  contactName
+  contactName,
 }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const prevLength = useRef(messages.length);
+
+  // snapshots anteriores (para detectar prepend/append corretamente)
+  const prevFirstId = useRef<string | null>(null);
+  const prevLastId = useRef<string | null>(null);
+
   const isInitialLoad = useRef(true);
   const scrollSnapshot = useRef<{ height: number; top: number } | null>(null);
 
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
-    if (containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-    }
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  }, []);
+
+  const isNearBottom = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return true;
+    const distance = el.scrollHeight - (el.scrollTop + el.clientHeight);
+    return distance < 120; // threshold
   }, []);
 
   const getAgentName = (senderId: string | null | undefined): string | null => {
     if (!senderId) return null;
-    const profile = profiles.find(p => p.id === senderId);
+    const profile = profiles.find((p) => p.id === senderId);
     return profile?.name || null;
   };
 
-  // Handle pagination trigger
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
-    // Trigger when scrolled to near the top (100px threshold for better UX)
+
     if (target.scrollTop < 100 && hasMore && !loadingMore && onLoadMore && !loading) {
-      console.log('[MessageList] Scrolled to top, fetching more...');
-      scrollSnapshot.current = {
-        height: target.scrollHeight,
-        top: target.scrollTop
-      };
+      console.log("[MessageList] Scrolled to top, fetching more...");
+      scrollSnapshot.current = { height: target.scrollHeight, top: target.scrollTop };
       onLoadMore();
     }
   };
 
-  useEffect(() => {
-    if (!containerRef.current) return;
-
-    const isAddedAtBottom = messages.length > prevLength.current && messages[messages.length - 1]?.sent_at !== (prevLength.current > 0 ? messages[prevLength.current - 1]?.sent_at : null);
-    const isPrepended = messages.length > prevLength.current && messages[0]?.sent_at !== (prevLength.current > 0 ? messages[0]?.sent_at : null);
-
-    if (isInitialLoad.current && messages.length > 0) {
-      // ✅ FIX: Wait for DOM to render before scrolling
-      setTimeout(() => {
-        if (!containerRef.current) return;
-
-        const firstUnreadIndex = messages.findIndex(msg => !msg.read_at && msg.sender_type !== 'agent');
-
-        if (firstUnreadIndex !== -1) {
-          // Scroll to first unread message
-          const messageElements = containerRef.current.querySelectorAll('[data-message-id]');
-          const targetElement = messageElements[firstUnreadIndex];
-          if (targetElement) {
-            targetElement.scrollIntoView({ behavior: 'auto', block: 'start' });
-          } else {
-            scrollToBottom('auto');
-          }
-        } else {
-          // All read or no incoming messages - scroll to bottom
-          scrollToBottom('auto');
-        }
-      }, 100); // Small delay to ensure DOM is ready
-
-      isInitialLoad.current = false;
-    } else if (isPrepended && scrollSnapshot.current) {
-      // Restore scroll position after history load
-      const newHeight = containerRef.current.scrollHeight;
-      const heightDifference = newHeight - scrollSnapshot.current.height;
-      containerRef.current.scrollTop = scrollSnapshot.current.top + heightDifference;
-      scrollSnapshot.current = null;
-    } else if (isAddedAtBottom) {
-      scrollToBottom('smooth');
-    }
-
-    prevLength.current = messages.length;
-  }, [messages, scrollToBottom]);
-
-  // Reset flags when switching conversation
+  // Reset when switching conversation
   useEffect(() => {
     isInitialLoad.current = true;
     scrollSnapshot.current = null;
-    prevLength.current = 0;
+    prevFirstId.current = null;
+    prevLastId.current = null;
   }, [conversationId]);
+
+  // Scroll behavior AFTER render (mais confiável que setTimeout)
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const first = messages[0]?.id ?? null;
+    const last = messages[messages.length - 1]?.id ?? null;
+
+    const wasPrepended =
+      !!prevFirstId.current && !!first && first !== prevFirstId.current && messages.length > 0;
+
+    const wasAppended =
+      !!prevLastId.current && !!last && last !== prevLastId.current && messages.length > 0;
+
+    // 1) Initial load: scroll to first unread incoming, else bottom
+    if (isInitialLoad.current && messages.length > 0) {
+      raf2(() => {
+        const el2 = containerRef.current;
+        if (!el2) return;
+
+        const firstUnreadIndex = messages.findIndex(
+          (m) => !m.read_at && m.sender_type !== "agent" && m.sender_type !== "system"
+        );
+
+        if (firstUnreadIndex !== -1) {
+          const wrappers = el2.querySelectorAll("[data-message-id]");
+          const target = wrappers[firstUnreadIndex] as HTMLElement | undefined;
+          if (target) target.scrollIntoView({ behavior: "auto", block: "start" });
+          else scrollToBottom("auto");
+        } else {
+          scrollToBottom("auto");
+        }
+
+        isInitialLoad.current = false;
+      });
+    }
+
+    // 2) After prepend: restore scroll position
+    else if (wasPrepended && scrollSnapshot.current) {
+      raf2(() => {
+        const el2 = containerRef.current;
+        if (!el2 || !scrollSnapshot.current) return;
+
+        const newHeight = el2.scrollHeight;
+        const diff = newHeight - scrollSnapshot.current.height;
+        el2.scrollTop = scrollSnapshot.current.top + diff;
+        scrollSnapshot.current = null;
+      });
+    }
+
+    // 3) After append: only autoscroll if user is near bottom
+    else if (wasAppended) {
+      if (isNearBottom()) {
+        raf2(() => scrollToBottom("smooth"));
+      }
+    }
+
+    // update prev refs
+    prevFirstId.current = first;
+    prevLastId.current = last;
+  }, [messages, scrollToBottom, isNearBottom]);
 
   if (loading && messages.length === 0) {
     return (
@@ -144,16 +173,16 @@ export function MessageList({
   }
 
   // Agrupar mensagens por data
-  const messagesWithDateSeparators: (any | { type: 'date-separator', date: Date, id: string })[] = [];
+  const messagesWithDateSeparators: (any | { type: "date-separator"; date: Date; id: string })[] = [];
   let lastDate: Date | null = null;
 
   messages.forEach((msg) => {
     const msgDate = new Date(msg.sent_at);
     if (!lastDate || !isSameDay(msgDate, lastDate)) {
       messagesWithDateSeparators.push({
-        type: 'date-separator',
+        type: "date-separator",
         date: msgDate,
-        id: `sep-${msg.id || msg.sent_at}`
+        id: `sep-${msg.id || msg.sent_at}`,
       });
       lastDate = msgDate;
     }
@@ -165,7 +194,7 @@ export function MessageList({
       ref={containerRef}
       onScroll={handleScroll}
       className="flex-1 overflow-y-auto p-4 scrollbar-thin"
-      style={{ overflowAnchor: 'none' }}
+      style={{ overflowAnchor: "none" }}
     >
       <div className="flex flex-col min-h-full">
         {hasMore && (
@@ -191,22 +220,19 @@ export function MessageList({
         )}
 
         {messagesWithDateSeparators.map((item) => {
-          if (item.type === 'date-separator') {
+          if (item.type === "date-separator") {
             return <DateSeparator key={item.id} date={item.date} />;
           }
 
           const msg = item;
-          const isOutgoing = msg.sender_type === 'agent';
+          const isOutgoing = msg.sender_type === "agent";
           let name: string | null = null;
 
           if (isOutgoing) {
             name = msg.agent_name || getAgentName(msg.sender_id || msg.agent_id) || msg.sender_name;
           } else {
-            if (msg.sender_name && !isPhoneNumber(msg.sender_name)) {
-              name = msg.sender_name;
-            } else {
-              name = contactName || msg.sender_name;
-            }
+            if (msg.sender_name && !isPhoneNumber(msg.sender_name)) name = msg.sender_name;
+            else name = contactName || msg.sender_name;
           }
 
           return (
@@ -219,7 +245,7 @@ export function MessageList({
                 mediaUrl={msg.media_url}
                 sentAt={msg.sent_at}
                 isOutgoing={isOutgoing}
-                isSystem={msg.sender_type === 'system'}
+                isSystem={msg.sender_type === "system"}
                 deliveredAt={msg.delivered_at}
                 readAt={msg.read_at}
                 senderName={name}
