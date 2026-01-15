@@ -182,14 +182,9 @@ serve(async (req: Request) => {
         if (contact?.is_group) {
           recipient = contact?.chat_lid || foundConv.chat_id;
         } else {
-          const lid =
-            (contact?.chat_lid && String(contact.chat_lid).endsWith("@lid"))
-              ? contact.chat_lid
-              : (contact?.lid && String(contact.lid).endsWith("@lid"))
-                ? contact.lid
-                : null;
-
-          recipient = lid || contact?.phone || contact?.chat_lid || contact?.lid || foundConv.chat_id;
+          // ✅ FIX: Para contatos individuais, SEMPRE priorize o PHONE
+          // Z-API rejeita LIDs para usuários individuais, aceita apenas dígitos
+          recipient = contact?.phone || contact?.chat_lid || contact?.lid || foundConv.chat_id;
         }
       }
     }
