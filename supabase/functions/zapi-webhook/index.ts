@@ -67,7 +67,25 @@ serve(async (req: Request): Promise<Response> => {
 
     // --- IDENTIFICAÇÃO E NORMALIZAÇÃO (PATCH DEFINITIVO) ---
     const onlyDigits = (v?: string | null) => (v ?? "").replace(/\D/g, "");
-    const isGroup = (id?: string | null) => !!id && (id.endsWith("@g.us") || id.includes("-")); // Expanded group check
+
+    // ✅ FIX: REGRA 0: @s.whatsapp.net é SEMPRE usuário (mesmo com hífen)
+    const isGroup = (id?: string | null) => {
+      if (!id) return false;
+      const raw = id.trim().toLowerCase();
+
+      // REGRA 0: se termina com @s.whatsapp.net, é USER
+      if (raw.endsWith("@s.whatsapp.net")) return false;
+
+      // REGRA 1: @g.us é grupo
+      if (raw.includes("@g.us")) return true;
+
+      // REGRA 2: padrão de grupo "5511...-1234" (sem @) OU "...-1234@g.us"
+      const stripped = stripPrefix(raw);
+      if (/^\d{10,14}-\d+/.test(stripped)) return true;
+
+      return false;
+    };
+
     const isLid = (id?: string | null) => !!id && id.endsWith("@lid");
 
     const fromMe =
@@ -90,6 +108,13 @@ serve(async (req: Request): Promise<Response> => {
         // Se for LID ou Grupo, ignora números curtos, pega só se parecer telefone
         if (c.endsWith('@lid') || c.endsWith('@g.us')) continue;
 
+        // ✅ FIX: Se termina com @s.whatsapp.net, extrair dígitos
+        if (c.endsWith('@s.whatsapp.net')) {
+          const digits = c.split('@')[0].replace(/\D/g, '');
+          if (digits.length >= 10) return digits;
+          continue;
+        }
+
         const d = onlyDigits(c);
         if (d.length >= 10) return d; // 10+ dígitos (BR normalmente 12-13 com DDI 55)
       }
@@ -98,18 +123,18 @@ serve(async (req: Request): Promise<Response> => {
 
     const rawChatId = payload.chatId || payload.chat?.chatId || payload.id || null;
 
-    // 1. Determinar Thread Key (Identidade Canônica)
+    // 1. Determinar Thread Key (Identidade Canônica) e Chat ID
     let threadKey: string | null = null;
-    let chatIdAlias: string | null = rawChatId;
+    let canonicalChatId: string | null = null; // ✅ Agora sempre telefone para pessoa
     let isGroupChat = false;
 
     if (isGroup(rawChatId) || payload.isGroup) {
       isGroupChat = true;
       const gId = normalizeGroupJid(rawChatId || payload.phone || "");
       threadKey = `g:${gId.replace('@g.us', '')}@g.us`;
-      chatIdAlias = threadKey.substring(2); // Remove g:
+      canonicalChatId = gId; // Para grupo, mantém ...@g.us
     } else {
-      // 1:1: threadKey deve ser telefone (estável)
+      // 1:1: threadKey e chat_id devem ser telefone (estável)
       const phone = extractPhone(payload, fromMe);
 
       if (phone) {
@@ -121,28 +146,34 @@ serve(async (req: Request): Promise<Response> => {
           finalPhone = "55" + finalPhone;
         }
         threadKey = `u:${finalPhone}`;
+        canonicalChatId = finalPhone; // ✅ Chat ID = telefone canônico (sem prefixo)
       } else {
         // Se só temos LID e não conseguimos extrair telefone
-        if (!chatIdAlias || isLid(chatIdAlias)) {
+        if (!rawChatId || isLid(rawChatId)) {
           // Tentar recuperar do alias se for o único ID disponível
           console.warn(`[Webhook] Identidade não resolvida. Raw: ${JSON.stringify({ rawChatId, fromMe })}`);
           threadKey = null;
+          canonicalChatId = null;
         } else {
-          // Se o chatIdAlias parece um telefone
-          const d = onlyDigits(chatIdAlias);
-          if (d.length >= 10) threadKey = `u:${d.startsWith('55') ? d : '55' + d}`;
+          // Se o rawChatId parece um telefone
+          const d = onlyDigits(rawChatId);
+          if (d.length >= 10) {
+            const finalPhone = d.startsWith('55') ? d : '55' + d;
+            threadKey = `u:${finalPhone}`;
+            canonicalChatId = finalPhone; // ✅ Telefone sem prefixo
+          }
         }
       }
     }
 
     // Fallback de segurança para não quebrar o fluxo se não achar nada (cria "unidentified")
     let finalChatKey = threadKey;
-    let finalChatIdentifier = chatIdAlias || "unknown";
+    let finalChatIdentifier = canonicalChatId || rawChatId || "unknown";
 
-    if (!finalChatKey && chatIdAlias) {
+    if (!finalChatKey && (canonicalChatId || rawChatId)) {
       // Último recurso: usa o que tem (mesmo que seja LID) para não perder a msg, 
       // mas loga warning. O ideal seria não usar LID como chave.
-      finalChatKey = `u:${chatIdAlias}`; // Temporário
+      finalChatKey = `u:${canonicalChatId || rawChatId}`; // Temporário
     }
 
     // Campos auxiliares legacy

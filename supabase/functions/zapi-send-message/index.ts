@@ -215,7 +215,7 @@ serve(async (req: Request) => {
     if (conversation_id) {
       const { data: foundConv } = await supabaseAdmin
         .from("conversations")
-        .select("id, chat_id, thread_key, contact_id, contacts(id, chat_key, chat_lid, lid, phone, is_group)")
+        .select("id, chat_id, contacts(phone, is_group)")
         .eq("id", conversation_id)
         .maybeSingle();
 
@@ -226,16 +226,17 @@ serve(async (req: Request) => {
         );
       }
 
-      const contact = foundConv.contacts as any;
+      // ✅ FIX DEFINITIVO: SEMPRE usa o chat_id da conversa aberta
+      if (!foundConv.chat_id) {
+        throw new Error("Conversa sem chat_id. Não é possível enviar.");
+      }
 
-      if (!recipient) {
-        if (contact?.is_group) {
-          recipient = contact?.chat_lid || foundConv.chat_id;
-        } else {
-          // ✅ FIX: Para contatos individuais, SEMPRE priorize o PHONE
-          // Z-API rejeita LIDs para usuários individuais, aceita apenas dígitos
-          recipient = contact?.phone || contact?.chat_lid || contact?.lid || foundConv.chat_id;
-        }
+      recipient = foundConv.chat_id;
+
+      // Ainda passa phone/is_group do contact para ajudar na normalização (opcional)
+      const contact = foundConv.contacts as any;
+      if (contact?.phone) {
+        // Pode usar para validar ou confirmar, mas recipient JÁ está definido
       }
     }
 
