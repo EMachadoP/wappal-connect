@@ -77,10 +77,15 @@ const formatForZAPI = (id: string, isGrp: boolean): string => {
 
   let clean = stripPrefix(id.trim().toLowerCase());
 
-  // se já tem sufixo (@g.us / @lid / @s.whatsapp.net), retorna limpo (sem g:/u:)
-  if (clean.includes('@')) return clean;
+  // ✅ FIX: Z-API rejects suffixes like @s.whatsapp.net and @g.us
+  // Remove any existing suffix first
+  if (clean.includes('@')) {
+    clean = clean.split('@')[0];
+  }
 
-  return isGrp ? `${clean}@g.us` : `${clean}@s.whatsapp.net`;
+  // Para grupos, adicionar @g.us (Z-API aceita para grupos)
+  // Para usuários individuais, retornar apenas os dígitos (Z-API rejeita @s.whatsapp.net)
+  return isGrp ? `${clean}@g.us` : clean;
 };
 
 // idempotency_key determinístico (fallback) — evita duplicar em chamadas iguais
