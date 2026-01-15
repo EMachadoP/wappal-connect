@@ -438,73 +438,59 @@ serve(async (req: Request) => {
     let groupNotified = false;
     let clientNotified = false;
 
-    // Notify group (tech)
-    let notify_group_ok = true;
-    let notify_group_error: string | null = null;
+    // ✅ DIAGNOSTIC NOTIFICATION FLOW
+    let groupRespInfo: any = null;
+    let clientRespInfo: any = null;
+
+    const callFn = async (fn: string, body: any) => {
+      try {
+        const r = await fetch(`${supabaseUrl}/functions/v1/${fn}`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${supabaseServiceKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+        const text = await r.text().catch(() => "");
+        return { ok: r.ok, status: r.status, body: text };
+      } catch (e: any) {
+        return { ok: false, status: 0, body: e.message };
+      }
+    };
+
+    // Notify group
     if (notify_group) {
       log(`[create-protocol] Calling protocol-opened for ${protocolCode}...`);
-      try {
-        const groupResponse = await fetch(`${supabaseUrl}/functions/v1/protocol-opened`, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            protocol_id: protocolRecord.id,
-            protocol_code: protocolCode,
-            idempotency_key: `protocol-opened:${protocolRecord.id}:card`,
-          })
-        });
-
-        const groupText = await groupResponse.text();
-        log(`[create-protocol] protocol-opened status: ${groupResponse.status}, body: ${groupText}`);
-
-        if (!groupResponse.ok) {
-          notify_group_ok = false;
-          notify_group_error = `protocol-opened ${groupResponse.status}: ${groupText}`;
-          log(`[create-protocol] notify_group failed: ${notify_group_error}`);
-        } else {
-          groupNotified = true;
-        }
-      } catch (groupError: any) {
-        notify_group_ok = false;
-        notify_group_error = groupError.message;
-        log(`[create-protocol] ERROR calling protocol-opened: ${groupError.message}`);
-      }
+      groupRespInfo = await callFn("protocol-opened", {
+        protocol_id: protocolRecord.id,
+        protocol_code: protocolRecord.protocol_code,
+        idempotency_key: `protocol-opened:${protocolRecord.id}`,
+      });
+      if (groupRespInfo.ok) groupNotified = true;
     }
 
     // Notify client
     if (notify_client && conversation_id) {
       log(`[create-protocol] Calling protocol-client for ${protocolCode}...`);
-      try {
-        const clientResponse = await fetch(`${supabaseUrl}/functions/v1/protocol-client`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${supabaseServiceKey}`,
-            'apikey': supabaseServiceKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            protocol_id: protocolRecord.id,
-            protocol_code: protocolCode,
-            conversation_id,
-            idempotency_key: `protocol-client:${protocolRecord.id}`
-          })
-        });
-        if (clientResponse.ok) clientNotified = true;
-        const clientText = await clientResponse.text();
-        log(`[create-protocol] protocol-client status: ${clientResponse.status}, body: ${clientText}`);
-      } catch (clientError: any) {
-        log(`[create-protocol] ERROR calling protocol-client: ${clientError.message}`);
-      }
+      clientRespInfo = await callFn("protocol-client", {
+        protocol_id: protocolRecord.id,
+        protocol_code: protocolRecord.protocol_code,
+        conversation_id,
+        idempotency_key: `protocol-client:${protocolRecord.id}`,
+      });
+      if (clientRespInfo.ok) clientNotified = true;
     }
 
     return new Response(JSON.stringify({
       success: true,
       protocol_created: true,
-      group_notified: groupNotified,
-      notify_group_ok,
-      notify_group_error,
-      client_notified: clientNotified,
+      protocol_id: protocolRecord.id,
       protocol_code: protocolCode,
+      group_notified: groupNotified,
+      client_notified: clientNotified,
+      group_notification: groupRespInfo,
+      client_notification: clientRespInfo,
       protocol: protocolRecord
     }), {
       status: 200,

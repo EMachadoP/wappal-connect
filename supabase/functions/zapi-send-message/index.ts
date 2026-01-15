@@ -239,46 +239,7 @@ serve(async (req: Request) => {
       if (contact?.conversations?.length) finalConvId = contact.conversations[0].id;
     }
 
-    // ✅ OUTBOX IDEMPOTENTE (se já existe, não envia novamente)
-    const outboxPayload = {
-      to: formattedRecipient,
-      isGroup: finalIsGroup,
-      message_type: message_type || "text",
-      content: content || "",
-      media_url: media_url || null,
-      senderName,
-      conversation_id: finalConvId || null,
-    };
-
-    const { data: outboxRow, error: outboxErr } = await supabaseAdmin
-      .from("message_outbox")
-      .insert({
-        provider: "zapi",
-        idempotency_key,
-        conversation_id: finalConvId || null,
-        to_chat_id: formattedRecipient,
-        payload: outboxPayload,
-      })
-      .select("id, sent_at, provider_message_id")
-      .maybeSingle();
-
-    if (outboxErr?.code === "23505") {
-      // já enviado com essa chave
-      return new Response(
-        JSON.stringify({ success: true, duplicated: true, idempotency_key }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-    if (outboxErr) throw new Error(`Outbox error: ${outboxErr.message}`);
-    // If we didn't get a row back, it might be due to race condition or conflict handled by maybeSingle
-    if (!outboxRow) {
-      return new Response(
-        JSON.stringify({ success: true, duplicated: true, idempotency_key }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-
-    // Build request
+    // Build Z-API request parameters (needed for outbox payload)
     let finalContent = content;
     let endpoint = "/send-text";
     const bodyOut: any = { phone: formattedRecipient };
@@ -299,25 +260,98 @@ serve(async (req: Request) => {
       bodyOut.fileName = "documento";
     }
 
+    // ✅ SYNCHRONOUS OUTBOX IDEMPOTENCY
+    const { data: existingOutbox } = await supabaseAdmin
+      .from("message_outbox")
+      .select("id, sent_at, provider_message_id, status")
+      .eq("idempotency_key", idempotency_key)
+      .maybeSingle();
+
+    if (existingOutbox?.sent_at) {
+      return new Response(JSON.stringify({
+        success: true,
+        deduped: true,
+        messageId: existingOutbox.provider_message_id,
+        idempotency_key
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // Upsert to lock key
+    const outboxPayload = {
+      endpoint,
+      body: bodyOut,
+      senderName,
+      message_type: message_type || "text",
+      media_url: media_url || null,
+      content: content || "",
+      conversation_id: finalConvId || null,
+    };
+
+    const { data: outboxRow, error: outboxErr } = await supabaseAdmin
+      .from("message_outbox")
+      .upsert({
+        idempotency_key,
+        provider: "zapi",
+        conversation_id: finalConvId || null,
+        to_chat_id: formattedRecipient,
+        recipient: formattedRecipient, // compatibility
+        payload: outboxPayload,
+        status: "pending",
+      }, { onConflict: "idempotency_key" })
+      .select("id")
+      .maybeSingle();
+
+    if (outboxErr) {
+      console.error("[zapi-send-message] Outbox upsert error:", outboxErr.message);
+    }
+
+    // Execute send
     const zapiBaseUrl = `https://api.z-api.io/instances/${instanceId}/token/${token}`;
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (clientToken) headers["Client-Token"] = clientToken;
 
-    const response = await fetch(`${zapiBaseUrl}${endpoint}`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(bodyOut),
-    });
+    let result: any;
+    let response: Response;
 
-    const result = await response.json();
-    if (!response.ok) {
-      await supabaseAdmin.from("message_outbox").update({
-        error: `ZAPI ${response.status}: ${JSON.stringify(result)}`,
-      }).eq("id", outboxRow.id);
-      throw new Error(`Falha Z-API (${response.status}): ${JSON.stringify(result)}`);
+    try {
+      response = await fetch(`${zapiBaseUrl}${endpoint}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(bodyOut),
+      });
+      result = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        const errorText = `ZAPI ${response.status}: ${JSON.stringify(result).slice(0, 1000)}`;
+        if (outboxRow) {
+          await supabaseAdmin.from("message_outbox").update({
+            status: "error",
+            error: errorText
+          }).eq("id", outboxRow.id);
+        }
+        throw new Error(errorText);
+      }
+    } catch (fetchErr: any) {
+      if (outboxRow) {
+        await supabaseAdmin.from("message_outbox").update({
+          status: "error",
+          error: fetchErr.message
+        }).eq("id", outboxRow.id);
+      }
+      throw fetchErr;
     }
 
     const providerMessageId = result.messageId || result.statusId || result.zapiMessageId || null;
+
+    // Update outbox success
+    if (outboxRow) {
+      await supabaseAdmin.from("message_outbox").update({
+        status: "sent",
+        sent_at: new Date().toISOString(),
+        provider_message_id: providerMessageId,
+        error: null,
+      }).eq("id", outboxRow.id);
+    }
 
     // Save message
     await supabaseAdmin.from("messages").insert({
@@ -335,11 +369,6 @@ serve(async (req: Request) => {
       direction: "outbound",
       chat_id: formattedRecipient,
     });
-
-    await supabaseAdmin.from("message_outbox").update({
-      sent_at: new Date().toISOString(),
-      provider_message_id: providerMessageId,
-    }).eq("id", outboxRow.id);
 
     // Update conversation
     if (finalConvId) {
