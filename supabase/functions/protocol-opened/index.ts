@@ -1,13 +1,12 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+declare const Deno: any;
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
-
-const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const stripPrefix = (s: string) => (s || '').trim().replace(/^(u:|g:)/i, '');
 
@@ -27,6 +26,9 @@ const normalizeGroupJid = (s: string) => {
 
 serve(async (req: Request): Promise<Response> => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
   try {
     const body = await req.json();
@@ -52,16 +54,23 @@ serve(async (req: Request): Promise<Response> => {
         id, protocol_code, summary, priority, category,
         requester_name, requester_role,
         condominium_name,
+        due_date,
         conversation_id,
-        conversations(id, contact_id),
-        contacts:conversations(contacts(id, name, phone, chat_lid, lid, chat_key, is_group))
+        conversations(
+          id, 
+          contact_id,
+          contacts(id, name, phone, chat_lid, lid, chat_key, is_group)
+        )
       `);
 
     const { data: protocol, error } = protocol_id
       ? await q.eq("id", protocol_id).maybeSingle()
       : await q.eq("protocol_code", protocol_code).maybeSingle();
 
-    if (error || !protocol) throw new Error("Protocolo não encontrado");
+    if (error || !protocol) {
+      console.error("[protocol-opened] DB Error:", error);
+      throw new Error(`Protocolo não encontrado: ${error?.message || ''}`);
+    }
 
     const { data: settings } = await supabase.from("integrations_settings").select("*").maybeSingle();
     const techGroupIdRaw = Deno.env.get("ZAPI_TECH_GROUP_CHAT_ID") || settings?.whatsapp_group_id;
@@ -73,13 +82,6 @@ serve(async (req: Request): Promise<Response> => {
 
     if (!settings?.whatsapp_notifications_enabled) {
       return new Response(JSON.stringify({ success: true, skipped: true, reason: "notifications disabled" }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    if (!techGroupId) {
-      return new Response(JSON.stringify({ success: false, error: "Grupo técnico não configurado" }), {
-        status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -98,11 +100,11 @@ serve(async (req: Request): Promise<Response> => {
 📝 *Resumo:* ${protocol.summary || "Sem descrição"}
 📌 *Categoria:* ${protocol.category || "Operacional"}
 🟢 *Prioridade:* ${protocol.priority || "normal"}
-⏰ *Vencimento:* ${(protocol as any).due_date ? String((protocol as any).due_date).slice(0, 10) : "—"}
+⏰ *Vencimento:* ${protocol.due_date ? String(protocol.due_date).slice(0, 10) : "—"}
 `;
 
     // Envia SOMENTE pro grupo (isGroup = true) e com idempotency_key
-    await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
+    const zapiResp = await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${supabaseServiceKey}`,
@@ -118,14 +120,19 @@ serve(async (req: Request): Promise<Response> => {
       }),
     });
 
-    return new Response(JSON.stringify({ success: true }), {
+    if (!zapiResp.ok) {
+      const zapiErr = await zapiResp.text();
+      throw new Error(`Falha no zapi-send-message: ${zapiResp.status} ${zapiErr}`);
+    }
+
+    return new Response(JSON.stringify({ success: true, techGroupId }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err: any) {
     console.error('[protocol-opened] Error:', err.message);
     return new Response(JSON.stringify({ success: false, error: err.message }), {
       status: 500,
-      headers: corsHeaders,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
