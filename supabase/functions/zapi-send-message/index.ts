@@ -1,6 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+declare const Deno: any;
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -213,12 +215,17 @@ serve(async (req: Request) => {
 
     if (!instanceId || !token) throw new Error("Configurações de WhatsApp incompletas no servidor");
 
-    // infer group if not provided
-    const inferredIsGroup =
-      typeof isGroupInput === 'boolean' ? isGroupInput : looksLikeGroup(String(recipient));
+    // ✅ PATCH: Robust Group Inference & Prefix Stripping
+    const inferIsGroup = (id: string) => {
+      const x = stripPrefix((id || '').trim().toLowerCase());
+      return x.endsWith('@g.us') || /^\d{10,14}-\d+$/.test(x.replace(/@g\.us$/, ''));
+    };
 
-    const formattedRecipient = formatForZAPI(recipient!, inferredIsGroup);
-    const chatKey = getChatKey(formattedRecipient, inferredIsGroup);
+    const cleanRecipient = stripPrefix(String(recipient));
+    const finalIsGroup = typeof isGroupInput === 'boolean' ? isGroupInput : inferIsGroup(cleanRecipient);
+
+    const formattedRecipient = formatForZAPI(cleanRecipient, finalIsGroup);
+    const chatKey = getChatKey(formattedRecipient, finalIsGroup);
 
     // Resolve conversation_id by chatKey if needed
     let finalConvId = conversation_id;
@@ -235,7 +242,7 @@ serve(async (req: Request) => {
     // ✅ OUTBOX IDEMPOTENTE (se já existe, não envia novamente)
     const outboxPayload = {
       to: formattedRecipient,
-      isGroup: inferredIsGroup,
+      isGroup: finalIsGroup,
       message_type: message_type || "text",
       content: content || "",
       media_url: media_url || null,
