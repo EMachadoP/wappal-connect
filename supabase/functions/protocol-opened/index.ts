@@ -77,20 +77,34 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     // ✅ FIX: Acessar nome do condomínio via JOIN
-    const condominiumName = protocol.condominiums?.name || "Não informado";
+    const condominiumName = protocol.condominiums?.name || "Não Identificado";
 
     const code = protocol.protocol_code.startsWith("G7-") ? protocol.protocol_code : `G7-${protocol.protocol_code}`;
+    const sequenceCode = protocol.protocol_code; // Ex: 202601-0100-PG0
 
-    const groupMsgCard = `*G7 Serv | Abertura de Chamado*
-✅ *Protocolo:* ${code}
-🏢 *Condomínio:* ${condominiumName}
-👤 *Solicitante:* ${protocol.requester_name || "Não informado"}
-📌 *Categoria:* ${protocol.category || "Operacional"}
-🟢 *Prioridade:* ${protocol.priority || "normal"}
-⏰ *Vencimento:* ${protocol.due_date ? String(protocol.due_date).slice(0, 10) : "—"}`;
+    // Formatar data atual para DD/MM/YYYY
+    const today = new Date();
+    const dateStr = today.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
-    const groupMsgSummary = `*Resumo do Protocolo ${code}:*
-${protocol.summary || "Sem descrição adicional."}`;
+    // Formatar data de vencimento
+    const dueDate = protocol.due_date ? String(protocol.due_date).slice(0, 10) : new Date().toISOString().slice(0, 10);
+
+    // Determinar emoji de prioridade
+    const priorityEmoji = protocol.priority === 'urgent' || protocol.priority === 'critical' ? '🔴' : '🟢';
+    const priorityLabel = protocol.priority || 'normal';
+
+    const groupMsgCard = `G7 Serv | Abertura de Chamado
+📅 ${dateStr} | 🧾 Seq.: ${sequenceCode}
+
+✅ Protocolo: ${code}
+🏢 Condomínio: ${condominiumName}
+👤 Solicitante: ${protocol.requester_name || "Não identificado"} (${protocol.requester_role || "Não informada"})
+📝 Resumo: ${protocol.summary || "Sem descrição"}
+${priorityEmoji} ${priorityLabel.charAt(0).toUpperCase() + priorityLabel.slice(1)} Prioridade: ${priorityLabel}
+⏰ Vencimento: ${dueDate}
+
+➡️ Para encerrar, responda:
+${code} - Resolvido`;
 
     console.log(`[protocol-opened] Enviando para grupo: ${techGroupId}`);
 
@@ -121,31 +135,6 @@ ${protocol.summary || "Sem descrição adicional."}`;
     }
 
     console.log(`[protocol-opened] Card enviado: ${cardResult.deduped ? "deduped" : "sent"}, messageId=${cardResult.messageId || 'N/A'}`);
-
-    // Enviar SUMMARY (se houver resumo relevante)
-    if (protocol.summary && protocol.summary.length > 5) {
-      const zapiRespSummary = await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${supabaseServiceKey}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          recipient: techGroupId,
-          content: groupMsgSummary,
-          isGroup: true,
-          idempotency_key: `${idempotency_key}:summary`
-        }),
-      });
-
-      const summaryResult = await safeJson(zapiRespSummary);
-
-      if (!zapiRespSummary.ok && !summaryResult.deduped) {
-        console.error(`[protocol-opened] Falha no summary: ${JSON.stringify(summaryResult)}`);
-      } else {
-        console.log(`[protocol-opened] Summary enviado: ${summaryResult.deduped ? "deduped" : "sent"}`);
-      }
-    }
 
     return new Response(
       JSON.stringify({ success: true, techGroupId, protocol_code: code }),
