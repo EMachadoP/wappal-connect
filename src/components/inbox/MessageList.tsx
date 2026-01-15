@@ -93,7 +93,23 @@ export function MessageList({
     const isPrepended = messages.length > prevLength.current && messages[0]?.sent_at !== (prevLength.current > 0 ? messages[0]?.sent_at : null);
 
     if (isInitialLoad.current && messages.length > 0) {
-      scrollToBottom('auto');
+      // ✅ FIX: Scroll to first unread message or bottom
+      const firstUnreadIndex = messages.findIndex(msg => !msg.read_at && msg.sender_type !== 'agent');
+
+      if (firstUnreadIndex !== -1) {
+        // Scroll to first unread message
+        const messageElements = containerRef.current.querySelectorAll('[data-message-id]');
+        const targetElement = messageElements[firstUnreadIndex];
+        if (targetElement) {
+          targetElement.scrollIntoView({ behavior: 'auto', block: 'start' });
+        } else {
+          scrollToBottom('auto');
+        }
+      } else {
+        // All read or no incoming messages - scroll to bottom
+        scrollToBottom('auto');
+      }
+
       isInitialLoad.current = false;
     } else if (isPrepended && scrollSnapshot.current) {
       // Restore scroll position after history load
@@ -190,22 +206,23 @@ export function MessageList({
           }
 
           return (
-            <MemoizedChatMessage
-              key={msg.id}
-              messageId={msg.id}
-              conversationId={conversationId}
-              content={msg.content}
-              messageType={msg.message_type}
-              mediaUrl={msg.media_url}
-              sentAt={msg.sent_at}
-              isOutgoing={isOutgoing}
-              isSystem={msg.sender_type === 'system'}
-              deliveredAt={msg.delivered_at}
-              readAt={msg.read_at}
-              senderName={name}
-              isAIGenerated={isOutgoing && !msg.sender_id && !msg.agent_id}
-              transcript={msg.transcript}
-            />
+            <div key={msg.id} data-message-id={msg.id}>
+              <MemoizedChatMessage
+                messageId={msg.id}
+                conversationId={conversationId}
+                content={msg.content}
+                messageType={msg.message_type}
+                mediaUrl={msg.media_url}
+                sentAt={msg.sent_at}
+                isOutgoing={isOutgoing}
+                isSystem={msg.sender_type === 'system'}
+                deliveredAt={msg.delivered_at}
+                readAt={msg.read_at}
+                senderName={name}
+                isAIGenerated={isOutgoing && !msg.sender_id && !msg.agent_id}
+                transcript={msg.transcript}
+              />
+            </div>
           );
         })}
       </div>
