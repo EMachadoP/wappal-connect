@@ -439,7 +439,10 @@ serve(async (req: Request) => {
     let clientNotified = false;
 
     // Notify group (tech)
+    let notify_group_ok = true;
+    let notify_group_error: string | null = null;
     if (notify_group) {
+      log(`[create-protocol] Calling protocol-opened for ${protocolCode}...`);
       try {
         const groupResponse = await fetch(`${supabaseUrl}/functions/v1/protocol-opened`, {
           method: 'POST',
@@ -447,17 +450,24 @@ serve(async (req: Request) => {
           body: JSON.stringify({
             protocol_id: protocolRecord.id,
             protocol_code: protocolCode,
-            notify_group: true,
-            idempotency_key: `protocol-opened:${protocolRecord.id}`
+            idempotency_key: `protocol-opened:${protocolRecord.id}:card`,
           })
         });
+
+        const groupText = await groupResponse.text();
+        log(`[create-protocol] protocol-opened status: ${groupResponse.status}, body: ${groupText}`);
+
         if (!groupResponse.ok) {
-          const groupText = await groupResponse.text();
-          throw new Error(`Falha ao notificar grupo: ${groupResponse.status} ${groupText}`);
+          notify_group_ok = false;
+          notify_group_error = `protocol-opened ${groupResponse.status}: ${groupText}`;
+          log(`[create-protocol] notify_group failed: ${notify_group_error}`);
+        } else {
+          groupNotified = true;
         }
-        groupNotified = true;
       } catch (groupError: any) {
-        throw groupError; // Escala o erro para o 500 final
+        notify_group_ok = false;
+        notify_group_error = groupError.message;
+        log(`[create-protocol] ERROR calling protocol-opened: ${groupError.message}`);
       }
     }
 
@@ -491,6 +501,8 @@ serve(async (req: Request) => {
       success: true,
       protocol_created: true,
       group_notified: groupNotified,
+      notify_group_ok,
+      notify_group_error,
       client_notified: clientNotified,
       protocol_code: protocolCode,
       protocol: protocolRecord

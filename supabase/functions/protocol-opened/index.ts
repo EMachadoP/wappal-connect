@@ -58,27 +58,44 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     const code = protocol.protocol_code.startsWith("G7-") ? protocol.protocol_code : `G7-${protocol.protocol_code}`;
-    const groupMsg = `*G7 Serv | Abertura de Chamado*
+    const groupMsgCard = `*G7 Serv | Abertura de Chamado*
 ✅ *Protocolo:* ${code}
 🏢 *Condomínio:* ${protocol.condominium_name || "—"}
 👤 *Solicitante:* ${protocol.requester_name || "Não informado"}
-📝 *Resumo:* ${protocol.summary || "Sem descrição"}
 📌 *Categoria:* ${protocol.category || "Operacional"}
 🟢 *Prioridade:* ${protocol.priority || "normal"}
 ⏰ *Vencimento:* ${protocol.due_date ? String(protocol.due_date).slice(0, 10) : "—"}`;
 
-    const zapiResp = await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
+    const groupMsgSummary = `*Resumo do Protocolo ${code}:*
+${protocol.summary || "Sem descrição adicional."}`;
+
+    // Enviar CARD
+    const zapiRespCard = await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
       method: "POST",
       headers: { "Authorization": `Bearer ${supabaseServiceKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         recipient: techGroupId,
-        content: groupMsg,
+        content: groupMsgCard,
         isGroup: true,
-        idempotency_key
+        idempotency_key: `${idempotency_key}:card`
       }),
     });
 
-    if (!zapiResp.ok) throw new Error(`Falha Z-API: ${zapiResp.status}`);
+    if (!zapiRespCard.ok) throw new Error(`Falha Z-API (Card): ${zapiRespCard.status}`);
+
+    // Enviar SUMMARY (se houver resumo relevante)
+    if (protocol.summary && protocol.summary.length > 5) {
+      await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${supabaseServiceKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipient: techGroupId,
+          content: groupMsgSummary,
+          isGroup: true,
+          idempotency_key: `${idempotency_key}:summary`
+        }),
+      });
+    }
 
     return new Response(JSON.stringify({ success: true, techGroupId }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (err: any) {
