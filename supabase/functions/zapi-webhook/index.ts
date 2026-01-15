@@ -218,15 +218,23 @@ serve(async (req: Request): Promise<Response> => {
 
     const messagePreview = lastMessagePreview.slice(0, 500);
 
-    // 6. Salvar/Atualizar Conversa
-    let { data: existingConv } = await supabase.from('conversations')
-      .select('id, active_condominium_id')
-      .eq('contact_id', contactId)
-      .maybeSingle();
 
-    // Auto-Condominium Selection
-    let autoCondoId: string | null = null;
-    if (!existingConv?.active_condominium_id) {
+    // 6. Salvar/Atualizar Conversa com UPSERT
+    const nowIso = new Date().toISOString();
+
+    // ✅ FIX: Upsert por chat_id para evitar duplicatas
+    const convPayload: any = {
+      contact_id: contactId,
+      chat_id: finalChatIdentifier,      // Normalizado (ex: 5581997438430 ou 551199-123@g.us)
+      thread_key: threadKey,             // Ex: u:5581... ou g:...@g.us
+      last_message: lastMessagePreview,
+      last_message_type: msgType,
+      last_message_at: nowIso,
+      status: 'open'
+    };
+
+    // Auto-Condominium Selection (apenas para mensagens INBOUND)
+    if (!fromMe) {
       const { data: linkedCondos } = await supabase
         .from('contact_condominiums')
         .select('condominium_id, is_default')
@@ -234,67 +242,53 @@ serve(async (req: Request): Promise<Response> => {
 
       if (linkedCondos && linkedCondos.length > 0) {
         const defaultCondo = linkedCondos.find((lc: any) => lc.is_default);
-        autoCondoId = defaultCondo?.condominium_id || (linkedCondos.length === 1 ? linkedCondos[0].condominium_id : null);
+        const autoCondoId = defaultCondo?.condominium_id || (linkedCondos.length === 1 ? linkedCondos[0].condominium_id : null);
+
+        if (autoCondoId) {
+          convPayload.active_condominium_id = autoCondoId;
+          convPayload.active_condominium_set_by = 'human';
+          convPayload.active_condominium_set_at = nowIso;
+        }
       }
     }
 
     let conv: { id: string };
 
-    if (existingConv) {
-      const updateData: any = {
-        last_message_at: now,
-        last_message: lastMessagePreview,
-        last_message_type: msgType,
-        chat_id: finalChatIdentifier, // Atualizamos o chat_id na conversa para o mais recente (@lid ou normal)
-        status: 'open'
-      };
+    // Tentar upsert
+    const { data: convRow, error: convErr } = await supabase
+      .from('conversations')
+      .upsert(convPayload, { onConflict: 'chat_id' })
+      .select('id')
+      .single();
 
-      if (!fromMe && autoCondoId) {
-        updateData.active_condominium_id = autoCondoId;
-        updateData.active_condominium_set_by = 'human';
-        updateData.active_condominium_set_at = now;
-      }
+    if (convErr) {
+      // ✅ FALLBACK: Se der erro, tenta recuperar a conversa existente
+      console.log(`[Webhook] Erro no upsert, tentando fallback: ${convErr.message}`);
 
-      const { data: updated, error: updateErr } = await supabase.from('conversations')
-        .update(updateData)
-        .eq('id', existingConv.id)
+      const { data: existing } = await supabase
+        .from('conversations')
         .select('id')
-        .single();
+        .eq('chat_id', finalChatIdentifier)
+        .maybeSingle();
 
-      if (updateErr || !updated) throw new Error(`Erro ao atualizar conversa: ${updateErr?.message}`);
+      if (!existing) throw new Error(`Erro ao criar/atualizar conversa: ${convErr.message}`);
 
-      // If fromMe, protect service flags (don't overwrite AI mode or assignment)
-      if (fromMe && existingConv) {
-        // We already updated basic fields, but we ensure we didn't wipe anything critical
-        // actually we just updated what was in updateData.
-      }
+      conv = existing;
 
-      conv = updated;
+      // Atualizar manualmente
+      await supabase
+        .from('conversations')
+        .update({
+          last_message: lastMessagePreview,
+          last_message_type: msgType,
+          last_message_at: nowIso,
+          status: 'open'
+        })
+        .eq('id', conv.id);
     } else {
-      const insertData: any = {
-        contact_id: contactId,
-        chat_lid: finalChatIdentifier,
-        lid: finalChatIdentifier,
-        status: 'open',
-        last_message_at: now,
-        last_message: lastMessagePreview,
-        last_message_type: msgType
-      };
-
-      if (!fromMe && autoCondoId) {
-        insertData.active_condominium_id = autoCondoId;
-        insertData.active_condominium_set_by = 'human';
-        insertData.active_condominium_set_at = now;
-      }
-
-      const { data: created, error: createErr } = await supabase.from('conversations')
-        .upsert(insertData, { onConflict: 'thread_key' })
-        .select('id')
-        .single();
-
-      if (createErr || !created) throw new Error(`Erro ao criar conversa: ${createErr?.message}`);
-      conv = created;
+      conv = convRow;
     }
+
 
     if (!fromMe) await supabase.rpc('increment_unread_count', { conv_id: conv.id });
 
