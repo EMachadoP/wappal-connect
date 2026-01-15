@@ -125,10 +125,30 @@ serve(async (req: Request): Promise<Response> => {
     const isGroup = !!payload.isGroup || (typeof rawChatId === 'string' && isLikelyGroupId(rawChatId));
     const chatLid = normalizeLid(rawChatId, isGroup);
 
-    const contactRaw = payload.senderPhone || payload.contact?.phone || payload.contact?.lid || payload.lid || payload.participantLid || rawChatId;
+    // ✅ PATCH 1.1: Quando fromMe=true, usar número real do destinatário
+    let contactRaw: string;
+    if (fromMe) {
+      // Mensagem enviada: usar destinatário real (não LID)
+      contactRaw = payload.phone || payload.to || payload.chatId || payload.senderPhone || rawChatId;
+    } else {
+      // Mensagem recebida: usar remetente
+      contactRaw = payload.senderPhone || payload.contact?.phone || payload.contact?.lid || payload.lid || payload.participantLid || rawChatId;
+    }
+
     const contactLid = normalizeLid(contactRaw, false);
 
-    const chatIdentifier = isGroup ? chatLid : contactLid;
+    // ✅ PATCH 1.1 EXTRA: Extrair número real de LID se necessário
+    let resolvedPhone = contactLid;
+    if (fromMe && contactLid.endsWith('@lid')) {
+      // Se fromMe e veio LID, tentar extrair número real do payload
+      const rawPhone = payload.to || payload.phone || payload.chatId;
+      if (rawPhone && !rawPhone.endsWith('@lid')) {
+        resolvedPhone = normalizeUserId(rawPhone);
+        console.log(`[Webhook] fromMe detected, extracting real phone: ${contactLid} -> ${resolvedPhone}`);
+      }
+    }
+
+    const chatIdentifier = isGroup ? chatLid : resolvedPhone;
     const chatKey = getChatKey(chatIdentifier, !!isGroup);
     const chatName = payload.chatName || payload.contact?.name || payload.senderName || payload.pushName || (chatIdentifier ? chatIdentifier.split('@')[0] : 'Desconhecido');
 
