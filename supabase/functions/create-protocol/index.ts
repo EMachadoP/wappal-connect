@@ -138,9 +138,16 @@ serve(async (req: Request) => {
     const summary = body.summary;
     const created_by_agent_id = body.created_by_agent_id ?? null;
     // DEFAULTS: If frontend didn't send flags, assume TRUE (manual protocol should notify)
-    const notify_group = typeof body.notify_group === 'boolean' ? body.notify_group : true;
-    const notify_client = typeof body.notify_client === 'boolean' ? body.notify_client : true;
-    const force_new = typeof body.force_new === 'boolean' ? body.force_new : true;
+    const toBool = (v: any, defaultValue = true) => {
+      if (v === undefined || v === null) return defaultValue;
+      if (v === true || v === "true" || v === 1 || v === "1") return true;
+      if (v === false || v === "false" || v === 0 || v === "0") return false;
+      return defaultValue;
+    };
+
+    const notify_group = toBool(body.notify_group, true);
+    const notify_client = toBool(body.notify_client, true);
+    const force_new = toBool(body.force_new, true);
 
     const requester_name = body.requester_name;
     const requester_role = body.requester_role;
@@ -442,7 +449,12 @@ serve(async (req: Request) => {
             'apikey': supabaseServiceKey,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ protocol_id: protocolRecord.id, protocol_code: protocolCode, notify_group: true })
+          body: JSON.stringify({
+            protocol_id: protocolRecord.id,
+            protocol_code: protocolCode,
+            notify_group: true,
+            idempotency_key: `protocol-opened:${protocolRecord.id}`
+          })
         });
         if (groupResponse.ok) groupNotified = true;
         const groupText = await groupResponse.text();
@@ -463,7 +475,12 @@ serve(async (req: Request) => {
             'apikey': supabaseServiceKey,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ protocol_id: protocolRecord.id, protocol_code: protocolCode })
+          body: JSON.stringify({
+            protocol_id: protocolRecord.id,
+            protocol_code: protocolCode,
+            conversation_id,
+            idempotency_key: `protocol-client:${protocolRecord.id}`
+          })
         });
         if (clientResponse.ok) clientNotified = true;
         const clientText = await clientResponse.text();

@@ -26,7 +26,7 @@ export default function InboxPage() {
   const [agents, setAgents] = useState<{ id: string; name: string }[]>([]);
 
   // Hook customizado para gerenciar a lista e realtime global
-  const { conversations, loading: loadingConversations } = useRealtimeInbox({
+  const { conversations, loading: loadingConversations, refetch: refetchConversations } = useRealtimeInbox({
     onNewInboundMessage: playNotificationSound
   });
 
@@ -216,8 +216,11 @@ export default function InboxPage() {
 
       if (error) throw error;
 
-      // Refetch to update local state
-      await fetchActiveConversationDetails(activeConversationId);
+      // Refetch to update local state and sidebar list
+      await Promise.all([
+        fetchActiveConversationDetails(activeConversationId),
+        refetchConversations()
+      ]);
 
       toast.success('Conversa marcada como resolvida');
       console.log('Conversa marcada como resolvida');
@@ -244,8 +247,11 @@ export default function InboxPage() {
 
       if (error) throw error;
 
-      // Refetch to update local state
-      await fetchActiveConversationDetails(activeConversationId);
+      // Refetch to update local state and sidebar list
+      await Promise.all([
+        fetchActiveConversationDetails(activeConversationId),
+        refetchConversations()
+      ]);
 
       toast.success('Conversa reaberta com sucesso');
       console.log('Conversa reaberta');

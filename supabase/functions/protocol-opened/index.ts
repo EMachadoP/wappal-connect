@@ -6,161 +6,105 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const supabaseUrl = Deno.env.get("SUPABASE_URL");
-const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-
-function translateCategory(c: string) {
-  return {
-    financial: "Financeiro",
-    support: "Suporte",
-    admin: "Administrativo"
-  }[c] || "Operacional";
-}
-
-function translatePriority(p: string) {
-  return p === "critical" ? "Crítico" : "Normal";
-}
+const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 serve(async (req: Request): Promise<Response> => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const auth = req.headers.get("authorization")?.replace("Bearer ", "");
-    if (auth !== supabaseServiceKey) {
-      return new Response("Não autorizado", { status: 401 });
-    }
+    const body = await req.json();
+    const protocol_id = body.protocol_id as string | undefined;
+    const protocol_code = body.protocol_code as string | undefined;
+    const idempotency_key =
+      (body.idempotency_key as string | undefined) ||
+      (protocol_id ? `protocol-opened:${protocol_id}` : protocol_code ? `protocol-opened:${protocol_code}` : undefined);
 
-    const supabase = createClient(supabaseUrl!, supabaseServiceKey!);
-    const { protocol_code } = await req.json();
-
-    console.log('=== PROTOCOL OPENED ===');
-    console.log('Protocol Code:', protocol_code);
-
-    // 1. Buscar protocolo completo
-    const { data: protocol, error: protocolError } = await supabase
-      .from('protocols')
-      .select('*, conversations(*, condominiums(name), contacts(*))')
-      .eq('protocol_code', protocol_code)
-      .single();
-
-    if (protocolError || !protocol) {
-      throw new Error(`Protocolo não encontrado: ${protocolError?.message}`);
-    }
-
-    const conv = protocol.conversations as any;
-    const condoName = conv?.condominiums?.name || "Não Identificado";
-    const requesterName = protocol.requester_name || conv?.contacts?.name || "Não identificado";
-    const category = protocol.category || "operational";
-    const priority = protocol.priority || "normal";
-    const dueDate = new Date().toISOString().split('T')[0];
-
-    // 2. Buscar configurações
-    const { data: settings } = await supabase
-      .from("integrations_settings")
-      .select("*")
-      .single();
-
-    // ========== NOTIFICAÇÃO DO GRUPO (TÉCNICOS) ==========
-    if (settings?.whatsapp_notifications_enabled) {
-      // ✅ ENV primeiro, depois banco
-      const envGroupId = Deno.env.get("ZAPI_TECH_GROUP_CHAT_ID");
-      const dbGroupId = settings.whatsapp_group_id;
-      const techGroupId = envGroupId || dbGroupId;
-
-      console.log('=== GROUP NOTIFICATION ===');
-      console.log('Enabled:', settings.whatsapp_notifications_enabled);
-      console.log('Source:', envGroupId ? 'Environment (ZAPI_TECH_GROUP_CHAT_ID)' : 'Database (integrations_settings)');
-      console.log('Group ID:', techGroupId);
-
-      if (!techGroupId) {
-        console.error('❌ ZAPI_TECH_GROUP_CHAT_ID não configurado!');
-        throw new Error('ID do grupo de técnicos não está configurado');
-      }
-
-      const groupMsg = `*G7 Serv | Abertura de Chamado*\n\n` +
-        `✅ *Protocolo:* G7-${protocol_code}\n` +
-        `🏢 *Condomínio:* ${condoName}\n` +
-        `👤 *Solicitante:* ${requesterName}\n` +
-        `📝 *Resumo:* ${protocol.summary || "Sem descrição"}\n` +
-        `⏰ *Vencimento:* ${dueDate}`;
-
-      console.log('Invocando zapi-send-message para grupo...');
-
-      // ✅ Usar recipient padronizado (wrapper vai formatar para @g.us se isGroup for true)
-      const groupRes = await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${supabaseServiceKey}`,
-          "apikey": supabaseServiceKey,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          recipient: techGroupId,
-          content: groupMsg,
-          isGroup: true,
-          sender_name: "G7"
-        }),
+    if (!protocol_id && !protocol_code) {
+      return new Response(JSON.stringify({ success: false, error: "protocol_id ou protocol_code é obrigatório" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
 
-      const groupResult = await groupRes.json();
-      console.log('Group Response:', JSON.stringify(groupResult, null, 2));
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-      // ✅ Salvar log no banco com status explícito
-      await supabase.from('protocol_notifications').insert({
-        protocol_id: protocol.id,
-        channel: 'group',
+    // DB-first: carregar protocolo com joins úteis
+    const q = supabase
+      .from("protocols")
+      .select(`
+        id, protocol_code, summary, priority, category,
+        requester_name, requester_role,
+        condominium_name,
+        conversation_id,
+        conversations(id, contact_id),
+        contacts:conversations(contacts(id, name, phone, chat_lid, lid, chat_key, is_group))
+      `);
+
+    const { data: protocol, error } = protocol_id
+      ? await q.eq("id", protocol_id).maybeSingle()
+      : await q.eq("protocol_code", protocol_code).maybeSingle();
+
+    if (error || !protocol) throw new Error("Protocolo não encontrado");
+
+    const { data: settings } = await supabase.from("integrations_settings").select("*").maybeSingle();
+    const techGroupId = Deno.env.get("ZAPI_TECH_GROUP_CHAT_ID") || settings?.whatsapp_group_id;
+
+    if (!settings?.whatsapp_notifications_enabled) {
+      return new Response(JSON.stringify({ success: true, skipped: true, reason: "notifications disabled" }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (!techGroupId) {
+      return new Response(JSON.stringify({ success: false, error: "Grupo técnico não configurado" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Safely get protocol code with prefix
+    const codeStr = protocol.protocol_code || "";
+    const code = codeStr.startsWith("G7-") ? codeStr : `G7-${codeStr}`;
+
+    const groupMsg =
+      `*G7 Serv | Abertura de Chamado*
+📅 ${new Date().toLocaleDateString("pt-BR")}
+
+✅ *Protocolo:* ${code}
+🏢 *Condomínio:* ${protocol.condominium_name || "Não Identificado"}
+👤 *Solicitante:* ${protocol.requester_name || "Não informado"}
+📝 *Resumo:* ${protocol.summary || "Sem descrição"}
+📌 *Categoria:* ${protocol.category || "Operacional"}
+🟢 *Prioridade:* ${protocol.priority || "normal"}
+⏰ *Vencimento:* ${(protocol as any).due_date ? String((protocol as any).due_date).slice(0, 10) : "—"}
+`;
+
+    // Envia SOMENTE pro grupo (isGroup = true) e com idempotency_key
+    await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${supabaseServiceKey}`,
+        "apikey": supabaseServiceKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
         recipient: techGroupId,
-        status: groupResult.success ? 'success' : 'error',
-        error: groupResult.success ? null : (groupResult.error || 'Falha desconhecida')
-      });
-
-      if (!groupResult.success) {
-        console.error('❌ Falha ao enviar para grupo:', groupResult.error);
-      } else {
-        console.log('✅ Enviado com sucesso para o grupo!');
-      }
-    } else {
-      console.log('ℹ️ Notificações WhatsApp desabilitadas');
-    }
-
-    // ========== NOTIFICAÇÃO DO CLIENTE ==========
-    if (conv?.id) {
-      console.log('=== CLIENT NOTIFICATION ===');
-      const clientMsg = `📋 *Protocolo aberto*\n\n` +
-        `🔖 *Número:* G7-${protocol_code}\n` +
-        `🏢 *Condomínio:* ${condoName}\n` +
-        `📂 *Categoria:* ${translateCategory(category)}\n` +
-        `📝 *Chamado:* ${protocol.summary || 'Sem descrição'}`;
-
-      const clientRes = await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${supabaseServiceKey}`,
-          "apikey": supabaseServiceKey,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          conversation_id: conv.id,
-          content: clientMsg,
-          sender_name: "G7"
-        }),
-      });
-
-      const clientResult = await clientRes.json();
-      console.log('Client Response:', JSON.stringify(clientResult, null, 2));
-    }
-
-    return new Response(JSON.stringify({ success: true, protocol_code }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" }
+        content: groupMsg,
+        isGroup: true,
+        sender_name: "G7",
+        idempotency_key: idempotency_key || `protocol-opened:${protocol.id}`,
+      }),
     });
 
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   } catch (err: any) {
-    console.error('[Protocol Opened Error]', err.message);
+    console.error('[protocol-opened] Error:', err.message);
     return new Response(JSON.stringify({ success: false, error: err.message }), {
       status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" }
+      headers: corsHeaders,
     });
   }
 });

@@ -90,7 +90,8 @@ serve(async (req) => {
             auth: { persistSession: false }
         });
 
-        const { protocol_id, protocol_code } = await req.json();
+        const { protocol_id, protocol_code, idempotency_key: bodyIdempotencyKey } = await req.json();
+        const idempotency_key = bodyIdempotencyKey || (protocol_id ? `protocol-client:${protocol_id}` : protocol_code ? `protocol-client:${protocol_code}` : undefined);
 
         console.log('[protocol-client] Notifying client for protocol:', protocol_code);
 
@@ -171,6 +172,7 @@ O protocolo foi aberto em nosso sistema e o responsável fará a tratativa.`;
                 content: clientMessage,
                 message_type: "text",
                 sender_name: "G7",
+                idempotency_key
             },
         });
 
