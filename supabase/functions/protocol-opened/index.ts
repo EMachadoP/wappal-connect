@@ -69,6 +69,11 @@ serve(async (req: Request): Promise<Response> => {
     const groupMsgSummary = `*Resumo do Protocolo ${code}:*
 ${protocol.summary || "Sem descrição adicional."}`;
 
+    async function safeJson(resp: Response) {
+      const raw = await resp.text();
+      try { return JSON.parse(raw); } catch { return { raw }; }
+    }
+
     // Enviar CARD
     const zapiRespCard = await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
       method: "POST",
@@ -81,11 +86,17 @@ ${protocol.summary || "Sem descrição adicional."}`;
       }),
     });
 
-    if (!zapiRespCard.ok) throw new Error(`Falha Z-API (Card): ${zapiRespCard.status}`);
+    const cardResult = await safeJson(zapiRespCard);
+
+    if (!zapiRespCard.ok && !cardResult.deduped) {
+      throw new Error(`Falha Z-API (Card): ${zapiRespCard.status} - ${JSON.stringify(cardResult)}`);
+    }
+
+    console.log(`[protocol-opened] Card enviado: ${cardResult.deduped ? "deduped" : "sent"}, messageId=${cardResult.messageId}`);
 
     // Enviar SUMMARY (se houver resumo relevante)
     if (protocol.summary && protocol.summary.length > 5) {
-      await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
+      const zapiRespSummary = await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
         method: "POST",
         headers: { "Authorization": `Bearer ${supabaseServiceKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -95,10 +106,18 @@ ${protocol.summary || "Sem descrição adicional."}`;
           idempotency_key: `${idempotency_key}:summary`
         }),
       });
+
+      const summaryResult = await safeJson(zapiRespSummary);
+      if (!zapiRespSummary.ok && !summaryResult.deduped) {
+        console.error(`[protocol-opened] Falha no summary: ${JSON.stringify(summaryResult)}`);
+      } else {
+        console.log(`[protocol-opened] Summary enviado: ${summaryResult.deduped ? "deduped" : "sent"}`);
+      }
     }
 
     return new Response(JSON.stringify({ success: true, techGroupId }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (err: any) {
+    console.error("[protocol-opened] Error:", err.message);
     return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: corsHeaders });
   }
 });

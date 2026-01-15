@@ -280,13 +280,17 @@ serve(async (req: Request) => {
       .eq("idempotency_key", idempotency_key)
       .maybeSingle();
 
-    if (existingOutbox?.sent_at) {
-      return new Response(JSON.stringify({
-        success: true,
-        deduped: true,
-        messageId: existingOutbox.provider_message_id,
-        idempotency_key
-      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    if (existingOutbox) {
+      if (existingOutbox.status === "sent") {
+        return new Response(JSON.stringify({
+          success: true,
+          deduped: true,
+          messageId: existingOutbox.provider_message_id,
+          idempotency_key
+        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      console.log(`[zapi-send-message] Retry detected for idempotency_key=${idempotency_key}, status=${existingOutbox.status}`);
     }
 
     // Upsert to lock key

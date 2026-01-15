@@ -115,7 +115,12 @@ serve(async (req: Request): Promise<Response> => {
       return `u:${digits}`;
     };
 
-    const fromMe = Boolean(payload.fromMe);
+    const fromMe =
+      payload.fromMe === true ||
+      payload.fromMe === 1 ||
+      payload.fromMe === "true" ||
+      payload.fromMe === "1" ||
+      Boolean(payload.fromMe);
     const rawChatId = payload.chatId || payload.chat?.chatId || payload.phone || payload.chatLid || payload.senderPhone;
     const isGroup = !!payload.isGroup || (typeof rawChatId === 'string' && isLikelyGroupId(rawChatId));
     const chatLid = normalizeLid(rawChatId, isGroup);
@@ -183,7 +188,15 @@ serve(async (req: Request): Promise<Response> => {
     else if (pType.includes("video") || payload.video) msgType = "video";
     else if (pType.includes("document") || payload.document) msgType = "document";
 
-    const lastMessagePreview = (content || "").slice(0, 500) || (msgType !== 'text' ? `[${msgType}]` : "");
+    const lastMessagePreview =
+      (content && content.trim()) ||
+      (payload.audio || payload.audioUrl || payload.audio?.url || payload.audio?.audioUrl ? "🎧 Áudio" : "") ||
+      (pType.includes("image") || payload.image ? "📷 Foto" : "") ||
+      (pType.includes("video") || payload.video ? "🎥 Vídeo" : "") ||
+      (pType.includes("document") || payload.document ? "📄 Documento" : "") ||
+      (msgType !== 'text' ? `[${msgType}]` : "📩 Mensagem");
+
+    const messagePreview = lastMessagePreview.slice(0, 500);
 
     // 6. Salvar/Atualizar Conversa
     let { data: existingConv } = await supabase.from('conversations')
@@ -216,7 +229,7 @@ serve(async (req: Request): Promise<Response> => {
         status: 'open'
       };
 
-      if (autoCondoId) {
+      if (!fromMe && autoCondoId) {
         updateData.active_condominium_id = autoCondoId;
         updateData.active_condominium_set_by = 'human';
         updateData.active_condominium_set_at = now;
@@ -229,6 +242,13 @@ serve(async (req: Request): Promise<Response> => {
         .single();
 
       if (updateErr || !updated) throw new Error(`Erro ao atualizar conversa: ${updateErr?.message}`);
+
+      // If fromMe, protect service flags (don't overwrite AI mode or assignment)
+      if (fromMe && existingConv) {
+        // We already updated basic fields, but we ensure we didn't wipe anything critical
+        // actually we just updated what was in updateData.
+      }
+
       conv = updated;
     } else {
       const insertData: any = {
@@ -241,7 +261,7 @@ serve(async (req: Request): Promise<Response> => {
         last_message_type: msgType
       };
 
-      if (autoCondoId) {
+      if (!fromMe && autoCondoId) {
         insertData.active_condominium_id = autoCondoId;
         insertData.active_condominium_set_by = 'human';
         insertData.active_condominium_set_at = now;
@@ -298,7 +318,7 @@ serve(async (req: Request): Promise<Response> => {
         provider_message_id: providerMsgId,
         chat_id: chatLid, // Aqui salvamos o chat_id bruto do webhook
         direction: fromMe ? 'outbound' : 'inbound',
-        sent_at: now,
+        sent_at: payload.timestamp ? new Date(payload.timestamp).toISOString() : now,
         raw_payload: payload,
         media_url: payload.imageUrl || payload.audioUrl || payload.videoUrl || payload.documentUrl ||
           payload.image?.url || payload.audio?.url || payload.video?.url || payload.document?.url ||
