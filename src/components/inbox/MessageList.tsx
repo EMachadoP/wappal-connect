@@ -108,6 +108,11 @@ export function MessageList({
     prevFirstId.current = null;
     prevLastId.current = null;
     stickToBottom.current = false;
+
+    // ✅ CRÍTICO: Forçar scroll reset para evitar cache do browser
+    if (containerRef.current) {
+      containerRef.current.scrollTop = 0;
+    }
   }, [conversationId]);
 
   // ✅ ResizeObserver: mantém scroll no fim quando imagens carregam
