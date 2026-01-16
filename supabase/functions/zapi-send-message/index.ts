@@ -194,7 +194,8 @@ serve(async (req: Request) => {
       media_url,
       sender_name: overrideSenderName,
       is_system = false,    // ✅ NEW: Explicit system flag (default: human)
-      takeover = false      // ✅ NEW: Explicit assignment flag (default: no takeover)
+      takeover = false,     // ✅ NEW: Explicit assignment flag (default: no takeover)
+      assign = false        // ✅ NEW: Explicit assignment flag
     } = json;
 
     conversation_id = json.conversation_id;
@@ -481,35 +482,29 @@ serve(async (req: Request) => {
 
       // ✅ FIX: Conditional state updates based on system/assignment
       if (!isSystem) {
-        // Get conversation state from earlier fetch
-        const { data: convState } = await supabaseAdmin
-          .from("conversations")
-          .select("assigned_to")
-          .eq("id", resolvedConversationId)
-          .single();
+        // ✅ Sempre que humano envia, desliga IA (regra simples e previsível)
+        updateData.human_control = true;
+        updateData.ai_mode = "OFF";
+        updateData.ai_paused_until = new Date(Date.now() + 30 * 60 * 1000).toISOString(); // +30min pause
 
-        const isAssignedToMe = Boolean(userId) && convState?.assigned_to === userId;
+        // ✅ Assignment só se o frontend pedir explicitamente (ou takeover legacy)
+        // Se assign=true OU takeover=true, tentamos atribuir
+        const shouldAssign = (Boolean(assign) || Boolean(takeover)) && userId;
 
-        // Only take control if:
-        // 1. Conversation is already assigned to me, OR
-        // 2. Explicit takeover requested (e.g., "Assumir" button)
-        if (isAssignedToMe || takeover) {
-          console.log(`[zapi-send-message] Taking control: isAssignedToMe=${isAssignedToMe}, takeover=${takeover}`);
+        if (shouldAssign) {
+          const { data: convState } = await supabaseAdmin
+            .from("conversations")
+            .select("assigned_to")
+            .eq("id", resolvedConversationId)
+            .single();
 
-          // ✅ Only assign when explicit takeover AND not already assigned
-          if (takeover && userId && !convState?.assigned_to) {
+          // Atribuir apenas se não tiver ninguém (ou se for o próprio usuário reafirmando)
+          if (!convState?.assigned_to || convState.assigned_to === userId) {
             updateData.assigned_to = userId;
             updateData.assigned_at = nowIso;
             updateData.assigned_by = userId;
             console.log(`[zapi-send-message] ✅ Assigning conversation to ${userId}`);
           }
-
-          updateData.human_control = true;
-          updateData.ai_mode = "OFF";
-          updateData.ai_paused_until = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-        } else {
-          console.log(`[zapi-send-message] ⚠️ Not taking control: conversation not assigned, no takeover`);
-          // ✅ CRITICAL: Don't change AI state if not assigned and no takeover
         }
       } else {
         console.log(`[zapi-send-message] 🤖 System message: preserving AI state`);
