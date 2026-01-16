@@ -247,25 +247,35 @@ serve(async (req: Request): Promise<Response> => {
       return new Response(JSON.stringify({ success: true, duplicated: true }), { headers: corsHeaders });
     }
 
-    // ✅ AI ECHO DETECTION: If fromMe and message looks like it came from our system, don't treat as human takeover
+    // ✅ AI ECHO DETECTION v2: Check if there's a recent assistant message in this conversation
     // This prevents AI messages from triggering human_control/ai_mode changes
     let isAiEcho = false;
-    if (fromMe) {
-      // Check if there's a recent outbound message with same content (within 60s) sent by assistant
-      const contentPreview = (payload.text?.message || payload.message?.text || payload.body || "").substring(0, 100);
-      if (contentPreview) {
+    if (fromMe && finalChatKey) {
+      // First, find the conversation by thread_key
+      const { data: conv } = await supabase
+        .from('conversations')
+        .select('id')
+        .eq('thread_key', finalChatKey)
+        .maybeSingle();
+
+      if (conv) {
+        // Check if there's a recent outbound message from assistant (within 90 seconds)
         const { data: recentAiMsg } = await supabase
           .from('messages')
-          .select('id')
+          .select('id, content')
+          .eq('conversation_id', conv.id)
           .eq('sender_type', 'assistant')
           .eq('direction', 'outbound')
-          .gte('sent_at', new Date(Date.now() - 60000).toISOString())
-          .ilike('content', `${contentPreview.substring(0, 50)}%`)
+          .gte('sent_at', new Date(Date.now() - 90000).toISOString())
+          .order('sent_at', { ascending: false })
+          .limit(1)
           .maybeSingle();
 
         if (recentAiMsg) {
           isAiEcho = true;
-          console.log(`[Webhook] 🤖 AI Echo detected - skipping human control changes`);
+          console.log(`[Webhook] 🤖 AI Echo detected for conv ${conv.id} - found recent assistant msg: ${recentAiMsg.id}`);
+        } else {
+          console.log(`[Webhook] 👤 Human outbound detected for conv ${conv.id} - no recent AI message found`);
         }
       }
     }
