@@ -300,7 +300,8 @@ serve(async (req) => {
         conversation_id,
         content: aiData.text,
         message_type: 'text',
-        sender_name: 'Ana Mônica'
+        sender_name: 'Ana Mônica',
+        is_system: true  // ✅ CRITICAL: Mark as system to preserve AI state
       }),
     });
 
