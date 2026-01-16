@@ -185,17 +185,6 @@ serve(async (req: Request): Promise<Response> => {
           canonicalChatId = null;
         }
       }
-    } else {
-      // ⚠️ Fallback: Use LID temporariamente, mas marca para upgrade
-      console.warn(`[Webhook] ⚠️ No phone found, using LID as temporary key: ${rawChatId}`);
-
-      // Use rawChatId (can be @lid) as temporary thread key
-      threadKey = rawChatId ? `u:${stripPrefix(rawChatId)}` : null;
-
-      // Mark as temporary (not sendable)
-      canonicalChatId = rawChatId;  // Keep LID for now
-
-      console.log(`[Webhook] 🔄 Will upgrade to phone when available`);
     }
   }
 
@@ -272,6 +261,7 @@ serve(async (req: Request): Promise<Response> => {
       updates.chat_key = `u:${finalPhone}`; // Unify thread
     } else {
       // ✅ PATCH 2: Sempre atualizar chat_lid e phone quando disponíveis
+      // Se tivermos novo LID identificado
       if (chatIdentifier.includes('@lid')) {
         updates.chat_lid = chatIdentifier;
       }
@@ -282,8 +272,9 @@ serve(async (req: Request): Promise<Response> => {
         if (finalP.length === 10 || finalP.length === 11) finalP = "55" + finalP;
         updates.phone = finalP;
       }
-
     }
+
+    // ✅ MOVED: Update call is strictly OUTSIDE the inner if/else, INSIDE existingContact block
     await supabase.from('contacts').update(updates).eq('id', contactId);
   } else {
     const { data: newContact, error: insertError } = await supabase.from('contacts').insert({
