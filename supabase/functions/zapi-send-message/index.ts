@@ -201,8 +201,8 @@ serve(async (req: Request) => {
     conversation_id = json.conversation_id;
     const isGroupInput = toBool(json.isGroup);
 
-    // ✅ FIX: Use explicit is_system instead of userId detection
-    const isSystem = Boolean(is_system);
+    // ✅ FIX: Use explicit is_system instead of userId detection (strict boolean parsing)
+    const isSystem = toBool(is_system) || userId === "system";
 
     // idempotency_key (recomendado sempre mandar)
     const idempotency_key: string =
@@ -282,6 +282,11 @@ serve(async (req: Request) => {
 
     const formattedRecipient = normalized.to_chat_id;
     const finalIsGroup = normalized.isGroup;
+
+    // ✅ FIX: dbChatId = JID canônico para o banco (sempre com sufixo @s.whatsapp.net ou @g.us)
+    const dbChatId = finalIsGroup
+      ? formattedRecipient  // grupos já vêm com @g.us
+      : (formattedRecipient.includes('@') ? formattedRecipient : `${formattedRecipient}@s.whatsapp.net`);
 
     // ✅ VALIDAÇÃO: recipient DEVE ser JID enviável (não aceitar LID interno)
     const isSendableJID = formattedRecipient.includes('@s.whatsapp.net') || formattedRecipient.includes('@g.us');
@@ -454,9 +459,13 @@ serve(async (req: Request) => {
       // 1) Save to public.messages
       const { error: msgErr } = await supabaseAdmin.from("messages").insert({
         conversation_id: resolvedConversationId,
-        sender_type: isSystem ? "assistant" : "agent",  // ✅ Use explicit flag
+        // ✅ FIX: Sender fields for UI compatibility
+        sender_type: isSystem ? "assistant" : "agent",
+        sender_id: isSystem ? null : (userId || null),
+        sender_name: senderName || (isSystem ? "Ana Mônica" : "Atendente G7"),
+        // Legacy agent fields (mantidos para compatibilidade)
         agent_id: isSystem ? null : (userId || null),
-        agent_name: senderName || (isSystem ? "Ana Mônica" : "Atendente"),
+        agent_name: senderName || (isSystem ? "Ana Mônica" : "Atendente G7"),
         content: content || null,
         message_type: message_type || "text",
         media_url: media_url || null,
@@ -464,7 +473,7 @@ serve(async (req: Request) => {
         provider_message_id: providerMessageId,
         direction: "outbound",
         status: "sent",
-        chat_id: formattedRecipient,
+        chat_id: dbChatId,  // ✅ FIX: Usa JID canônico (com @s.whatsapp.net)
         sent_at: nowIso,
       });
 
@@ -477,7 +486,7 @@ serve(async (req: Request) => {
         last_message: (content || "").trim() ? content.slice(0, 500) : (message_type !== 'text' ? `[${message_type}]` : ""),
         last_message_type: message_type || "text",
         last_message_at: nowIso,
-        chat_id: formattedRecipient,
+        chat_id: dbChatId,  // ✅ FIX: Usa JID canônico (com @s.whatsapp.net)
       };
 
       // ✅ FIX: Conditional state updates based on system/assignment
