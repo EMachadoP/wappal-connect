@@ -251,6 +251,7 @@ serve(async (req) => {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${supabaseServiceKey}`,
+        'apikey': supabaseServiceKey,  // ✅ FIX: Added missing apikey header
       },
       body: JSON.stringify({
         messages,
@@ -260,7 +261,14 @@ serve(async (req) => {
       }),
     });
 
-    const aiData = await aiResponse.json();
+    // ✅ FIX: Validate response before parsing
+    const aiText = await aiResponse.text();
+    if (!aiResponse.ok) {
+      console.error('[ai-maybe-reply] ai-generate-reply FAILED:', aiResponse.status, aiText);
+      throw new Error(`ai-generate-reply failed: ${aiResponse.status}`);
+    }
+
+    const aiData = JSON.parse(aiText);
     if (!aiData.text) throw new Error('IA não gerou texto');
 
     // 6.5. DEDUPLICATION: Check if identical message was sent recently
@@ -281,11 +289,12 @@ serve(async (req) => {
 
     // 7. Enviar via Z-API
     console.log('[ai-maybe-reply] Enviando resposta via Z-API');
-    await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
+    const zapiResponse = await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${supabaseServiceKey}`,
+        'apikey': supabaseServiceKey,  // ✅ FIX: Added missing apikey header
       },
       body: JSON.stringify({
         conversation_id,
@@ -294,6 +303,15 @@ serve(async (req) => {
         sender_name: 'Ana Mônica'
       }),
     });
+
+    // ✅ FIX: Validate Z-API response
+    const zapiText = await zapiResponse.text();
+    if (!zapiResponse.ok) {
+      console.error('[ai-maybe-reply] zapi-send-message FAILED:', zapiResponse.status, zapiText);
+      throw new Error(`zapi-send-message failed: ${zapiResponse.status}`);
+    }
+
+    console.log('[ai-maybe-reply] ✅ Mensagem enviada com sucesso');
 
     return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 

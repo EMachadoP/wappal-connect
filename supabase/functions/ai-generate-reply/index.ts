@@ -306,11 +306,18 @@ serve(async (req) => {
       }
 
       try {
-        const ticketData = await executeCreateProtocol(supabase, supabaseUrl, supabaseServiceKey, conversationId, {
-          summary: (lastIssueMsg?.content || lastUserMsgText).slice(0, 500),
-          priority: /travado|urgente|urgência|emergência/i.test(recentText) ? 'critical' : 'normal',
-          apartment: aptCandidate
-        });
+        const ticketData = await executeCreateProtocol(
+          supabase,
+          supabaseUrl,
+          supabaseServiceKey,
+          conversationId,
+          participant_id,  // ✅ FIX: Added missing parameter
+          {
+            summary: (lastIssueMsg?.content || lastUserMsgText).slice(0, 500),
+            priority: /travado|urgente|urgência|emergência/i.test(recentText) ? 'critical' : 'normal',
+            apartment: aptCandidate
+          }
+        );
 
         const protocolCode = ticketData.protocol?.protocol_code || ticketData.protocol_code;
         return new Response(JSON.stringify({
