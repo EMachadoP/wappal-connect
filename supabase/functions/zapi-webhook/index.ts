@@ -333,7 +333,13 @@ serve(async (req: Request): Promise<Response> => {
       last_message: lastMessagePreview,
       last_message_type: msgType,
       last_message_at: nowIso,
-      status: 'open'
+      status: 'open',
+      // ✅ LOGIC: Se a mensagem é do operador (fromMe), ativa human_control e pausa IA
+      ...(fromMe ? {
+        human_control: true,
+        ai_mode: 'OFF',
+        ai_paused_until: new Date(Date.now() + 30 * 60 * 1000).toISOString()
+      } : {})
     };
 
     // ✅ CRÍTICO: Só salva chat_id se for JID válido (nunca LID)
@@ -393,7 +399,13 @@ serve(async (req: Request): Promise<Response> => {
           last_message: lastMessagePreview,
           last_message_type: msgType,
           last_message_at: nowIso,
-          status: 'open'
+          status: 'open',
+          // ✅ UPDATE: Garante takeover em atualizações também
+          ...(fromMe ? {
+            human_control: true,
+            ai_mode: 'OFF',
+            ai_paused_until: new Date(Date.now() + 30 * 60 * 1000).toISOString()
+          } : {})
         })
         .eq('id', conv.id);
     } else {
