@@ -134,109 +134,152 @@ serve(async (req: Request): Promise<Response> => {
       threadKey = `g:${gId.replace('@g.us', '')}@g.us`;
       canonicalChatId = gId; // ✅ Para grupo, mantém ...@g.us (JID enviável)
     } else {
-      // 1:1: threadKey e chat_id devem ser telefone (estável)
-      const phone = extractPhone(payload, fromMe);
+      // 1:1 chat
+      let phone = extractPhone(payload, fromMe);
 
-      if (phone) {
-        // Normalizar BR
-        let finalPhone = phone;
-        if (finalPhone.startsWith("55") && finalPhone.length > 11) {
-          // Aceita
-        } else if (finalPhone.length === 10 || finalPhone.length === 11) {
-          finalPhone = "55" + finalPhone;
+      let resolvedFromLidContact: any = null;
+
+      // ✅ PATCH 1: Se não achou telefone, tenta resolver por LID (rawChatId ou payload.from)
+      const lidCandidate =
+        (typeof rawChatId === 'string' && rawChatId.includes('@lid')) ? rawChatId :
+          (typeof payload.from === 'string' && payload.from.includes('@lid')) ? payload.from :
+            null;
+
+      if (!phone && lidCandidate) {
+        const { data: byLid } = await supabase
+          .from('contacts')
+          .select('id, chat_key, phone, chat_lid')
+          .or(`chat_lid.eq.${lidCandidate},lid.eq.${lidCandidate}`)
+          .maybeSingle();
+
+        if (byLid) {
+          resolvedFromLidContact = byLid;
+          console.log(`[Webhook] ✅ LID Resolution: Found existing contact ${byLid.id} for LID ${lidCandidate}`);
+          // ✅ usa o chat_key já existente para não criar conversa paralela
+          threadKey = byLid.chat_key; // ex: u:558199...
+          if (byLid.phone) {
+            canonicalChatId = `${byLid.phone}@s.whatsapp.net`; // ✅ enviável
+          }
         }
-        threadKey = `u:${finalPhone}`;
-        // ✅ CRÍTICO: Chat ID = JID enviável (com @s.whatsapp.net)
-        canonicalChatId = `${finalPhone}@s.whatsapp.net`;
-      } else {
-        // ⚠️ Fallback: Use LID temporariamente, mas marca para upgrade
-        console.warn(`[Webhook] ⚠️ No phone found, using LID as temporary key: ${rawChatId}`);
-
-        // Use rawChatId (can be @lid) as temporary thread key
-        threadKey = rawChatId ? `u:${stripPrefix(rawChatId)}` : null;
-
-        // Mark as temporary (not sendable)
-        canonicalChatId = rawChatId;  // Keep LID for now
-
-        console.log(`[Webhook] 🔄 Will upgrade to phone when available`);
       }
+
+      if (!threadKey) {
+        if (phone) {
+          // Normalizar BR
+          let finalPhone = phone;
+          if (finalPhone.startsWith("55") && finalPhone.length > 11) {
+            // Aceita
+          } else if (finalPhone.length === 10 || finalPhone.length === 11) {
+            finalPhone = "55" + finalPhone;
+          }
+          threadKey = `u:${finalPhone}`;
+          canonicalChatId = `${finalPhone}@s.whatsapp.net`;
+        } else if (lidCandidate) {
+          // ✅ fallback consciente: lid-only
+          const lidDigits = lidCandidate.split('@')[0].replace(/\D/g, '');
+          threadKey = `u:lid:${lidDigits}`;
+          canonicalChatId = null;
+        } else {
+          threadKey = rawChatId ? `u:unknown:${rawChatId}` : null;
+          canonicalChatId = null;
+        }
+      }
+    } else {
+      // ⚠️ Fallback: Use LID temporariamente, mas marca para upgrade
+      console.warn(`[Webhook] ⚠️ No phone found, using LID as temporary key: ${rawChatId}`);
+
+      // Use rawChatId (can be @lid) as temporary thread key
+      threadKey = rawChatId ? `u:${stripPrefix(rawChatId)}` : null;
+
+      // Mark as temporary (not sendable)
+      canonicalChatId = rawChatId;  // Keep LID for now
+
+      console.log(`[Webhook] 🔄 Will upgrade to phone when available`);
     }
+  }
 
     // Fallback de segurança para não quebrar o fluxo se não achar nada (cria "unidentified")
     let finalChatKey = threadKey;
-    let finalChatIdentifier = canonicalChatId || rawChatId || "unknown";
+  let finalChatIdentifier = canonicalChatId || rawChatId || "unknown";
 
-    if (!finalChatKey && (canonicalChatId || rawChatId)) {
-      // Último recurso: usa o que tem (mesmo que seja LID) para não perder a msg, 
-      // mas loga warning. O ideal seria não usar LID como chave.
-      finalChatKey = `u:${canonicalChatId || rawChatId}`; // Temporário
-    }
+  if (!finalChatKey && (canonicalChatId || rawChatId)) {
+    // Último recurso: usa o que tem (mesmo que seja LID) para não perder a msg, 
+    // mas loga warning. O ideal seria não usar LID como chave.
+    finalChatKey = `u:${canonicalChatId || rawChatId}`; // Temporário
+  }
 
-    // Campos auxiliares legacy
-    const chatKey = finalChatKey;
-    const chatIdentifier = finalChatIdentifier;
-    const chatName = payload.chatName || payload.contact?.name || payload.senderName || payload.pushName || 'Desconhecido';
+  // Campos auxiliares legacy
+  const chatKey = finalChatKey;
+  const chatIdentifier = finalChatIdentifier;
+  const chatName = payload.chatName || payload.contact?.name || payload.senderName || payload.pushName || 'Desconhecido';
 
-    console.log(`[Webhook] Identity: ${fromMe ? 'OUT' : 'IN'} | Key=${finalChatKey} | Alias=${finalChatIdentifier}`);
+  console.log(`[Webhook] Identity: ${fromMe ? 'OUT' : 'IN'} | Key=${finalChatKey} | Alias=${finalChatIdentifier}`);
 
-    const providerMsgId = payload.messageId || payload.id || crypto.randomUUID();
+  const providerMsgId = payload.messageId || payload.id || crypto.randomUUID();
 
-    // IDEMPOTÊNCIA: Ignorar se a mensagem já existe
-    const { data: existingMsg } = await supabase
-      .from('messages')
-      .select('id')
-      .eq('provider_message_id', providerMsgId)
-      .maybeSingle();
+  // IDEMPOTÊNCIA: Ignorar se a mensagem já existe
+  const { data: existingMsg } = await supabase
+    .from('messages')
+    .select('id')
+    .eq('provider_message_id', providerMsgId)
+    .maybeSingle();
 
-    if (existingMsg) {
-      console.log(`[Webhook] Mensagem duplicada ignorada: ${providerMsgId}`);
-      return new Response(JSON.stringify({ success: true, duplicated: true }), { headers: corsHeaders });
-    }
+  if (existingMsg) {
+    console.log(`[Webhook] Mensagem duplicada ignorada: ${providerMsgId}`);
+    return new Response(JSON.stringify({ success: true, duplicated: true }), { headers: corsHeaders });
+  }
 
-    console.log(`[Webhook] Normalizing: ID=${chatIdentifier} -> Key=${chatKey} (Group: ${!!isGroup})`);
+  console.log(`[Webhook] Normalizing: ID=${chatIdentifier} -> Key=${chatKey} (Group: ${!!isGroup})`);
 
-    // 4. Salvar/Atualizar Contato usando CHAT_KEY
-    let contactId: string;
-    let { data: existingContact } = await supabase.from('contacts')
+  // 4. Salvar/Atualizar Contato usando CHAT_KEY
+  let contactId: string;
+  let { data: existingContact } = await supabase.from('contacts')
+    .select('id, chat_lid, phone, name, chat_key')
+    .eq('chat_key', chatKey)
+    .maybeSingle();
+
+  // ✅ RECOVERY: Se não achou pelo Phone Key, tenta achar pelo LID Key (Split-Brain Fix)
+  // Isso acontece quando tínhamos LID, e agora recebemos Phone. Vamos achar o contato antigo e migrar.
+  const phone = extractPhone(payload, fromMe);
+  let finalPhone = phone ? (phone.length === 10 || phone.length === 11 ? "55" + phone : phone) : null;
+
+  if (!existingContact && finalPhone && rawChatId && rawChatId.endsWith('@lid')) {
+    const lidKey = `u:${rawChatId}`;
+    const { data: lidContact } = await supabase.from('contacts')
       .select('id, chat_lid, phone, name, chat_key')
-      .eq('chat_key', chatKey)
+      .eq('chat_key', lidKey)
       .maybeSingle();
 
-    // ✅ RECOVERY: Se não achou pelo Phone Key, tenta achar pelo LID Key (Split-Brain Fix)
-    // Isso acontece quando tínhamos LID, e agora recebemos Phone. Vamos achar o contato antigo e migrar.
-    const phone = extractPhone(payload, fromMe);
-    let finalPhone = phone ? (phone.length === 10 || phone.length === 11 ? "55" + phone : phone) : null;
-
-    if (!existingContact && finalPhone && rawChatId && rawChatId.endsWith('@lid')) {
-      const lidKey = `u:${rawChatId}`;
-      const { data: lidContact } = await supabase.from('contacts')
-        .select('id, chat_lid, phone, name, chat_key')
-        .eq('chat_key', lidKey)
-        .maybeSingle();
-
-      if (lidContact) {
-        console.log(`[Webhook] 🔄 Found existing contact by LID (${lidKey}). Will upgrade to Phone (${chatKey}).`);
-        existingContact = lidContact;
-      }
+    if (lidContact) {
+      console.log(`[Webhook] 🔄 Found existing contact by LID (${lidKey}). Will upgrade to Phone (${chatKey}).`);
+      existingContact = lidContact;
     }
+  }
 
-    if (existingContact) {
-      contactId = existingContact.id;
-      const updates: any = { updated_at: now };
+  if (existingContact) {
+    contactId = existingContact.id;
+    const updates: any = { updated_at: now };
 
-      // ✅ UPGRADE: If we have a phone now and contact is on LID, upgrade it
-      const hasPhoneNow = finalPhone && finalPhone.length >= 10;
-      const isCurrentlyLID = existingContact.chat_lid?.includes('@lid') || existingContact.chat_key?.includes('@lid');
+    // ✅ UPGRADE: If we have a phone now and contact is on LID, upgrade it
+    const hasPhoneNow = finalPhone && finalPhone.length >= 10;
+    const isCurrentlyLID = existingContact.chat_lid?.includes('@lid') || existingContact.chat_key?.includes('@lid');
 
-      if (hasPhoneNow && isCurrentlyLID) {
-        console.log(`[Webhook] 🔄 Upgrading contact from LID to phone: ${finalPhone}`);
-        updates.chat_lid = `${finalPhone}@s.whatsapp.net`;
-        updates.phone = finalPhone;
-        updates.chat_key = `u:${finalPhone}`; // Unify thread
-      } else {
-        // Updates normais
-        if (!existingContact.chat_lid && chatIdentifier.includes('@')) updates.chat_lid = chatIdentifier;
-        if (!existingContact.phone && !isGroup && !chatIdentifier.includes('@')) updates.phone = chatIdentifier;
+    if (hasPhoneNow && isCurrentlyLID) {
+      console.log(`[Webhook] 🔄 Upgrading contact from LID to phone: ${finalPhone}`);
+      updates.chat_lid = `${finalPhone}@s.whatsapp.net`;
+      updates.phone = finalPhone;
+      updates.chat_key = `u:${finalPhone}`; // Unify thread
+    } else {
+      // ✅ PATCH 2: Sempre atualizar chat_lid e phone quando disponíveis
+      if (chatIdentifier.includes('@lid')) {
+        updates.chat_lid = chatIdentifier;
+      }
+
+      const p = extractPhone(payload, fromMe);
+      if (!isGroup && p) {
+        let finalP = p;
+        if (finalP.length === 10 || finalP.length === 11) finalP = "55" + finalP;
+        updates.phone = finalP;
       }
 
       await supabase.from('contacts').update(updates).eq('id', contactId);
@@ -494,13 +537,21 @@ serve(async (req: Request): Promise<Response> => {
       if (msgType === 'audio') {
         await fetch(`${supabaseUrl}/functions/v1/transcribe-audio`, {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
+          headers: {
+            'Authorization': `Bearer ${supabaseServiceKey}`,
+            'apikey': supabaseServiceKey, // ✅ PATCH 3
+            'Content-Type': 'application/json'
+          },
           body: JSON.stringify({ message_id: msgResult.id, audio_url: audioUrl, conversation_id: conv.id }),
         });
       } else {
         await fetch(`${supabaseUrl}/functions/v1/ai-maybe-reply`, {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
+          headers: {
+            'Authorization': `Bearer ${supabaseServiceKey}`,
+            'apikey': supabaseServiceKey, // ✅ PATCH 3 
+            'Content-Type': 'application/json'
+          },
           body: JSON.stringify({ conversation_id: conv.id, initial_message_id: msgResult.id }),
         }).then(async r => {
           const text = await r.text();
