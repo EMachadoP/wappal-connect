@@ -272,6 +272,25 @@ serve(async (req: Request) => {
 
     const formattedRecipient = normalized.to_chat_id;
     const finalIsGroup = normalized.isGroup;
+
+    // ✅ VALIDAÇÃO: recipient DEVE ser JID enviável (não aceitar LID interno)
+    const isSendableJID = formattedRecipient.includes('@s.whatsapp.net') || formattedRecipient.includes('@g.us');
+    const looksLikeBRPhone = /^55\d{10,11}$/.test(formattedRecipient.replace(/\D/g, ''));
+
+    if (!isSendableJID && !looksLikeBRPhone) {
+      return new Response(
+        JSON.stringify({
+          error: "Destinatário inválido: não é um JID enviável",
+          code: "INVALID_RECIPIENT_JID",
+          details: {
+            recipient: formattedRecipient,
+            hint: "Recipient deve conter @s.whatsapp.net (pessoa) ou @g.us (grupo), ou ser telefone BR válido (55...)"
+          },
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
     const chatKey = getChatKey(formattedRecipient, finalIsGroup);
 
     // Resolve conversation_id by chatKey if needed

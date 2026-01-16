@@ -132,7 +132,7 @@ serve(async (req: Request): Promise<Response> => {
       isGroupChat = true;
       const gId = normalizeGroupJid(rawChatId || payload.phone || "");
       threadKey = `g:${gId.replace('@g.us', '')}@g.us`;
-      canonicalChatId = gId; // Para grupo, mantém ...@g.us
+      canonicalChatId = gId; // ✅ Para grupo, mantém ...@g.us (JID enviável)
     } else {
       // 1:1: threadKey e chat_id devem ser telefone (estável)
       const phone = extractPhone(payload, fromMe);
@@ -146,23 +146,13 @@ serve(async (req: Request): Promise<Response> => {
           finalPhone = "55" + finalPhone;
         }
         threadKey = `u:${finalPhone}`;
-        canonicalChatId = finalPhone; // ✅ Chat ID = telefone canônico (sem prefixo)
+        // ✅ CRÍTICO: Chat ID = JID enviável (com @s.whatsapp.net)
+        canonicalChatId = `${finalPhone}@s.whatsapp.net`;
       } else {
-        // Se só temos LID e não conseguimos extrair telefone
-        if (!rawChatId || isLid(rawChatId)) {
-          // Tentar recuperar do alias se for o único ID disponível
-          console.warn(`[Webhook] Identidade não resolvida. Raw: ${JSON.stringify({ rawChatId, fromMe })}`);
-          threadKey = null;
-          canonicalChatId = null;
-        } else {
-          // Se o rawChatId parece um telefone
-          const d = onlyDigits(rawChatId);
-          if (d.length >= 10) {
-            const finalPhone = d.startsWith('55') ? d : '55' + d;
-            threadKey = `u:${finalPhone}`;
-            canonicalChatId = finalPhone; // ✅ Telefone sem prefixo
-          }
-        }
+        // ✅ Se não temos telefone real, deixa NULL (forçar identificação)
+        console.warn(`[Webhook] Sem telefone válido. Raw: ${JSON.stringify({ rawChatId, fromMe })}. chat_id será NULL.`);
+        threadKey = rawChatId ? `u:${rawChatId}` : null; // Thread key pode usar LID
+        canonicalChatId = null; // ❌ NÃO INVENTAR chat_id sem telefone
       }
     }
 
