@@ -18,7 +18,7 @@ serve(async (req: Request) => {
     if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
     if (req.method !== "POST") return json(405, { error: "Method not allowed" });
 
-    // 1) ENV CHECKS (evita crash silencioso -> 500 genérico)
+    // 1) ENV CHECKS
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     if (!supabaseUrl || !serviceKey) {
@@ -30,7 +30,7 @@ serve(async (req: Request) => {
         return json(500, { error: `Missing environment variables: ${missing.join(", ")}` });
     }
 
-    // 2) AUTH CHECK (não aceita sem Bearer)
+    // 2) AUTH CHECK
     const authHeader = req.headers.get("Authorization") || "";
     if (!authHeader.startsWith("Bearer ")) {
         return json(401, { error: "Missing Bearer token" });
@@ -53,16 +53,13 @@ serve(async (req: Request) => {
     }
 
     // 4) CLIENTS
-    // admin: service role (bypass RLS) -> para fazer o update
     const admin = createClient(supabaseUrl, serviceKey);
-
-    // auth: valida o JWT do usuário chamador
     const auth = createClient(supabaseUrl, serviceKey, {
         global: { headers: { Authorization: authHeader } },
     });
 
     try {
-        // 5) VALIDAR USUÁRIO PELO JWT
+        // 5) VALIDATE USER FROM JWT
         const { data: u, error: uErr } = await auth.auth.getUser();
         if (uErr || !u?.user) {
             console.error("[mark-conversation-read] Invalid session:", uErr);
@@ -70,26 +67,66 @@ serve(async (req: Request) => {
         }
         const userId = u.user.id;
 
-        // 6) UPDATE DO ESTADO DE LEITURA
-        // ✅ Opção A: tabela por participante (conversation_participants)
-        const { error: updErr } = await admin
-            .from("conversation_participants")
-            .update({
-                last_read_at: new Date().toISOString(),
-                last_read_message_id,
-            })
-            .eq("conversation_id", conversation_id)
-            .eq("profile_id", userId);
+        console.log(`[mark-conversation-read] User ${userId} marking conversation ${conversation_id} as read`);
 
-        if (!updErr) {
-            console.log("[mark-conversation-read] Success: marked as read for user", userId);
-            return json(200, { success: true });
+        // 6) UPDATE READ STATE IN conversation_participant_state
+        // First, ensure the record exists
+        const { data: existing } = await admin
+            .from("conversation_participant_state")
+            .select("id")
+            .eq("conversation_id", conversation_id)
+            .maybeSingle();
+
+        if (!existing) {
+            // Create the record if it doesn't exist
+            const { error: insertErr } = await admin
+                .from("conversation_participant_state")
+                .insert({
+                    conversation_id,
+                    last_read_at: new Date().toISOString(),
+                    last_read_message_id,
+                });
+
+            if (insertErr) {
+                console.error("[mark-conversation-read] Error creating participant state:", insertErr);
+                return json(500, { error: `Failed to create participant state: ${insertErr.message}` });
+            }
+        } else {
+            // Update existing record
+            const { error: updErr } = await admin
+                .from("conversation_participant_state")
+                .update({
+                    last_read_at: new Date().toISOString(),
+                    last_read_message_id,
+                })
+                .eq("conversation_id", conversation_id);
+
+            if (updErr) {
+                console.error("[mark-conversation-read] Error updating participant state:", updErr);
+                return json(500, { error: `Failed to update participant state: ${updErr.message}` });
+            }
         }
 
-        console.error("[mark-conversation-read] Update failed:", updErr);
-        return json(500, { error: updErr.message });
+        console.log("[mark-conversation-read] Successfully updated read state");
+
+        // 7) MARK MESSAGES AS READ (optional but recommended for consistency)
+        await admin
+            .from("messages")
+            .update({ read_at: new Date().toISOString() })
+            .eq("conversation_id", conversation_id)
+            .neq("sender_type", "agent")
+            .is("read_at", null);
+
+        // 8) RESET UNREAD COUNT
+        await admin
+            .from("conversations")
+            .update({ unread_count: 0 })
+            .eq("id", conversation_id);
+
+        return json(200, { success: true, conversation_id });
+
     } catch (err: any) {
-        console.error("[mark-conversation-read] Fatal:", err?.message, err?.stack);
+        console.error("[mark-conversation-read] Fatal error:", err?.message, err?.stack);
         return json(500, { error: err?.message || "unknown" });
     }
 });
