@@ -142,28 +142,36 @@ export function MessageList({
 
     // 1) Initial load: scroll to first unread incoming, else bottom
     if (isInitialLoad.current && messages.length > 0) {
+      // ✅ Aumentar delay para garantir que DOM está pronto
       raf2(() => {
-        const el2 = containerRef.current;
-        if (!el2) return;
+        // Extra RAF para garantir renderização completa
+        requestAnimationFrame(() => {
+          const el2 = containerRef.current;
+          if (!el2) return;
 
-        const firstUnreadIndex = messages.findIndex(
-          (m) => !m.read_at && m.sender_type !== "agent" && m.sender_type !== "system"
-        );
+          const firstUnreadIndex = messages.findIndex(
+            (m) => !m.read_at && m.sender_type !== "agent" && m.sender_type !== "system"
+          );
 
-        if (firstUnreadIndex !== -1) {
-          // ✅ Tem mensagens não lidas: rolar até primeira e NÃO stick
-          stickToBottom.current = false;
-          const wrappers = el2.querySelectorAll("[data-message-id]");
-          const target = wrappers[firstUnreadIndex] as HTMLElement | undefined;
-          if (target) target.scrollIntoView({ behavior: "auto", block: "start" });
-          else scrollToBottom("auto");
-        } else {
-          // ✅ Tudo lido: rolar pro fim E ativar stick (para imagens)
-          stickToBottom.current = true;
-          scrollToBottom("auto");
-        }
+          if (firstUnreadIndex !== -1) {
+            // ✅ Tem mensagens não lidas: rolar até primeira e NÃO stick
+            stickToBottom.current = false;
+            const wrappers = el2.querySelectorAll("[data-message-id]");
+            const target = wrappers[firstUnreadIndex] as HTMLElement | undefined;
+            if (target) {
+              target.scrollIntoView({ behavior: "auto", block: "start" });
+            } else {
+              // Fallback: rolar pro fim se não encontrar elemento
+              scrollToBottom("auto");
+            }
+          } else {
+            // ✅ Tudo lido: rolar pro fim E ativar stick (para imagens)
+            stickToBottom.current = true;
+            scrollToBottom("auto");
+          }
 
-        isInitialLoad.current = false;
+          isInitialLoad.current = false;
+        });
       });
     }
 
