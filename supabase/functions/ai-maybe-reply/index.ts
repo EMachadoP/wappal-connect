@@ -84,6 +84,22 @@ serve(async (req) => {
       return new Response(JSON.stringify({ success: false, reason: 'Conversa não encontrada' }));
     }
 
+    // 3. Checar papel do participante (antes de verificar ai_mode)
+    const { data: participantState } = await supabase
+      .from('conversation_participant_state')
+      .select('current_participant_id, participants(name, role_type, entity_id, entities(name))')
+      .eq('conversation_id', conversation_id)
+      .maybeSingle();
+
+    // LOG DETALHADO: Estado da conversa após debounce
+    console.log('[ai-maybe-reply] Estado da conversa:', {
+      conversation_id,
+      ai_mode: conv.ai_mode,
+      participant_role: participantState?.participants?.role_type,
+      participant_name: participantState?.participants?.name,
+      has_participant: !!participantState?.participants
+    });
+
     if (conv.ai_mode === 'OFF') {
       console.log('[ai-maybe-reply] IA está desligada (OFF) para esta conversa.');
       await supabase.from('ai_logs').insert({
@@ -95,19 +111,34 @@ serve(async (req) => {
       return new Response(JSON.stringify({ success: false, reason: 'IA OFF' }));
     }
 
-    // 3. Checar papel do participante (Fornecedor)
-    const { data: participantState } = await supabase
-      .from('conversation_participant_state')
-      .select('current_participant_id, participants(name, role_type, entity_id, entities(name))')
-      .eq('conversation_id', conversation_id)
-      .maybeSingle();
-
+    // 4. Verificação RIGOROSA do papel de fornecedor
     if (participantState?.participants) {
       const participant = participantState.participants as any;
+      console.log('[ai-maybe-reply] Verificando papel do participante:', {
+        role_type: participant.role_type,
+        name: participant.name,
+        entity_id: participant.entity_id
+      });
+
+      // IMPORTANTE: Só bloqueia se for REALMENTE fornecedor
       if (participant.role_type === 'fornecedor') {
-        console.log('[ai-maybe-reply] Bloqueando resposta automática para Fornecedor');
-        return new Response(JSON.stringify({ success: false, reason: 'Role: fornecedor' }));
+        console.log('[ai-maybe-reply] ⛔ Bloqueando: Fornecedor confirmado');
+        await supabase.from('ai_logs').insert({
+          conversation_id,
+          status: 'skipped',
+          reason: 'role_fornecedor',
+          model: 'ai-maybe-reply',
+          metadata: { participant_name: participant.name }
+        });
+        return new Response(JSON.stringify({
+          success: false,
+          reason: 'Role: fornecedor'
+        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      } else {
+        console.log('[ai-maybe-reply] ✅ Role permitido:', participant.role_type);
       }
+    } else {
+      console.log('[ai-maybe-reply] ⚠️ Nenhum participante identificado ainda');
     }
 
     // 4. Buscar histórico de mensagens
