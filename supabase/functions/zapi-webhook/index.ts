@@ -451,14 +451,6 @@ serve(async (req: Request): Promise<Response> => {
   if (!fromMe) await supabase.rpc('increment_unread_count', { conv_id: conv.id });
 
   // 7. Salvar Mensagem
-  else if (payload.image || payload.imageUrl || payload.image?.url || payload.image?.imageUrl) msgType = "image";
-  else if (payload.video || payload.videoUrl || payload.video?.url || payload.video?.videoUrl) msgType = "video";
-  else if (payload.document || payload.documentUrl || payload.document?.url || payload.document?.documentUrl) msgType = "document";
-  else if (pType === "audio" || pType === "ptt" || pType === "voice") msgType = "audio";
-  else if (pType === "image") msgType = "image";
-  else if (pType === "video") msgType = "video";
-  else if (pType === "document") msgType = "document";
-
   if (!content && msgType !== "text") {
     const fileName = payload.fileName || payload.document?.fileName || payload.image?.fileName || "";
     content = fileName ? `[Arquivo: ${fileName}]` : `[Mídia: ${msgType}]`;
