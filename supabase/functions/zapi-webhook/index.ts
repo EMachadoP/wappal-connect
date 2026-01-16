@@ -439,8 +439,19 @@ serve(async (req: Request): Promise<Response> => {
         await fetch(`${supabaseUrl}/functions/v1/ai-maybe-reply`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conversation_id: conv.id }),
-        });
+          body: JSON.stringify({ conversation_id: conv.id, initial_message_id: msgResult.id }),
+        }).then(async r => {
+          const text = await r.text();
+          console.log(`[Webhook] ai-maybe-reply result: ${r.status} ${text}`);
+          if (!r.ok) {
+            await supabase.from('ai_logs').insert({
+              conversation_id: conv.id,
+              status: 'error',
+              error_message: `ai-maybe-reply failed: ${r.status} ${text}`,
+              model: 'webhook-handler'
+            });
+          }
+        }).catch(err => console.error('[Webhook] Erro calling ai-maybe-reply:', err));
       }
     }
 

@@ -10,7 +10,7 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   try {
-    const { conversation_id } = await req.json();
+    const { conversation_id, initial_message_id } = await req.json();
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
@@ -18,16 +18,20 @@ serve(async (req) => {
     console.log('[ai-maybe-reply] Processando:', conversation_id);
 
     // 1. Debounce Logic: Aguardar para agregar mensagens (4s + 2s verificação)
-    const { data: initialLatest } = await supabase
-      .from('messages')
-      .select('id')
-      .eq('conversation_id', conversation_id)
-      .eq('sender_type', 'contact')
-      .order('sent_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    let initialId = initial_message_id;
 
-    const initialId = initialLatest?.id;
+    if (!initialId) {
+      const { data: initialLatest } = await supabase
+        .from('messages')
+        .select('id')
+        .eq('conversation_id', conversation_id)
+        .eq('sender_type', 'contact')
+        .order('sent_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      initialId = initialLatest?.id;
+    }
+
     console.log('[ai-maybe-reply] Debounce: Msg inicial:', initialId);
 
     // Espera 4 segundos
@@ -75,7 +79,19 @@ serve(async (req) => {
       .eq('id', conversation_id)
       .single();
 
-    if (!conv || conv.ai_mode === 'OFF') {
+    if (!conv) {
+      console.log('[ai-maybe-reply] Conversa não encontrada:', conversation_id);
+      return new Response(JSON.stringify({ success: false, reason: 'Conversa não encontrada' }));
+    }
+
+    if (conv.ai_mode === 'OFF') {
+      console.log('[ai-maybe-reply] IA está desligada (OFF) para esta conversa.');
+      await supabase.from('ai_logs').insert({
+        conversation_id,
+        status: 'skipped',
+        reason: 'ai_mode_off',
+        model: 'ai-maybe-reply'
+      });
       return new Response(JSON.stringify({ success: false, reason: 'IA OFF' }));
     }
 
