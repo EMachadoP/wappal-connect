@@ -283,8 +283,8 @@ serve(async (req: Request): Promise<Response> => {
         updates.phone = finalP;
       }
 
-      await supabase.from('contacts').update(updates).eq('id', contactId);
     }
+    await supabase.from('contacts').update(updates).eq('id', contactId);
   } else {
     const { data: newContact, error: insertError } = await supabase.from('contacts').insert({
       chat_key: chatKey,
