@@ -50,24 +50,27 @@ export default function InboxPage() {
       setActiveConvData(data);
       setActiveContact(data.contacts);
 
-      // ✅ Marcar mensagens como lidas
+      // ✅ Marcar como lida via Edge Function (evita problemas de RLS)
       if (data.unread_count > 0) {
-        // Marcar todas as mensagens não lidas como lidas
-        await supabase
-          .from('messages')
-          .update({ read_at: new Date().toISOString() })
-          .eq('conversation_id', id)
-          .is('read_at', null)
-          .neq('sender_type', 'agent'); // Não marcar mensagens do próprio agente
+        try {
+          const { data: result, error } = await supabase.functions.invoke('mark-conversation-read', {
+            body: { conversation_id: id }
+          });
 
-        // Zerar contador na conversa
-        await supabase
-          .from('conversations')
-          .update({ unread_count: 0 })
-          .eq('id', id);
+          if (error) {
+            console.error('[Inbox] Error marking as read:', error);
+          } else {
+            console.log(`[Inbox] Marked ${result?.marked_count || 0} messages as read`);
+
+            // ✅ CRÍTICO: Invalida cache da lista de conversas para atualizar contador
+            refetchConversations();
+          }
+        } catch (err) {
+          console.error('[Inbox] Failed to mark as read:', err);
+        }
       }
     }
-  }, []);
+  }, [refetchConversations]);
 
   useEffect(() => {
     if (activeConversationId) {
