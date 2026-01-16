@@ -16,7 +16,8 @@ serve(async (req) => {
         const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
         const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-        const { conversation_id } = await req.json();
+        const body = await req.json();
+        const conversation_id = body.conversation_id;
 
         if (!conversation_id) {
             return new Response(
@@ -28,7 +29,7 @@ serve(async (req) => {
         console.log(`[mark-conversation-read] Marking conversation ${conversation_id} as read`);
 
         // 1. Marcar todas as mensagens inbound como lidas
-        const { error: messagesError, count } = await supabase
+        const { error: messagesError } = await supabase
             .from("messages")
             .update({ read_at: new Date().toISOString() })
             .eq("conversation_id", conversation_id)
@@ -37,10 +38,13 @@ serve(async (req) => {
 
         if (messagesError) {
             console.error("[mark-conversation-read] Error updating messages:", messagesError);
-            throw messagesError;
+            return new Response(
+                JSON.stringify({ error: `Failed to update messages: ${messagesError.message}` }),
+                { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
         }
 
-        console.log(`[mark-conversation-read] Marked ${count || 0} messages as read`);
+        console.log(`[mark-conversation-read] Messages marked as read`);
 
         // 2. Zerar unread_count na conversa
         const { error: conversationError } = await supabase
@@ -53,22 +57,26 @@ serve(async (req) => {
 
         if (conversationError) {
             console.error("[mark-conversation-read] Error updating conversation:", conversationError);
-            throw conversationError;
+            return new Response(
+                JSON.stringify({ error: `Failed to update conversation: ${conversationError.message}` }),
+                { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
         }
+
+        console.log(`[mark-conversation-read] Conversation updated successfully`);
 
         return new Response(
             JSON.stringify({
                 success: true,
-                marked_count: count || 0,
                 conversation_id
             }),
             { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
 
-    } catch (error) {
+    } catch (error: any) {
         console.error("[mark-conversation-read] Error:", error);
         return new Response(
-            JSON.stringify({ error: error.message }),
+            JSON.stringify({ error: error?.message || "Unknown error" }),
             { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
     }
