@@ -327,6 +327,17 @@ serve(async (req: Request): Promise<Response> => {
     const isSendableJID = finalChatIdentifier &&
       (finalChatIdentifier.includes('@s.whatsapp.net') || finalChatIdentifier.includes('@g.us'));
 
+    // ✅ IDENTIFICAÇÃO DE OPERADOR (para Echo/Takeover)
+    // Tenta identificar se quem mandou (mesmo fromMe) é um employee registrado
+    let agentProfileId: string | null = null;
+    if (fromMe) {
+      const employeeCheck = await isEmployeeSender(supabase, payload);
+      if (employeeCheck.isEmployee && employeeCheck.profileId) {
+        agentProfileId = employeeCheck.profileId;
+        console.log(`[Webhook] 🕵️ Agent identified for Outbound msg: ${employeeCheck.profileName} (${agentProfileId})`);
+      }
+    }
+
     const convPayload: any = {
       contact_id: contactId,
       thread_key: threadKey,             // Ex: u:5581... ou g:...@g.us
@@ -369,47 +380,53 @@ serve(async (req: Request): Promise<Response> => {
       }
     }
 
-    let conv: { id: string };
+    let conv: { id: string; assigned_to?: string };
 
     // ✅ FIX: Upsert por thread_key (não chat_id) - thread_key é o UNIQUE canônico
-    const { data: convRow, error: convErr } = await supabase
+    // Primeiro tentamos buscar para ver se já existe (importante para lógica de assigned_to)
+    const { data: existingConv } = await supabase
       .from('conversations')
-      .upsert(convPayload, { onConflict: 'thread_key' })
-      .select('id')
-      .single();
+      .select('id, assigned_to')
+      .eq('thread_key', threadKey)
+      .maybeSingle();
 
-    if (convErr) {
-      // ✅ FALLBACK: Se der erro, tenta recuperar a conversa existente por thread_key
-      console.log(`[Webhook] Erro no upsert, tentando fallback: ${convErr.message}`);
+    if (existingConv) {
+      conv = existingConv;
+      // Prepare updates
+      const updates = { ...convPayload };
 
-      const { data: existing } = await supabase
-        .from('conversations')
-        .select('id')
-        .eq('thread_key', threadKey)
-        .maybeSingle();
+      // ✅ ASSIGNMENT LOGIC: Se takeover/fromMe e não tem dono, atribui
+      if (fromMe && agentProfileId && !conv.assigned_to) {
+        console.log(`[Webhook] 🎯 Auto-assigning conversation ${conv.id} to ${agentProfileId}`);
+        updates.assigned_to = agentProfileId;
+        updates.assigned_at = nowIso;
+        updates.assigned_by = agentProfileId;
+      }
 
-      if (!existing) throw new Error(`Erro ao criar/atualizar conversa: ${convErr.message}`);
-
-      conv = existing;
-
-      // Atualizar manualmente (sem sobrescrever chat_id se já for bom)
-      await supabase
-        .from('conversations')
-        .update({
-          last_message: lastMessagePreview,
-          last_message_type: msgType,
-          last_message_at: nowIso,
-          status: 'open',
-          // ✅ UPDATE: Garante takeover em atualizações também
-          ...(fromMe ? {
-            human_control: true,
-            ai_mode: 'OFF',
-            ai_paused_until: new Date(Date.now() + 30 * 60 * 1000).toISOString()
-          } : {})
-        })
-        .eq('id', conv.id);
+      await supabase.from('conversations').update(updates).eq('id', conv.id);
     } else {
-      conv = convRow;
+      // Insert new
+      if (fromMe && agentProfileId) {
+        convPayload.assigned_to = agentProfileId;
+        convPayload.assigned_at = nowIso;
+        convPayload.assigned_by = agentProfileId;
+      }
+
+      const { data: newConv, error: insertError } = await supabase
+        .from('conversations')
+        .insert(convPayload)
+        .select('id, assigned_to')
+        .single();
+
+      if (insertError) {
+        // Fallback final se der race condition
+        console.error(`[Webhook] Upsert race condition: ${insertError.message}`);
+        const { data: retryConv } = await supabase.from('conversations').select('id').eq('thread_key', threadKey).maybeSingle();
+        if (!retryConv) throw insertError;
+        conv = retryConv;
+      } else {
+        conv = newConv;
+      }
     }
 
     // ✅ UPGRADE CONVERSATION: Se a conversa estava em LID mas agora temos Phone, atualiza!
@@ -504,7 +521,11 @@ serve(async (req: Request): Promise<Response> => {
           // Send help message...
           await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
+            headers: {
+              'Authorization': `Bearer ${supabaseServiceKey}`,
+              'Content-Type': 'application/json',
+              'apikey': supabaseServiceKey // ✅ FIX: Added apikey
+            },
             body: JSON.stringify({
               conversation_id: conv.id,
               content: `📋 Oi, ${employee.profileName}!\n\n${parsed.hint}`,
@@ -517,7 +538,11 @@ serve(async (req: Request): Promise<Response> => {
         if (parsed.intent === 'create_protocol') {
           await fetch(`${supabaseUrl}/functions/v1/create-protocol`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
+            headers: {
+              'Authorization': `Bearer ${supabaseServiceKey}`,
+              'Content-Type': 'application/json',
+              'apikey': supabaseServiceKey // ✅ FIX: Added apikey
+            },
             body: JSON.stringify({
               conversation_id: conv.id,
               condominium_name: parsed.condominiumName,
