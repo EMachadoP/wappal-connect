@@ -145,35 +145,41 @@ export function MessageList({
     const wasAppended =
       !!prevLastId.current && !!last && last !== prevLastId.current && messages.length > 0;
 
-    // 1) Initial load: scroll to first unread incoming, else bottom
+    // 1) Initial load: ALWAYS scroll to bottom (last message)
     if (isInitialLoad.current && messages.length > 0) {
-      // ✅ Aumentar delay para garantir que DOM está pronto
+      // ✅ Triple RAF: garante que DOM + layout + paint estão prontos
       raf2(() => {
-        // Extra RAF para garantir renderização completa
         requestAnimationFrame(() => {
           const el2 = containerRef.current;
           if (!el2) return;
 
+          // ✅ SEMPRE rolar pro fim ao abrir conversa
+          stickToBottom.current = true;
+          scrollToBottom("auto");
+
+          // ✅ ALTERNATIVA: Se quiser rolar para primeira mensagem não lida
+          // Descomente o bloco a seguir e comente o scrollToBottom acima
+          /*
           const firstUnreadIndex = messages.findIndex(
             (m) => !m.read_at && m.sender_type !== "agent" && m.sender_type !== "system"
           );
 
           if (firstUnreadIndex !== -1) {
-            // ✅ Tem mensagens não lidas: rolar até primeira e NÃO stick
+            // Tem mensagens não lidas: rolar até primeira e NÃO stick
             stickToBottom.current = false;
             const wrappers = el2.querySelectorAll("[data-message-id]");
             const target = wrappers[firstUnreadIndex] as HTMLElement | undefined;
             if (target) {
               target.scrollIntoView({ behavior: "auto", block: "start" });
             } else {
-              // Fallback: rolar pro fim se não encontrar elemento
               scrollToBottom("auto");
             }
           } else {
-            // ✅ Tudo lido: rolar pro fim E ativar stick (para imagens)
+            // Tudo lido: rolar pro fim E ativar stick
             stickToBottom.current = true;
             scrollToBottom("auto");
           }
+          */
 
           isInitialLoad.current = false;
         });
