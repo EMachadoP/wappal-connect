@@ -89,6 +89,7 @@ export default function InboxPage() {
       const { data } = await supabase
         .from('profiles')
         .select('id, name')
+        .eq('is_active', true) // ✅ Only show active agents
         .order('name');
 
       if (data) {
