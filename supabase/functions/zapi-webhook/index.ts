@@ -204,7 +204,20 @@ serve(async (req: Request): Promise<Response> => {
     // Campos auxiliares legacy
     const chatKey = finalChatKey;
     const chatIdentifier = finalChatIdentifier;
-    const chatName = payload.chatName || payload.contact?.name || payload.senderName || payload.pushName || 'Desconhecido';
+
+    // ✅ FIX: For outbound (fromMe), we want the RECIPIENT's name, not sender's
+    // For inbound, we want the SENDER's name (who sent the message to us)
+    let chatName: string;
+    if (fromMe) {
+      // Outbound: prioritize recipient-related fields
+      // chatName or contact.name from payload typically refers to the chat/recipient
+      chatName = payload.chatName || payload.contact?.name || payload.recipientName ||
+        (finalChatIdentifier?.split('@')[0]) || 'Desconhecido';
+    } else {
+      // Inbound: sender's name
+      chatName = payload.senderName || payload.pushName || payload.contact?.name ||
+        payload.chatName || 'Desconhecido';
+    }
 
     console.log(`[Webhook] Identity: ${fromMe ? 'OUT' : 'IN'} | Key=${finalChatKey} | Alias=${finalChatIdentifier}`);
 
