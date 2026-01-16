@@ -189,10 +189,19 @@ serve(async (req: Request) => {
 
     // Inputs
     let { content, chatId, recipient: inputRecipient } = json;
-    const { message_type, media_url, sender_name: overrideSenderName } = json;
+    const {
+      message_type,
+      media_url,
+      sender_name: overrideSenderName,
+      is_system = false,    // ✅ NEW: Explicit system flag (default: human)
+      takeover = false      // ✅ NEW: Explicit assignment flag (default: no takeover)
+    } = json;
 
     conversation_id = json.conversation_id;
     const isGroupInput = toBool(json.isGroup);
+
+    // ✅ FIX: Use explicit is_system instead of userId detection
+    const isSystem = Boolean(is_system);
 
     // idempotency_key (recomendado sempre mandar)
     const idempotency_key: string =
@@ -215,7 +224,7 @@ serve(async (req: Request) => {
     if (conversation_id) {
       const { data: foundConv } = await supabaseAdmin
         .from("conversations")
-        .select("id, chat_id, contacts(phone, is_group)")
+        .select("id, chat_id, assigned_to, ai_mode, human_control, contacts(phone, is_group)")
         .eq("id", conversation_id)
         .maybeSingle();
 
@@ -440,14 +449,13 @@ serve(async (req: Request) => {
     // ✅ IMMEDIATE VISIBILITY: Insert into public.messages and update conversation preview
     if (resolvedConversationId) {
       const nowIso = new Date().toISOString();
-      const isSystem = userId === "system";
 
       // 1) Save to public.messages
       const { error: msgErr } = await supabaseAdmin.from("messages").insert({
         conversation_id: resolvedConversationId,
-        sender_type: "agent",
-        agent_id: isSystem ? null : userId,
-        agent_name: senderName || (isSystem ? "G7" : "Atendente"),
+        sender_type: isSystem ? "assistant" : "agent",  // ✅ Use explicit flag
+        agent_id: isSystem ? null : (userId || null),
+        agent_name: senderName || (isSystem ? "Ana Mônica" : "Atendente"),
         content: content || null,
         message_type: message_type || "text",
         media_url: media_url || null,
@@ -471,10 +479,41 @@ serve(async (req: Request) => {
         chat_id: formattedRecipient,
       };
 
+      // ✅ FIX: Conditional state updates based on system/assignment
       if (!isSystem) {
-        updateData.human_control = true;
-        updateData.ai_mode = "OFF";
-        updateData.ai_paused_until = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+        // Get conversation state from earlier fetch
+        const { data: convState } = await supabaseAdmin
+          .from("conversations")
+          .select("assigned_to")
+          .eq("id", resolvedConversationId)
+          .single();
+
+        const isAssignedToMe = Boolean(userId) && convState?.assigned_to === userId;
+
+        // Only take control if:
+        // 1. Conversation is already assigned to me, OR
+        // 2. Explicit takeover requested (e.g., "Assumir" button)
+        if (isAssignedToMe || takeover) {
+          console.log(`[zapi-send-message] Taking control: isAssignedToMe=${isAssignedToMe}, takeover=${takeover}`);
+
+          // ✅ Only assign when explicit takeover AND not already assigned
+          if (takeover && userId && !convState?.assigned_to) {
+            updateData.assigned_to = userId;
+            updateData.assigned_at = nowIso;
+            updateData.assigned_by = userId;
+            console.log(`[zapi-send-message] ✅ Assigning conversation to ${userId}`);
+          }
+
+          updateData.human_control = true;
+          updateData.ai_mode = "OFF";
+          updateData.ai_paused_until = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+        } else {
+          console.log(`[zapi-send-message] ⚠️ Not taking control: conversation not assigned, no takeover`);
+          // ✅ CRITICAL: Don't change AI state if not assigned and no takeover
+        }
+      } else {
+        console.log(`[zapi-send-message] 🤖 System message: preserving AI state`);
+        // ✅ System/AI messages NEVER change control state
       }
 
       const { error: convErr } = await supabaseAdmin
