@@ -69,7 +69,7 @@ serve(async (req: Request): Promise<Response> => {
     const onlyDigits = (v?: string | null) => (v ?? "").replace(/\D/g, "");
 
     // ✅ FIX: REGRA 0: @s.whatsapp.net é SEMPRE usuário (mesmo com hífen)
-    const isGroup = (id?: string | null) => {
+    const isGroupId = (id?: string | null) => {
       if (!id) return false;
       const raw = id.trim().toLowerCase();
 
@@ -129,7 +129,7 @@ serve(async (req: Request): Promise<Response> => {
     let canonicalChatId: string | null = null; // ✅ Agora sempre telefone para pessoa
     let isGroupChat = false;
 
-    if (isGroup(rawChatId) || payload.isGroup) {
+    if (isGroupId(rawChatId) || payload.isGroup) {
       isGroupChat = true;
       const gId = normalizeGroupJid(rawChatId || payload.phone || "");
       threadKey = `g:${gId.replace('@g.us', '')}@g.us`;
@@ -230,7 +230,7 @@ serve(async (req: Request): Promise<Response> => {
     return new Response(JSON.stringify({ success: true, duplicated: true }), { headers: corsHeaders });
   }
 
-  console.log(`[Webhook] Normalizing: ID=${chatIdentifier} -> Key=${chatKey} (Group: ${!!isGroup})`);
+  console.log(`[Webhook] Normalizing: ID=${chatIdentifier} -> Key=${chatKey} (Group: ${isGroupChat})`);
 
   // 4. Salvar/Atualizar Contato usando CHAT_KEY
   let contactId: string;
@@ -277,7 +277,7 @@ serve(async (req: Request): Promise<Response> => {
       }
 
       const p = extractPhone(payload, fromMe);
-      if (!isGroup && p) {
+      if (!isGroupChat && p) {
         let finalP = p;
         if (finalP.length === 10 || finalP.length === 11) finalP = "55" + finalP;
         updates.phone = finalP;
@@ -290,8 +290,8 @@ serve(async (req: Request): Promise<Response> => {
         chat_lid: chatIdentifier,
         lid: chatIdentifier,
         name: chatName,
-        is_group: isGroup,
-        phone: !isGroup && !chatIdentifier.includes('@') ? chatIdentifier : null,
+        is_group: isGroupChat,
+        phone: !isGroupChat && !chatIdentifier.includes('@') ? chatIdentifier : null,
         updated_at: now
       }).select('id').single();
 
@@ -533,7 +533,7 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     // AI & Group Resolution...
-    if (!fromMe && !isGroup && !msgError && msgResult && !existingMsg) {
+    if (!fromMe && !isGroupChat && !msgError && msgResult && !existingMsg) {
       const audioUrl = payload.audioUrl || payload.audio?.url || payload.audio?.audioUrl || payload.document?.documentUrl || "";
       if (msgType === 'audio') {
         await fetch(`${supabaseUrl}/functions/v1/transcribe-audio`, {
@@ -569,7 +569,7 @@ serve(async (req: Request): Promise<Response> => {
       }
     }
 
-    if (!fromMe && isGroup && !msgError && msgResult && !existingMsg && msgType === 'text') {
+    if (!fromMe && isGroupChat && !msgError && msgResult && !existingMsg && msgType === 'text') {
       await fetch(`${supabaseUrl}/functions/v1/group-resolution-handler`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
