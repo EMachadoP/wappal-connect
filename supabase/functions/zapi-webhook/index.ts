@@ -210,17 +210,41 @@ serve(async (req: Request): Promise<Response> => {
 
     const providerMsgId = payload.messageId || payload.id || crypto.randomUUID();
 
-    // IDEMPOTÊNCIA: Ignorar se a mensagem já existe
+    // ✅ ENHANCED IDEMPOTENCY: Check for existing message AND its sender_type
     const { data: existingMsg } = await supabase
       .from('messages')
-      .select('id')
+      .select('id, sender_type')
       .eq('provider_message_id', providerMsgId)
       .maybeSingle();
 
     if (existingMsg) {
-      console.log(`[Webhook] Mensagem duplicada ignorada: ${providerMsgId}`);
+      console.log(`[Webhook] Mensagem duplicada ignorada: ${providerMsgId} (sender_type: ${existingMsg.sender_type})`);
       return new Response(JSON.stringify({ success: true, duplicated: true }), { headers: corsHeaders });
     }
+
+    // ✅ AI ECHO DETECTION: If fromMe and message looks like it came from our system, don't treat as human takeover
+    // This prevents AI messages from triggering human_control/ai_mode changes
+    let isAiEcho = false;
+    if (fromMe) {
+      // Check if there's a recent outbound message with same content (within 60s) sent by assistant
+      const contentPreview = (payload.text?.message || payload.message?.text || payload.body || "").substring(0, 100);
+      if (contentPreview) {
+        const { data: recentAiMsg } = await supabase
+          .from('messages')
+          .select('id')
+          .eq('sender_type', 'assistant')
+          .eq('direction', 'outbound')
+          .gte('sent_at', new Date(Date.now() - 60000).toISOString())
+          .ilike('content', `${contentPreview.substring(0, 50)}%`)
+          .maybeSingle();
+
+        if (recentAiMsg) {
+          isAiEcho = true;
+          console.log(`[Webhook] 🤖 AI Echo detected - skipping human control changes`);
+        }
+      }
+    }
+
 
     console.log(`[Webhook] Normalizing: ID=${chatIdentifier} -> Key=${chatKey} (Group: ${isGroupChat})`);
 
@@ -340,8 +364,9 @@ serve(async (req: Request): Promise<Response> => {
       last_message_type: msgType,
       last_message_at: nowIso,
       status: 'open',
-      // ✅ LOGIC: Se a mensagem é do operador (fromMe), ativa human_control e pausa IA
-      ...(fromMe ? {
+      // ✅ FIX: Only activate human_control for REAL human messages, not AI echoes
+      // isAiEcho=true means this is the Z-API echo of a message sent by our AI system
+      ...((fromMe && !isAiEcho) ? {
         human_control: true,
         ai_mode: 'OFF',
         ai_paused_until: new Date(Date.now() + 30 * 60 * 1000).toISOString()
