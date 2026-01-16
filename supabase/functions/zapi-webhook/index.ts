@@ -243,16 +243,26 @@ serve(async (req: Request): Promise<Response> => {
     // 6. Salvar/Atualizar Conversa com UPSERT
     const nowIso = new Date().toISOString();
 
-    // ✅ FIX: Upsert por chat_id para evitar duplicatas
+    // ✅ VALIDAÇÃO: Só inclui chat_id se for JID enviável (@s.whatsapp.net ou @g.us)
+    const isSendableJID = finalChatIdentifier &&
+      (finalChatIdentifier.includes('@s.whatsapp.net') || finalChatIdentifier.includes('@g.us'));
+
     const convPayload: any = {
       contact_id: contactId,
-      chat_id: finalChatIdentifier,      // Normalizado (ex: 5581997438430 ou 551199-123@g.us)
       thread_key: threadKey,             // Ex: u:5581... ou g:...@g.us
       last_message: lastMessagePreview,
       last_message_type: msgType,
       last_message_at: nowIso,
       status: 'open'
     };
+
+    // ✅ CRÍTICO: Só salva chat_id se for JID válido (nunca LID)
+    if (isSendableJID) {
+      convPayload.chat_id = finalChatIdentifier;
+    } else {
+      console.warn(`[Webhook] chat_id não é JID enviável, deixando NULL: ${finalChatIdentifier}`);
+      convPayload.chat_id = null;
+    }
 
     // Auto-Condominium Selection (apenas para mensagens INBOUND)
     if (!fromMe) {
@@ -275,28 +285,28 @@ serve(async (req: Request): Promise<Response> => {
 
     let conv: { id: string };
 
-    // Tentar upsert
+    // ✅ FIX: Upsert por thread_key (não chat_id) - thread_key é o UNIQUE canônico
     const { data: convRow, error: convErr } = await supabase
       .from('conversations')
-      .upsert(convPayload, { onConflict: 'chat_id' })
+      .upsert(convPayload, { onConflict: 'thread_key' })
       .select('id')
       .single();
 
     if (convErr) {
-      // ✅ FALLBACK: Se der erro, tenta recuperar a conversa existente
+      // ✅ FALLBACK: Se der erro, tenta recuperar a conversa existente por thread_key
       console.log(`[Webhook] Erro no upsert, tentando fallback: ${convErr.message}`);
 
       const { data: existing } = await supabase
         .from('conversations')
         .select('id')
-        .eq('chat_id', finalChatIdentifier)
+        .eq('thread_key', threadKey)
         .maybeSingle();
 
       if (!existing) throw new Error(`Erro ao criar/atualizar conversa: ${convErr.message}`);
 
       conv = existing;
 
-      // Atualizar manualmente
+      // Atualizar manualmente (sem sobrescrever chat_id se já for bom)
       await supabase
         .from('conversations')
         .update({
