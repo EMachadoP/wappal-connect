@@ -259,23 +259,24 @@ serve(async (req: Request): Promise<Response> => {
         .maybeSingle();
 
       if (conv) {
-        // Check if there's a recent outbound message from assistant (within 90 seconds)
+        // Check if there's a recent outbound message (within 2 min) from our system
+        // ✅ FIX: Check for BOTH assistant AND agent sender_type
         const { data: recentAiMsg } = await supabase
           .from('messages')
-          .select('id, content')
+          .select('id, sender_type, content')
           .eq('conversation_id', conv.id)
-          .eq('sender_type', 'assistant')
+          .in('sender_type', ['assistant', 'agent'])
           .eq('direction', 'outbound')
-          .gte('sent_at', new Date(Date.now() - 90000).toISOString())
+          .gte('sent_at', new Date(Date.now() - 120000).toISOString())
           .order('sent_at', { ascending: false })
           .limit(1)
           .maybeSingle();
 
         if (recentAiMsg) {
           isAiEcho = true;
-          console.log(`[Webhook] 🤖 AI Echo detected for conv ${conv.id} - found recent assistant msg: ${recentAiMsg.id}`);
+          console.log(`[Webhook] 🤖 AI Echo detected for conv ${conv.id} - found recent outbound msg: ${recentAiMsg.id} (type: ${recentAiMsg.sender_type})`);
         } else {
-          console.log(`[Webhook] 👤 Human outbound detected for conv ${conv.id} - no recent AI message found`);
+          console.log(`[Webhook] 👤 Human outbound detected for conv ${conv.id} - no recent system message found`);
         }
       }
     }
