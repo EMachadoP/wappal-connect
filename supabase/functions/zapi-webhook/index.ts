@@ -170,20 +170,32 @@ serve(async (req: Request): Promise<Response> => {
 
       if (!threadKey) {
         if (phone) {
-          // Normalizar BR
+          // ✅ FIX: Normalização BR E164 correta - NUNCA truncar dígitos
           let finalPhone = phone;
-          if (finalPhone.startsWith("55") && finalPhone.length > 11) {
-            // Aceita
-          } else if (finalPhone.length === 10 || finalPhone.length === 11) {
+
+          // Já está com DDI 55 e tem tamanho válido (12 = fixo, 13 = celular)
+          if (finalPhone.startsWith("55") && (finalPhone.length === 12 || finalPhone.length === 13)) {
+            // Aceita como está - NÃO modificar
+          }
+          // Sem DDI, mas tem DDD + número (10 = fixo local, 11 = celular local)
+          else if (finalPhone.length === 10 || finalPhone.length === 11) {
             finalPhone = "55" + finalPhone;
           }
+          // Se já tem 13+ dígitos começando com 55, aceita como está
+          else if (finalPhone.startsWith("55") && finalPhone.length >= 12) {
+            // Aceita como está
+          }
+          // Outros casos: usa como está para não perder informação
+
+          console.log(`[Webhook] 📞 Phone normalized: ${phone} -> ${finalPhone} (len: ${finalPhone.length})`);
+
           threadKey = `u:${finalPhone}`;
           canonicalChatId = `${finalPhone}@s.whatsapp.net`;
         } else if (lidCandidate) {
-          // ✅ fallback consciente: lid-only
-          const lidDigits = lidCandidate.split('@')[0].replace(/\D/g, '');
-          threadKey = `u:lid:${lidDigits}`;
+          // ✅ LID: usar formato completo, não só dígitos
+          threadKey = `lid:${lidCandidate}`;
           canonicalChatId = null;
+          console.log(`[Webhook] 🆔 Using LID as thread key: ${threadKey}`);
         } else {
           threadKey = rawChatId ? `u:unknown:${rawChatId}` : null;
           canonicalChatId = null;
