@@ -149,10 +149,16 @@ serve(async (req: Request): Promise<Response> => {
         // ✅ CRÍTICO: Chat ID = JID enviável (com @s.whatsapp.net)
         canonicalChatId = `${finalPhone}@s.whatsapp.net`;
       } else {
-        // ✅ Se não temos telefone real, deixa NULL (forçar identificação)
-        console.warn(`[Webhook] Sem telefone válido. Raw: ${JSON.stringify({ rawChatId, fromMe })}. chat_id será NULL.`);
-        threadKey = rawChatId ? `u:${rawChatId}` : null; // Thread key pode usar LID
-        canonicalChatId = null; // ❌ NÃO INVENTAR chat_id sem telefone
+        // ⚠️ Fallback: Use LID temporariamente, mas marca para upgrade
+        console.warn(`[Webhook] ⚠️ No phone found, using LID as temporary key: ${rawChatId}`);
+
+        // Use rawChatId (can be @lid) as temporary thread key
+        threadKey = rawChatId ? `u:${stripPrefix(rawChatId)}` : null;
+
+        // Mark as temporary (not sendable)
+        canonicalChatId = rawChatId;  // Keep LID for now
+
+        console.log(`[Webhook] 🔄 Will upgrade to phone when available`);
       }
     }
 
@@ -191,17 +197,47 @@ serve(async (req: Request): Promise<Response> => {
 
     // 4. Salvar/Atualizar Contato usando CHAT_KEY
     let contactId: string;
-    const { data: existingContact } = await supabase.from('contacts')
-      .select('id, chat_lid, phone, name')
+    let { data: existingContact } = await supabase.from('contacts')
+      .select('id, chat_lid, phone, name, chat_key')
       .eq('chat_key', chatKey)
       .maybeSingle();
 
+    // ✅ RECOVERY: Se não achou pelo Phone Key, tenta achar pelo LID Key (Split-Brain Fix)
+    // Isso acontece quando tínhamos LID, e agora recebemos Phone. Vamos achar o contato antigo e migrar.
+    const phone = extractPhone(payload, fromMe);
+    let finalPhone = phone ? (phone.length === 10 || phone.length === 11 ? "55" + phone : phone) : null;
+
+    if (!existingContact && finalPhone && rawChatId && rawChatId.endsWith('@lid')) {
+      const lidKey = `u:${rawChatId}`;
+      const { data: lidContact } = await supabase.from('contacts')
+        .select('id, chat_lid, phone, name, chat_key')
+        .eq('chat_key', lidKey)
+        .maybeSingle();
+
+      if (lidContact) {
+        console.log(`[Webhook] 🔄 Found existing contact by LID (${lidKey}). Will upgrade to Phone (${chatKey}).`);
+        existingContact = lidContact;
+      }
+    }
+
     if (existingContact) {
       contactId = existingContact.id;
-      // Atualizar dados se vierem novos (ex: nome, lid caso ainda não tenha)
       const updates: any = { updated_at: now };
-      if (!existingContact.chat_lid && chatIdentifier.includes('@')) updates.chat_lid = chatIdentifier;
-      if (!existingContact.phone && !isGroup && !chatIdentifier.includes('@')) updates.phone = chatIdentifier;
+
+      // ✅ UPGRADE: If we have a phone now and contact is on LID, upgrade it
+      const hasPhoneNow = finalPhone && finalPhone.length >= 10;
+      const isCurrentlyLID = existingContact.chat_lid?.includes('@lid') || existingContact.chat_key?.includes('@lid');
+
+      if (hasPhoneNow && isCurrentlyLID) {
+        console.log(`[Webhook] 🔄 Upgrading contact from LID to phone: ${finalPhone}`);
+        updates.chat_lid = `${finalPhone}@s.whatsapp.net`;
+        updates.phone = finalPhone;
+        updates.chat_key = `u:${finalPhone}`; // Unify thread
+      } else {
+        // Updates normais
+        if (!existingContact.chat_lid && chatIdentifier.includes('@')) updates.chat_lid = chatIdentifier;
+        if (!existingContact.phone && !isGroup && !chatIdentifier.includes('@')) updates.phone = chatIdentifier;
+      }
 
       await supabase.from('contacts').update(updates).eq('id', contactId);
     } else {
@@ -318,6 +354,32 @@ serve(async (req: Request): Promise<Response> => {
         .eq('id', conv.id);
     } else {
       conv = convRow;
+    }
+
+    // ✅ UPGRADE CONVERSATION: Se a conversa estava em LID mas agora temos Phone, atualiza!
+    if (conv && finalPhone) {
+      // Recupera a conversa atual para checar se é LID
+      const { data: currentConv } = await supabase
+        .from('conversations')
+        .select('chat_id, thread_key')
+        .eq('id', conv.id)
+        .single();
+
+      const isCurrentlyLID = !currentConv?.chat_id || currentConv.chat_id.includes('@lid') || currentConv.thread_key.includes('@lid');
+      const hasPhoneNow = finalPhone && finalPhone.length >= 10;
+
+      if (isCurrentlyLID && hasPhoneNow) {
+        console.log(`[Webhook] 🔄 Upgrading conversation from LID to phone`);
+
+        await supabase
+          .from('conversations')
+          .update({
+            chat_id: `${finalPhone}@s.whatsapp.net`,
+            thread_key: `u:${finalPhone}`,
+            updated_at: nowIso
+          })
+          .eq('id', conv.id);
+      }
     }
 
 
