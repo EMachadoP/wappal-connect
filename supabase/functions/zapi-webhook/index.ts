@@ -129,7 +129,11 @@ serve(async (req: Request): Promise<Response> => {
     let canonicalChatId: string | null = null; // ✅ Agora sempre telefone para pessoa
     let isGroupChat = false;
 
-    if (isGroupId(rawChatId) || payload.isGroup) {
+    // ✅ FIX: Strict boolean parse for isGroup (same fix as fromMe - strings like "false" should be false)
+    const payloadIsGroup = payload.isGroup === true || payload.isGroup === 1 || payload.isGroup === "1" ||
+      (typeof payload.isGroup === "string" && payload.isGroup.toLowerCase() === "true");
+
+    if (isGroupId(rawChatId) || payloadIsGroup) {
       isGroupChat = true;
       const gId = normalizeGroupJid(rawChatId || payload.phone || "");
       threadKey = `g:${gId.replace('@g.us', '')}@g.us`;
