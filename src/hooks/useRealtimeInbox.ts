@@ -58,7 +58,7 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
             // Prioritize participant name over contact name/phone
             name: participantName || conv.contacts?.name || conv.contacts?.phone || 'Sem Nome',
           },
-          last_message: conv.last_message_content || 'Nenhuma mensagem',
+          last_message: conv.last_message || 'Nenhuma mensagem',
           last_message_type: 'text',
           last_message_at: conv.last_message_at,
           reopened_at: conv.reopened_at,
