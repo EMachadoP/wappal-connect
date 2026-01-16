@@ -54,8 +54,7 @@ export function ConversationList({
 
   const filteredConversations = conversations
     .filter((conv) => {
-      if (!conv.contact) return false;
-      const contactName = conv.contact.name || "";
+      const contactName = conv.contact?.name || "Contato Desconhecido"; // Fallback name
       if (!contactName.toLowerCase().includes(search.toLowerCase())) return false;
 
       // HIDE EMPTY SHELLS: Only show conversations that have been interacted with
