@@ -88,12 +88,13 @@ serve(async (req: Request): Promise<Response> => {
 
     const isLid = (id?: string | null) => !!id && id.endsWith("@lid");
 
+    const fromMeRaw = payload.fromMe;
+    const direction = String(payload.direction || '').toLowerCase(); // 'inbound' | 'outbound'
+
     const fromMe =
-      payload.fromMe === true ||
-      payload.fromMe === 1 ||
-      payload.fromMe === "true" ||
-      payload.fromMe === "1" ||
-      Boolean(payload.fromMe);
+      direction === 'outbound' ? true :
+        direction === 'inbound' ? false :
+          (fromMeRaw === true || fromMeRaw === 1 || fromMeRaw === "true" || fromMeRaw === "1");
 
     // Extrai o melhor telefone possível do payload
     function extractPhone(payload: any, fromMe: boolean) {

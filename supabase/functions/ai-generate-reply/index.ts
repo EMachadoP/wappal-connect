@@ -173,7 +173,10 @@ serve(async (req) => {
     const hasCommand = /^CRIAR\s+AGENDAMENTO\b|^ABRIR\s+CHAMADO\b|^ABRIR\s+PROTOCOLO\b|^CHAMADO\s*:|^AGENDA\s*:/i.test(textForExtraction);
 
     // If employee WITHOUT command → skip AI response (just register the message)
-    if (isEmployee && !hasCommand) {
+    // ✅ PATCH: Allow 'owner' or 'admin' roles to bypass this block
+    const isPrivileged = (employee.roles ?? []).some(r => ['owner', 'admin'].includes(String(r).toLowerCase()));
+
+    if (isEmployee && !hasCommand && !isPrivileged) {
       console.log('[AI] Employee message without command, skipping AI response.');
       return new Response(JSON.stringify({
         text: null,
