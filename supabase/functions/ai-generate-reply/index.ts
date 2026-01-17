@@ -30,6 +30,57 @@ function getLastByRole(msgs: { role: string; content: string }[], role: string) 
   return null;
 }
 
+// ✅ NEW: Check if user just answered the "which condominium?" question
+function looksLikeCondoAnswer(text: string): boolean {
+  const t = text.trim();
+  // 2-60 chars, has letters, not just "ok/sim/não", no "?" at end
+  if (t.length < 2 || t.length > 60) return false;
+  if (!/[a-zA-ZáéíóúâêîôûãõçÁÉÍÓÚÂÊÎÔÛÃÕÇ]/.test(t)) return false;
+  if (/^(ok|sim|não|nao|obrigad[oa]?|valeu|blz|beleza)$/i.test(t)) return false;
+  if (t.endsWith('?')) return false;
+  // Avoid long technical complaints being treated as condo names
+  if (isOperationalIssue(t) && t.length > 30) return false;
+  return true;
+}
+
+// ✅ NEW: Check if last assistant message asked about condominium
+function lastAssistantAskedForCondo(msgs: { role: string; content: string }[]): boolean {
+  const lastAssistant = getLastByRole(msgs, 'assistant');
+  if (!lastAssistant) return false;
+  return /condom[ií]nio|qual (?:é )?o (?:seu )?condomínio|confirmar? (?:o )?condom/i.test(lastAssistant.content);
+}
+
+// ✅ NEW: Normalize text for fuzzy matching
+function normalizeForSearch(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove accents
+    .replace(/[^a-z0-9\s]/g, '') // remove punctuation
+    .replace(/\b(condominio|residencial|edificio|conjunto)\b/gi, '') // remove common prefixes
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+// ✅ NEW: Question variations to avoid robotic repetition
+const CONDO_QUESTIONS = [
+  "Para que eu possa abrir o chamado corretamente, poderia me confirmar qual é o seu condomínio?",
+  "Pra eu registrar certinho, qual é o nome do seu condomínio?",
+  "Você me confirma o condomínio, por favor?",
+  "Só pra localizar aqui: qual condomínio você representa?",
+  "Perfeito — me diga o nome do condomínio pra eu abrir o chamado.",
+  "Qual é o condomínio? (pode ser só o nome mesmo)",
+];
+
+function getCondoQuestion(conversationId: string): string {
+  // Deterministic but varied: use hash of conversation_id
+  let hash = 0;
+  for (let i = 0; i < conversationId.length; i++) {
+    hash = ((hash << 5) - hash) + conversationId.charCodeAt(i);
+    hash |= 0;
+  }
+  return CONDO_QUESTIONS[Math.abs(hash) % CONDO_QUESTIONS.length];
+}
+
 /**
  * Executes the create-protocol edge function
  */
@@ -286,17 +337,84 @@ serve(async (req) => {
     const canOpenNow = hasIdentifiedCondo && hasOperationalContext && (!needsApartment || Boolean(aptCandidate));
 
     if (!hasIdentifiedCondo && hasOperationalContext && conversationId) {
-      console.log('[TICKET] Deterministic block: Missing condominium identification.');
-      return new Response(JSON.stringify({
-        text: "Para que eu possa abrir o chamado corretamente, poderia me confirmar qual é o seu condomínio?",
-        finish_reason: 'NEED_CONDO_IDENTIFICATION',
-        provider: 'deterministic',
-        model: 'keyword-detection',
-        request_id: crypto.randomUUID()
-      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      // ✅ SMART CONDO DETECTION: Check if user just answered the condo question
+      const userProvidedCondoName = lastAssistantAskedForCondo(messagesNoSystem) && looksLikeCondoAnswer(lastUserMsgText);
+
+      if (userProvidedCondoName) {
+        console.log(`[TICKET] User appears to have provided condo name: "${lastUserMsgText}"`);
+
+        // Try fuzzy matching with database
+        const searchTerm = normalizeForSearch(lastUserMsgText);
+        const words = searchTerm.split(' ').filter(w => w.length > 2);
+
+        if (words.length > 0) {
+          // Build ilike patterns from words
+          const patterns = words.map(w => `%${w}%`);
+
+          // Try to find matching condominiums
+          const { data: matchingCondos } = await supabase
+            .from('condominiums')
+            .select('id, name')
+            .or(patterns.map(p => `name.ilike.${p}`).join(','))
+            .limit(5);
+
+          if (matchingCondos && matchingCondos.length === 1) {
+            // Single match - auto-link and proceed
+            const matchedCondo = matchingCondos[0];
+            console.log(`[TICKET] Auto-linking to condo: ${matchedCondo.name} (${matchedCondo.id})`);
+
+            await supabase.from('conversations')
+              .update({ active_condominium_id: matchedCondo.id })
+              .eq('id', conversationId);
+
+            // Now we have condo, let flow continue to check if can open ticket
+            // (will be handled in the next block)
+          } else if (matchingCondos && matchingCondos.length > 1) {
+            // Multiple matches - ask for clarification
+            const options = matchingCondos.slice(0, 3).map(c => c.name).join(', ');
+            console.log(`[TICKET] Multiple condo matches found: ${options}`);
+            return new Response(JSON.stringify({
+              text: `Encontrei alguns condomínios parecidos: ${options}. Qual deles é o seu?`,
+              finish_reason: 'NEED_CONDO_CLARIFICATION',
+              provider: 'deterministic',
+              model: 'fuzzy-match',
+              request_id: crypto.randomUUID()
+            }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          } else {
+            // No matches - confirm what they said
+            console.log(`[TICKET] No condo match for: "${lastUserMsgText}"`);
+            return new Response(JSON.stringify({
+              text: `Entendi que você é do condomínio "${lastUserMsgText}". Não encontrei aqui no sistema — você pode confirmar se o nome está certo? Se for um novo condomínio, me avise que registro.`,
+              finish_reason: 'CONDO_NOT_FOUND',
+              provider: 'deterministic',
+              model: 'fuzzy-match',
+              request_id: crypto.randomUUID()
+            }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          }
+        }
+      } else {
+        // First time asking for condo - use varied question
+        console.log('[TICKET] Deterministic block: Missing condominium identification.');
+        return new Response(JSON.stringify({
+          text: getCondoQuestion(conversationId),
+          finish_reason: 'NEED_CONDO_IDENTIFICATION',
+          provider: 'deterministic',
+          model: 'keyword-detection',
+          request_id: crypto.randomUUID()
+        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
     }
 
-    if (conversationId && (canOpenNow || isProvidingApartment)) {
+    // Re-check if we just linked a condo
+    const { data: convDataRefresh } = await supabase
+      .from('conversations')
+      .select('active_condominium_id')
+      .eq('id', conversationId)
+      .maybeSingle();
+    const hasIdentifiedCondoNow = Boolean(convDataRefresh?.active_condominium_id);
+    const canOpenNowRefresh = hasIdentifiedCondoNow && hasOperationalContext && (!needsApartment || Boolean(aptCandidate));
+
+    if (conversationId && (canOpenNow || canOpenNowRefresh || isProvidingApartment)) {
       if (needsApartment && !aptCandidate) {
         console.log('[TICKET] Deterministic block: Need apartment for issue:', lastIssueMsg?.content);
         return new Response(JSON.stringify({
