@@ -215,8 +215,7 @@ serve(async (req: Request) => {
 
     console.log(`[zapi-send-message] 📋 Input: conv=${conversation_id} isSystem=${isSystem} content="${(content || '').slice(0, 50)}..."`);
 
-    // idempotency_key (recomendado sempre mandar)
-    // ✅ FIX: Include timestamp to prevent false duplicates for similar messages
+    // idempotency_key - caller should pass trigger-based key, fallback uses content hash
     const idempotency_key: string =
       json.idempotency_key ||
       stableKey({
@@ -226,7 +225,6 @@ serve(async (req: Request) => {
         message_type: message_type || "text",
         media_url: media_url || null,
         senderName: overrideSenderName || senderName,
-        ts: Date.now(),  // ✅ Make each call unique
       });
 
     if (inputRecipient && !chatId) chatId = inputRecipient;
@@ -379,6 +377,50 @@ serve(async (req: Request) => {
 
     if (existingOutbox) {
       if (existingOutbox.status === "sent") {
+        // ✅ RECONCILIATION: Even if deduped, ensure message exists in database
+        if (resolvedConversationId && existingOutbox.provider_message_id) {
+          const nowIso = new Date().toISOString();
+          console.log(`[zapi-send-message] Dedup reconciliation for conv=${resolvedConversationId}`);
+
+          // Upsert to messages (needs unique index on provider_message_id)
+          await supabaseAdmin.from("messages").upsert({
+            conversation_id: resolvedConversationId,
+            sender_type: isSystem ? "assistant" : "agent",
+            sender_name: senderName || (isSystem ? "Ana Mônica" : "Atendente G7"),
+            sender_id: isSystem ? null : (userId || null),
+            agent_id: isSystem ? null : (userId || null),
+            agent_name: senderName || (isSystem ? "Ana Mônica" : "Atendente G7"),
+            content: content || null,
+            message_type: message_type || "text",
+            media_url: media_url || null,
+            provider: "zapi",
+            provider_message_id: existingOutbox.provider_message_id,
+            direction: "outbound",
+            status: "sent",
+            chat_id: dbChatId,
+            sent_at: nowIso,
+          }, { onConflict: "provider_message_id" });
+
+          // Update conversation preview (without changing AI state if system)
+          const updateData: any = {
+            last_message: (content || "").trim() ? content.slice(0, 500) : (message_type !== "text" ? `[${message_type}]` : ""),
+            last_message_type: message_type || "text",
+            last_message_at: nowIso,
+            chat_id: dbChatId,
+          };
+
+          // Only human messages should disable AI
+          if (!isSystem) {
+            updateData.human_control = true;
+            updateData.ai_mode = "OFF";
+            updateData.ai_paused_until = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+          }
+
+          await supabaseAdmin.from("conversations")
+            .update(updateData)
+            .eq("id", resolvedConversationId);
+        }
+
         return new Response(JSON.stringify({
           success: true,
           deduped: true,

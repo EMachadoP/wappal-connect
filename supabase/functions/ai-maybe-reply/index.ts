@@ -288,7 +288,10 @@ serve(async (req) => {
     }
 
     // 7. Enviar via Z-API
-    console.log('[ai-maybe-reply] Enviando resposta via Z-API');
+    // ✅ FIX: Pass trigger-based idempotency_key to prevent duplicates
+    const idempotencyKey = `ai_${conversation_id}_${initialId || 'unknown'}`;
+    console.log(`[ai-maybe-reply] Enviando resposta via Z-API (idempotency=${idempotencyKey})`);
+
     const zapiResponse = await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
       method: 'POST',
       headers: {
@@ -301,7 +304,8 @@ serve(async (req) => {
         content: aiData.text,
         message_type: 'text',
         sender_name: 'Ana Mônica',
-        is_system: true  // ✅ CRITICAL: Mark as system to preserve AI state
+        is_system: true,  // ✅ CRITICAL: Mark as system to preserve AI state
+        idempotency_key: idempotencyKey  // ✅ FIX: Trigger-based key
       }),
     });
 
