@@ -685,6 +685,21 @@ ${overrideInstruction ? `\n[INSTRUÇÕES DE CONTROLE]\n${overrideInstruction}\n`
       }
     }
 
+    // ✅ FALLBACK: If LLM returned empty text and we have a deterministicOverride, use fallback text
+    if (!generatedText.trim() && deterministicOverride) {
+      console.warn(`[AI] LLM returned empty text with override=${deterministicOverride.kind}, using fallback`);
+      if (deterministicOverride.kind === 'need_condo') {
+        generatedText = getCondoQuestion(conversationId || '');
+      } else if (deterministicOverride.kind === 'need_apartment') {
+        generatedText = "Entendido. Para que eu possa registrar certinho, poderia me confirmar o número do seu apartamento?";
+      } else if (deterministicOverride.kind === 'condo_clarification') {
+        const opts = deterministicOverride.options.slice(0, 3).join(', ');
+        generatedText = `Encontrei algumas opções: ${opts}. Qual desses é o seu condomínio?`;
+      } else if (deterministicOverride.kind === 'condo_not_found') {
+        generatedText = `Perfeito — é o condomínio ${deterministicOverride.condoName}, certo? Me confirma por favor.`;
+      }
+    }
+
     return new Response(JSON.stringify({
       text: generatedText,
       provider: provider.provider,
