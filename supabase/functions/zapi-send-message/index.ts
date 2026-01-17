@@ -147,6 +147,8 @@ const stableKey = (obj: any) => {
 };
 
 serve(async (req: Request) => {
+  console.log('[zapi-send-message] ▶️ Request received');
+
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -203,6 +205,8 @@ serve(async (req: Request) => {
 
     // ✅ FIX: Use explicit is_system instead of userId detection (strict boolean parsing)
     const isSystem = toBool(is_system) || userId === "system";
+
+    console.log(`[zapi-send-message] 📋 Input: conv=${conversation_id} isSystem=${isSystem} content="${(content || '').slice(0, 50)}..."`);
 
     // idempotency_key (recomendado sempre mandar)
     const idempotency_key: string =
