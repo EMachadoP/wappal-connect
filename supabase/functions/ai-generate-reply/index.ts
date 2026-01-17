@@ -494,7 +494,11 @@ serve(async (req) => {
     const hasIdentifiedCondoNow = Boolean(convDataRefresh?.active_condominium_id);
     const canOpenNowRefresh = hasIdentifiedCondoNow && hasOperationalContext && (!needsApartment || Boolean(aptCandidate));
 
-    if (conversationId && (canOpenNow || canOpenNowRefresh || isProvidingApartment)) {
+    // ✅ FIX: isProvidingApartment must also have condo identified
+    const canActuallyOpen = (canOpenNow || canOpenNowRefresh) && !deterministicOverride;
+    const isProvidingApartmentWithCondo = isProvidingApartment && hasIdentifiedCondoNow && !deterministicOverride;
+
+    if (conversationId && (canActuallyOpen || isProvidingApartmentWithCondo)) {
       if (needsApartment && !aptCandidate) {
         console.log('[TICKET] Deterministic block: Need apartment for issue:', lastIssueMsg?.content);
         deterministicOverride = { kind: 'need_apartment' };
