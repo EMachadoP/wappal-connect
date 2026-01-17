@@ -14,8 +14,23 @@ function isOperationalIssue(text: string) {
   return /(câmera|camera|cftv|dvr|gravador|nvr|port[aã]o|motor|cerca|interfone|controle de acesso|catraca|fechadura|tv coletiva|antena|acesso remoto|sem imagem|sem sinal|travado|n[aã]o abre|n[aã]o fecha|parou|quebrado|defeito)/i.test(text);
 }
 
+// ✅ FIX: Extract apartment from "apt 1901" / "apto 1901" / "1901"
+function extractApartment(text: string): string | null {
+  const t = (text || "").trim();
+
+  // "apto 1901" / "apt 1901" / "apartamento: 1901" / "unidade 1901"
+  const m1 = t.match(/(?:\bapto\b|\bapt\.?\b|\bapartamento\b|\bunidade\b)\s*[:\-]?\s*(\d{1,6}[A-Za-z]?)/i);
+  if (m1) return m1[1];
+
+  // Just "1901"
+  const m2 = t.match(/^\s*(\d{1,6}[A-Za-z]?)\s*$/);
+  if (m2) return m2[1];
+
+  return null;
+}
+
 function looksLikeApartment(text: string) {
-  return /^\s*\d{1,6}[A-Za-z]?\s*$/.test(text.trim());
+  return Boolean(extractApartment(text));
 }
 
 function buildSummaryFromRecentUserMessages(msgs: { role: string; content: string }[], max = 3) {
@@ -48,6 +63,24 @@ function lastAssistantAskedForCondo(msgs: { role: string; content: string }[]): 
   const lastAssistant = getLastByRole(msgs, 'assistant');
   if (!lastAssistant) return false;
   return /condom[ií]nio|qual (?:é )?o (?:seu )?condomínio|confirmar? (?:o )?condom/i.test(lastAssistant.content);
+}
+
+// ✅ NEW: Find condo candidate in recent history (not just when assistant asked)
+function findRecentCondoCandidate(msgs: { role: string; content: string }[]): string | null {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.role !== "user") continue;
+
+    const t = (m.content || "").trim();
+    if (!t) continue;
+
+    // Don't confuse apt with condo
+    if (extractApartment(t)) continue;
+
+    // Valid condominium candidate
+    if (looksLikeCondoAnswer(t)) return t;
+  }
+  return null;
 }
 
 // ✅ NEW: Normalize text for fuzzy matching
@@ -418,40 +451,49 @@ serve(async (req) => {
 
     const hasIdentifiedCondo = Boolean(convData?.active_condominium_id);
 
-    const lastIssueMsg = [...messagesNoSystem].reverse().find(m => m.role === 'user' && isOperationalIssue(m.content));
+    const lastIssueMsg = [...messagesNoSystem].reverse().find((m: any) => m.role === 'user' && isOperationalIssue(m.content));
     const hasOperationalContext = isOperationalIssue(recentText);
+
+    // ✅ FIX: Use extractApartment for better parsing of "apt 1901"
     const aptCandidate = [...messagesNoSystem]
       .reverse()
-      .find(m => m.role === "user" && looksLikeApartment(m.content))
-      ?.content.trim();
+      .map((m: any) => (m.role === "user" ? extractApartment(m.content) : null))
+      .find(Boolean) || null;
 
-    const isProvidingApartment = looksLikeApartment(lastUserMsgText) && hasOperationalContext;
+    const isProvidingApartment = Boolean(extractApartment(lastUserMsgText)) && hasOperationalContext;
     const needsApartment = /(interfone|tv|controle|apartamento|apto|unidade)/i.test(recentText);
     const canOpenNow = hasIdentifiedCondo && hasOperationalContext && (!needsApartment || Boolean(aptCandidate));
 
     let deterministicOverride: DeterministicOverride | null = null;
 
     if (!hasIdentifiedCondo && hasOperationalContext && conversationId) {
-      // ✅ SMART CONDO DETECTION: Check if user just answered the condo question
-      const userProvidedCondoName = lastAssistantAskedForCondo(messagesNoSystem) && looksLikeCondoAnswer(lastUserMsgText);
+      // ✅ SMART CONDO DETECTION: Search history for condo name, not just when assistant asked
+      const condoCandidateText = findRecentCondoCandidate(messagesNoSystem);
+      const userProvidedCondoName = Boolean(condoCandidateText);
+      const condoText = condoCandidateText || lastUserMsgText;
 
       if (userProvidedCondoName) {
-        console.log(`[TICKET] User appears to have provided condo name: "${lastUserMsgText}"`);
+        console.log(`[TICKET] User appears to have provided condo name: "${condoText}"`);
 
-        // Try fuzzy matching with database
-        const searchTerm = normalizeForSearch(lastUserMsgText);
-        const words = searchTerm.split(' ').filter(w => w.length > 2);
+        // ✅ FIX: Use AND matching (all words must be present) instead of OR
+        const searchTerm = normalizeForSearch(condoText);
+        const words = searchTerm.split(" ").filter(w => w.length > 2);
 
         if (words.length > 0) {
-          // Build ilike patterns from words
-          const patterns = words.map(w => `%${w}%`);
+          // Use the longest word as seed for initial search to reduce noise
+          const seed = words.slice().sort((a, b) => b.length - a.length)[0];
 
-          // Try to find matching condominiums
-          const { data: matchingCondos } = await supabase
-            .from('condominiums')
-            .select('id, name')
-            .or(patterns.map(p => `name.ilike.${p}`).join(','))
-            .limit(5);
+          const { data: candidates } = await supabase
+            .from("condominiums")
+            .select("id, name")
+            .ilike("name", `%${seed}%`)
+            .limit(30);
+
+          // ✅ AND filter: must contain ALL words
+          const matchingCondos = (candidates || []).filter((c: any) => {
+            const n = normalizeForSearch(c.name || "");
+            return words.every(w => n.includes(w));
+          }).slice(0, 5);
 
           if (matchingCondos && matchingCondos.length === 1) {
             // Single match - auto-link and proceed
@@ -474,8 +516,8 @@ serve(async (req) => {
             };
           } else {
             // No matches - confirm what they said
-            console.log(`[TICKET] No condo match for: "${lastUserMsgText}"`);
-            deterministicOverride = { kind: 'condo_not_found', condoName: lastUserMsgText };
+            console.log(`[TICKET] No condo match for: "${condoText}"`);
+            deterministicOverride = { kind: 'condo_not_found', condoName: condoText };
           }
         }
       } else {
