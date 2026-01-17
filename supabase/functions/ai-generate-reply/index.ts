@@ -81,6 +81,97 @@ function getCondoQuestion(conversationId: string): string {
   return CONDO_QUESTIONS[Math.abs(hash) % CONDO_QUESTIONS.length];
 }
 
+// ---------- CONTEXT HYDRATION (avoid "perguntas bobas" / repetition) ----------
+async function hydrateMessagesFromDbIfNeeded(
+  supabase: any,
+  conversationId: string | undefined,
+  incoming: { role: string; content: string }[],
+  minIncoming = 10,
+  takeLast = 24
+) {
+  if (!conversationId) return incoming;
+  if ((incoming?.length || 0) >= minIncoming) return incoming;
+
+  const { data: rows, error } = await supabase
+    .from('messages')
+    .select('id, content, transcript, direction, sender_type, sent_at')
+    .eq('conversation_id', conversationId)
+    .order('sent_at', { ascending: false })
+    .limit(takeLast);
+
+  if (error || !rows?.length) return incoming;
+
+  const dbMsgs = rows
+    .slice()
+    .reverse()
+    .map((r: any) => {
+      const txt = (r.transcript ?? r.content ?? '').trim();
+      if (!txt) return null;
+      const role = r.direction === 'inbound' ? 'user' : 'assistant';
+      return { role, content: txt };
+    })
+    .filter(Boolean) as { role: string; content: string }[];
+
+  // merge + de-dupe (light)
+  const merged = [...dbMsgs, ...(incoming || [])].filter(m => m.role !== 'system');
+  const seen = new Set<string>();
+  const deduped: { role: string; content: string }[] = [];
+  for (const m of merged) {
+    const k = `${m.role}::${m.content}`.slice(0, 600);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    deduped.push(m);
+  }
+  return deduped.slice(-40);
+}
+
+// ---------- Deterministic override -> LLM wording ----------
+type DeterministicOverride =
+  | { kind: 'need_condo' }
+  | { kind: 'condo_clarification'; options: string[] }
+  | { kind: 'condo_not_found'; condoName: string }
+  | { kind: 'need_apartment' };
+
+function buildOverrideInstruction(ov: DeterministicOverride): string {
+  // Instruções em PT-BR, 1 pergunta por vez, humanizado, sem repetir.
+  if (ov.kind === 'need_condo') {
+    return [
+      "Você precisa APENAS pedir o NOME DO CONDOMÍNIO para continuar.",
+      "Faça UMA pergunta curta e natural.",
+      "Não repita exatamente a frase anterior da conversa.",
+      "Não use listas longas, não use emojis, não use texto em inglês.",
+      "NÃO registre protocolo agora (não chamar ferramenta)."
+    ].join("\n");
+  }
+  if (ov.kind === 'need_apartment') {
+    return [
+      "Você precisa APENAS pedir o NÚMERO DO APARTAMENTO para continuar.",
+      "Faça UMA pergunta curta e natural.",
+      "Não repita exatamente a frase anterior da conversa.",
+      "Não use listas longas, não use emojis, não use texto em inglês.",
+      "NÃO registre protocolo agora (não chamar ferramenta)."
+    ].join("\n");
+  }
+  if (ov.kind === 'condo_clarification') {
+    const opts = ov.options.slice(0, 3).join(" | ");
+    return [
+      "O cliente aparentemente informou o condomínio, mas existem opções parecidas no banco.",
+      `Opções encontradas: ${opts}`,
+      "Peça para escolher qual é o correto, em UMA pergunta curta e humana.",
+      "Não faça parecer erro de sistema. Não diga 'não encontrei'.",
+      "NÃO registre protocolo agora (não chamar ferramenta)."
+    ].join("\n");
+  }
+  // condo_not_found
+  return [
+    `O cliente informou este condomínio: "${ov.condoName}".`,
+    "Não houve correspondência clara no banco.",
+    "Confirme o nome com tato, em UMA pergunta curta.",
+    "Se houver outro nome (ex: 'Residencial X' vs 'Condomínio X'), peça para confirmar como aparece oficialmente.",
+    "NÃO registre protocolo agora (não chamar ferramenta)."
+  ].join("\n");
+}
+
 /**
  * Executes the create-protocol edge function
  */
@@ -196,7 +287,9 @@ serve(async (req) => {
     let basePrompt = rawBody.systemPrompt || "";
     basePrompt = basePrompt.split(/EXEMPLO ERRADO|EXEMPLO DE ERRO|MIMETISMO/i)[0].trim();
 
-    const messagesNoSystem = messages.filter((m: any) => m.role !== 'system');
+    let messagesNoSystem = messages.filter((m: any) => m.role !== 'system');
+    // ✅ If app sent short context, hydrate from DB to avoid repetition
+    messagesNoSystem = await hydrateMessagesFromDbIfNeeded(supabase, conversationId, messagesNoSystem);
 
     // Get last user message and recent context
     const lastUserMsg = getLastByRole(messagesNoSystem, 'user');
@@ -336,6 +429,8 @@ serve(async (req) => {
     const needsApartment = /(interfone|tv|controle|apartamento|apto|unidade)/i.test(recentText);
     const canOpenNow = hasIdentifiedCondo && hasOperationalContext && (!needsApartment || Boolean(aptCandidate));
 
+    let deterministicOverride: DeterministicOverride | null = null;
+
     if (!hasIdentifiedCondo && hasOperationalContext && conversationId) {
       // ✅ SMART CONDO DETECTION: Check if user just answered the condo question
       const userProvidedCondoName = lastAssistantAskedForCondo(messagesNoSystem) && looksLikeCondoAnswer(lastUserMsgText);
@@ -371,37 +466,22 @@ serve(async (req) => {
             // (will be handled in the next block)
           } else if (matchingCondos && matchingCondos.length > 1) {
             // Multiple matches - ask for clarification
-            const options = matchingCondos.slice(0, 3).map(c => c.name).join(', ');
-            console.log(`[TICKET] Multiple condo matches found: ${options}`);
-            return new Response(JSON.stringify({
-              text: `Encontrei alguns condomínios parecidos: ${options}. Qual deles é o seu?`,
-              finish_reason: 'NEED_CONDO_CLARIFICATION',
-              provider: 'deterministic',
-              model: 'fuzzy-match',
-              request_id: crypto.randomUUID()
-            }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+            const options = matchingCondos.slice(0, 3).map((c: any) => c.name);
+            console.log(`[TICKET] Multiple condo matches found: ${options.join(', ')}`);
+            deterministicOverride = {
+              kind: 'condo_clarification',
+              options: options
+            };
           } else {
             // No matches - confirm what they said
             console.log(`[TICKET] No condo match for: "${lastUserMsgText}"`);
-            return new Response(JSON.stringify({
-              text: `Entendi que você é do condomínio "${lastUserMsgText}". Não encontrei aqui no sistema — você pode confirmar se o nome está certo? Se for um novo condomínio, me avise que registro.`,
-              finish_reason: 'CONDO_NOT_FOUND',
-              provider: 'deterministic',
-              model: 'fuzzy-match',
-              request_id: crypto.randomUUID()
-            }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+            deterministicOverride = { kind: 'condo_not_found', condoName: lastUserMsgText };
           }
         }
       } else {
-        // First time asking for condo - use varied question
+        // First time asking for condo
         console.log('[TICKET] Deterministic block: Missing condominium identification.');
-        return new Response(JSON.stringify({
-          text: getCondoQuestion(conversationId),
-          finish_reason: 'NEED_CONDO_IDENTIFICATION',
-          provider: 'deterministic',
-          model: 'keyword-detection',
-          request_id: crypto.randomUUID()
-        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        deterministicOverride = { kind: 'need_condo' };
       }
     }
 
@@ -417,13 +497,7 @@ serve(async (req) => {
     if (conversationId && (canOpenNow || canOpenNowRefresh || isProvidingApartment)) {
       if (needsApartment && !aptCandidate) {
         console.log('[TICKET] Deterministic block: Need apartment for issue:', lastIssueMsg?.content);
-        return new Response(JSON.stringify({
-          text: "Entendido. Para eu abrir o protocolo agora mesmo, me confirme por favor o número do seu apartamento.",
-          finish_reason: 'NEED_APARTMENT',
-          provider: 'deterministic',
-          model: 'keyword-detection',
-          request_id: crypto.randomUUID()
-        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        deterministicOverride = { kind: 'need_apartment' };
       }
 
       try {
@@ -441,8 +515,21 @@ serve(async (req) => {
         );
 
         const protocolCode = ticketData.protocol?.protocol_code || ticketData.protocol_code;
+
+        // Protocol confirmation variations
+        const CONFIRMS = [
+          `Certo. Chamado registrado sob o protocolo ${protocolCode}. Já encaminhei para a equipe operacional e seguimos por aqui.`,
+          `Perfeito — protocolei como ${protocolCode}. Já direcionei para a equipe operacional e vamos acompanhando por aqui.`,
+          `Entendido. Protocolo ${protocolCode} registrado e encaminhado. Qualquer ajuste ou detalhe, me avise por aqui.`,
+          `Combinado. Registrei o chamado (${protocolCode}) e já deixei encaminhado para a equipe. Seguimos por aqui.`
+        ];
+        // Choose variation deterministic (stable)
+        let h = 0; const seed = `${conversationId}:${protocolCode}`;
+        for (let i = 0; i < seed.length; i++) h = ((h * 31) + seed.charCodeAt(i)) >>> 0;
+        const msg = CONFIRMS[h % CONFIRMS.length];
+
         return new Response(JSON.stringify({
-          text: `Certo. Já registrei o chamado sob o protocolo **${protocolCode}** e encaminhei para a equipe operacional. Vamos dar sequência por aqui.`,
+          text: msg,
           finish_reason: 'DETERMINISTIC_SUCCESS',
           provider: 'deterministic',
           model: 'keyword-detection',
@@ -455,14 +542,15 @@ serve(async (req) => {
 
     // --- TIER 5: IA (LLM) ---
 
+    // Build override instruction if deterministic guardrail triggered
+    const overrideInstruction = deterministicOverride ? buildOverrideInstruction(deterministicOverride) : '';
+
     // Final Prompt Reinforcement
     const cleanPrompt = `${basePrompt}
 
-Sua personalidade é Ana Mônica, assistente da G7.
-Sua única função é ajudar com problemas técnicos de condomínio.
-Para registrar um problema, use SEMPRE a ferramenta 'create_protocol' IMEDIATAMENTE.
-NUNCA diga que registrou o protocolo sem chamar a ferramenta.
-NUNCA invente preços ou prazos.`;
+Reforce as regras críticas do atendimento (tom humano, sem repetição, 1 pergunta por vez, sem prometer prazo).
+Quando faltar dado obrigatório para protocolo, pergunte apenas o que falta e aguarde.
+${overrideInstruction ? `\n[INSTRUÇÕES DE CONTROLE]\n${overrideInstruction}\n` : ''}`;
 
     const { data: providerConfig } = await supabase
       .from('ai_provider_configs')
@@ -505,8 +593,9 @@ NUNCA invente preços ou prazos.`;
           body: JSON.stringify({
             model: provider.model,
             messages: [{ role: 'system', content: cleanPrompt }, ...messagesNoSystem],
-            tools: protocolTool,
-            tool_choice: 'auto',
+            // ✅ If deterministicOverride is set, disable tools (text-only response)
+            tools: deterministicOverride ? [] : protocolTool,
+            tool_choice: deterministicOverride ? 'none' : 'auto',
             temperature: Number(provider.temperature) || 0.7
           })
         }
@@ -518,12 +607,13 @@ NUNCA invente preços ou prazos.`;
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: cleanPrompt }] },
-          contents: messagesNoSystem.map(m => ({
+          contents: messagesNoSystem.map((m: any) => ({
             role: m.role === 'assistant' ? 'model' : 'user',
             parts: [{ text: m.content }]
           })),
-          tools: [{ functionDeclarations: [protocolTool[0].function] }],
-          toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+          // ✅ If deterministicOverride is set, disable tools (text-only response)
+          ...(deterministicOverride ? {} : { tools: [{ functionDeclarations: [protocolTool[0].function] }] }),
+          toolConfig: { functionCallingConfig: { mode: deterministicOverride ? "NONE" : "AUTO" } },
           generationConfig: { temperature: Number(provider.temperature) || 0.7 }
         })
       });
@@ -563,7 +653,8 @@ NUNCA invente preços ou prazos.`;
 
     // --- FALLBACK INTENT DETECTION ---
     const aiSaidWillRegister = /vou registrar|vou abrir|vou encaminhar|registrei/i.test(generatedText);
-    if (!functionCall && aiSaidWillRegister) {
+    // ✅ Don't trigger fallback when in guardrail mode (deterministicOverride)
+    if (!deterministicOverride && !functionCall && aiSaidWillRegister) {
       console.warn('FALLBACK: Intent detected. Forcing protocol creation...');
       functionCall = {
         name: 'create_protocol',
