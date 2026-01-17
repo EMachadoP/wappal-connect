@@ -14,6 +14,25 @@ function isOperationalIssue(text: string) {
   return /(câmera|camera|cftv|dvr|gravador|nvr|port[aã]o|motor|cerca|interfone|controle de acesso|catraca|fechadura|tv coletiva|antena|acesso remoto|sem imagem|sem sinal|travado|n[aã]o abre|n[aã]o fecha|parou|quebrado|defeito)/i.test(text);
 }
 
+function needsApartmentByText(text: string) {
+  return /(interfone|tv coletiva|antena|controle|tag|cart[aã]o|unidade|apto|apartamento)/i.test(text);
+}
+
+function isMissingCondoError(e: unknown) {
+  return String((e as any)?.message || e).includes('MISSING_CONDOMINIUM');
+}
+
+function isMissingAptError(e: unknown) {
+  return String((e as any)?.message || e).includes('MISSING_APARTMENT');
+}
+
+function hasUsefulText(t: string) {
+  const s = (t || '').trim();
+  if (!s) return false;
+  if (/^(ok|sim|não|nao|blz|beleza|valeu|obrigad[oa]?)$/i.test(s)) return false;
+  return true;
+}
+
 function extractApartment(text: string): string | null {
   const t = (text || "").trim();
 
@@ -303,6 +322,14 @@ async function executeCreateProtocol(
     throw new Error('conversation_id is required');
   }
 
+  // ✅ HARD GUARD: se for assunto de unidade e não veio apt, não chama
+  const summaryText = String(args?.summary || '');
+  const apt = (args?.apartment || '').toString().trim();
+  if (needsApartmentByText(summaryText) && !apt) {
+    console.error('[TICKET] Missing apartment for unit-related issue');
+    throw new Error('MISSING_APARTMENT');
+  }
+
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (!uuidRegex.test(conversationId)) {
     console.error('[TICKET] Invalid conversation_id format:', conversationId);
@@ -339,6 +366,12 @@ async function executeCreateProtocol(
       .limit(1)
       .single();
     if (part) condominiumId = part.entity_id;
+  }
+
+  // ✅ HARD GUARD: não chama create-protocol sem condo
+  if (!condominiumId) {
+    console.error('[TICKET] Missing condominiumId - cannot create protocol');
+    throw new Error('MISSING_CONDOMINIUM');
   }
 
   const bodyObj = {
@@ -379,6 +412,22 @@ async function executeCreateProtocol(
   return result;
 }
 
+async function clearPending(conversationId: string, supabase: any) {
+  await supabase.from('conversations')
+    .update({ pending_field: null, pending_payload: null, pending_set_at: null })
+    .eq('id', conversationId);
+}
+
+async function setPending(conversationId: string, field: string, supabase: any, payload: any = {}) {
+  await supabase.from('conversations')
+    .update({
+      pending_field: field,
+      pending_payload: payload,
+      pending_set_at: new Date().toISOString(),
+    })
+    .eq('id', conversationId);
+}
+
 // --- SERVE ---
 
 serve(async (req) => {
@@ -409,6 +458,72 @@ serve(async (req) => {
     const lastUserMsg = getLastByRole(messagesNoSystem, 'user');
     const lastUserMsgText = (lastUserMsg?.content || "").trim();
     const recentText = messagesNoSystem.slice(-6).map((m: any) => m.content).join(" ");
+
+    // --- TIER 0: STATE MACHINE & RETRY PROTOCOL ---
+    // Handle pending states BEFORE extensive processing
+
+    const { data: convState, error: convStateErr } = await supabase
+      .from('conversations')
+      .select('id, active_condominium_id, pending_field, pending_payload, pending_set_at')
+      .eq('id', conversationId)
+      .maybeSingle();
+
+    if (convStateErr) console.error('[STATE] Failed to load conv state:', convStateErr);
+
+    if (conversationId && convState?.pending_field === 'retry_protocol') {
+      console.log('[STATE] pending_field=retry_protocol');
+
+      const payload = (convState.pending_payload || {}) as any;
+      const summaryFromPayload = String(payload.last_summary || '').trim();
+      const priorityFromPayload = payload.last_priority || 'normal';
+      const aptFromPayload = payload.last_apartment || null;
+
+      // Se o usuário mandou algo útil, usa como summary novo (mais recente)
+      const newSummary = hasUsefulText(lastUserMsgText) ? lastUserMsgText : summaryFromPayload;
+
+      try {
+        const ticketData = await executeCreateProtocol(
+          supabase, supabaseUrl, supabaseServiceKey, conversationId,
+          participant_id,
+          {
+            summary: (newSummary || summaryFromPayload).slice(0, 500),
+            priority: priorityFromPayload,
+            apartment: aptFromPayload
+          }
+        );
+
+        const protocolCode = ticketData.protocol?.protocol_code || ticketData.protocol_code;
+
+        // ✅ sucesso -> limpa pendência
+        await clearPending(conversationId, supabase);
+
+        return new Response(JSON.stringify({
+          text: `Certo. Já registrei o chamado sob o protocolo **${protocolCode}** e encaminhei para a equipe operacional. Vamos dar sequência por aqui.`,
+          finish_reason: 'RETRY_PROTOCOL_SUCCESS',
+          provider: 'state-machine',
+          model: 'deterministic',
+          request_id: crypto.randomUUID()
+        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
+      } catch (e) {
+        console.error('[STATE] retry_protocol failed again:', e);
+
+        // mantém pendência e pede um retry “curto” (sem prometer contato manual)
+        await setPending(conversationId, 'retry_protocol', supabase, {
+          ...payload,
+          last_summary: newSummary || summaryFromPayload,
+          last_error: String((e as any)?.message || e).slice(0, 500),
+        });
+
+        return new Response(JSON.stringify({
+          text: "Tive uma instabilidade para registrar agora. Você pode me confirmar em uma frase o problema (ex.: “interfone sem chamada no bloco B”) para eu tentar de novo?",
+          finish_reason: 'RETRY_PROTOCOL_STILL_FAILING',
+          provider: 'state-machine',
+          model: 'deterministic',
+          request_id: crypto.randomUUID()
+        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+    }
 
     // --- EMPLOYEE DETECTION & STRUCTURED EXTRACTION ---
     // Load the last message's raw_payload for employee detection
@@ -584,6 +699,45 @@ serve(async (req) => {
               pending_set_at: new Date().toISOString()
             }).eq("id", conversationId);
           }
+        }
+      }
+
+      if (pendingField === "condominium_name") {
+        const r = await resolveCondoByTokens(supabase, lastUserMsgText);
+        if (r.kind === "matched") {
+          // Found condo, now check if we can execute the pending protocol
+          await supabase.from("conversations").update({
+            active_condominium_id: r.condo.id,
+            pending_field: null,
+            pending_payload: { ...pendingPayload, condo_options: null },
+            pending_set_at: null
+          }).eq("id", conversationId);
+
+          // TRY TO EXECUTE PROTOCOL IF SUMMARY EXISTS
+          if (pendingPayload.last_summary) {
+            // ... similar to retry_protocol logic, but we might just clear pending and let next turn handle it or do it here. 
+            // For simplicity, let's clear pending and let the "Can Open Now" logic below catch it if desired, OR set up a retry_protocol to trigger immediately.
+            // Actually, setting retry_protocol immediately is safer to ensure execution.
+            await setPending(conversationId, 'retry_protocol', supabase, { ...pendingPayload, last_summary: pendingPayload.last_summary });
+            // Re-run this function logic? No, easiest is to let the NEXT message trigger it, 
+            // OR we can just return a text saying "Got it". 
+            return new Response(JSON.stringify({
+              text: `Entendido, ${r.condo.name}. Já localizei aqui.`,
+              finish_reason: 'CONDO_RESOLVED',
+              provider: 'state-machine',
+              model: 'deterministic',
+              request_id: crypto.randomUUID()
+            }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          }
+        } else {
+          // Still not found
+          return new Response(JSON.stringify({
+            text: "Não localizei esse nome exato. Pode confirmar como aparece na fatura ou o nome completo?",
+            finish_reason: 'CONDO_NOT_FOUND',
+            provider: 'state-machine',
+            model: 'deterministic',
+            request_id: crypto.randomUUID()
+          }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
       }
 
@@ -837,8 +991,30 @@ REGRAS DE EXECUÇÃO:
           error: e instanceof Error ? e.message : String(e),
           stack: e instanceof Error ? e.stack : undefined
         });
-        // Improved fallback message - don't ask for name if we already have participant info
-        generatedText = "Puxa, tive um probleminha técnico ao tentar abrir o protocolo automaticamente agora. Mas não se preocupe, eu já anotei tudo e vou passar agora mesmo para a equipe manual. Eles vão entrar em contato em breve!";
+
+        // ✅ Se faltou condomínio/apto, transforma em "pendente" e pergunta 1 coisa
+        if (isMissingCondoError(e)) {
+          if (conversationId) {
+            await setPending(conversationId, 'condominium_name', supabase, { last_summary: functionCall.args?.summary || null });
+          }
+          generatedText = "Certo. Só me confirma o nome do condomínio, por favor.";
+        } else if (isMissingAptError(e)) {
+          if (conversationId) {
+            await setPending(conversationId, 'apartment', supabase, { last_summary: functionCall.args?.summary || null });
+          }
+          generatedText = "Perfeito — me confirma o número do apartamento/unidade, por favor.";
+        } else {
+          // ✅ Erro genérico: não prometer contato; pedir retry simples
+          if (conversationId) {
+            await setPending(conversationId, 'retry_protocol', supabase, {
+              last_summary: functionCall.args?.summary || null,
+              last_priority: functionCall.args?.priority || null,
+              last_apartment: functionCall.args?.apartment || null,
+              last_error: String((e as any)?.message || e).slice(0, 500),
+            });
+          }
+          generatedText = "Entendi. Tive uma instabilidade pra registrar o protocolo agora. Pode me mandar uma mensagem curta confirmando o problema novamente?";
+        }
       }
     }
 

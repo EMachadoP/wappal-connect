@@ -306,9 +306,9 @@ serve(async (req) => {
     let text = (aiData?.text ?? "").toString().trim();
 
     // ✅ FIX: Don't throw error on empty text - use fallback if LLM fails
-    if (!text) {
-      console.warn('[ai-maybe-reply] IA retornou texto vazio ou null. Usando fallback.');
-      text = "Olá! Me conta rapidinho o que está acontecendo por aí?";
+    if (!text || !text.trim()) {
+      console.warn('[ai-maybe-reply] IA retornou texto vazio ou null. Usando fallback seguro.');
+      text = "Olá! Pode me contar o que está acontecendo por aí?";
       aiData.text = text;
     }
 
