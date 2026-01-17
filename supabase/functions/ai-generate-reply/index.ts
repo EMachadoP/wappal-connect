@@ -189,10 +189,10 @@ function pickByHash(id: string, arr: string[]) {
 }
 
 function fallbackQuestionForPending(pendingField: string | null) {
-  if (pendingField === "condominium") return "Me confirma o nome do condomínio, por favor?";
-  if (pendingField === "apartment") return "Me confirma o número do apartamento/unidade, por favor?";
-  if (pendingField === "requester_name") return "Me confirma seu nome, por favor?";
-  return "Me conta rapidinho o que está acontecendo por aí?";
+  if (pendingField === "condominium") return "Aqui é a Ana Mônica. Me confirma o nome do condomínio, por favor?";
+  if (pendingField === "apartment") return "Aqui é a Ana Mônica. Me confirma o número do apartamento/unidade, por favor?";
+  if (pendingField === "requester_name") return "Aqui é a Ana Mônica. Me confirma seu nome, por favor?";
+  return "Aqui é a Ana Mônica. Em que posso ajudar?";
 }
 
 const CONDO_QUESTIONS = [
