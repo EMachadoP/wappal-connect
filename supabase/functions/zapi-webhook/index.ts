@@ -400,13 +400,10 @@ serve(async (req: Request): Promise<Response> => {
       last_message_type: msgType,
       last_message_at: nowIso,
       status: 'open',
-      // ✅ FIX: Only activate human_control for REAL human messages, not AI echoes
-      // isAiEcho=true means this is the Z-API echo of a message sent by our AI system
-      ...((fromMe && !isAiEcho) ? {
-        human_control: true,
-        ai_mode: 'OFF',
-        ai_paused_until: new Date(Date.now() + 30 * 60 * 1000).toISOString()
-      } : {})
+      // ✅ CRITICAL FIX: NEVER change AI state in webhook for outbound messages
+      // Human takeover is handled ONLY in zapi-send-message when an agent sends manually
+      // This prevents race conditions where webhook processes echo before message is in DB
+      // Removed: ...((fromMe && !isAiEcho) ? { human_control: true, ai_mode: 'OFF', ... } : {})
     };
 
     // ✅ CRÍTICO: Só salva chat_id se for JID válido (nunca LID)

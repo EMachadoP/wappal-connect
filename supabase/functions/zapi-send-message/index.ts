@@ -553,7 +553,7 @@ serve(async (req: Request) => {
 
         // ✅ Assignment só se o frontend pedir explicitamente (ou takeover legacy)
         // Se assign=true OU takeover=true, tentamos atribuir
-        const shouldAssign = (Boolean(assign) || Boolean(takeover)) && userId;
+        const shouldAssign = (toBool(assign) || toBool(takeover)) && userId && userId !== "system";
 
         if (shouldAssign) {
           const { data: convState } = await supabaseAdmin
