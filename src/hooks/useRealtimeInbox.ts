@@ -15,13 +15,16 @@ export interface Conversation {
 
 interface UseRealtimeInboxProps {
   onNewInboundMessage?: () => void;
+  tab?: string;
+  userId?: string;
 }
 
-export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps = {}) {
+export function useRealtimeInbox({ onNewInboundMessage, tab, userId }: UseRealtimeInboxProps = {}) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
   const processedMessageIds = useRef<Set<string>>(new Set());
   const lastFetchTime = useRef<number>(0);
+  const pendingReq = useRef(0);
 
   const fetchConversations = useCallback(async () => {
     // Throttle fetches to max once every 300ms
@@ -29,8 +32,9 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
     if (now - lastFetchTime.current < 300) return;
     lastFetchTime.current = now;
 
-    console.log('[RealtimeInbox] Fetching conversations...');
-    const { data, error } = await supabase
+    console.log('[RealtimeInbox] Fetching conversations for tab:', tab || 'all');
+
+    let query = supabase
       .from('conversations')
       .select(`
         *,
@@ -43,6 +47,28 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
           )
         )
       `);
+
+    // ✅ SQL-level filtering for performance + correctness
+    if (userId && tab) {
+      if (tab === 'mine') {
+        query = query.eq('status', 'open').eq('assigned_to', userId);
+      } else if (tab === 'inbox') {
+        query = query.eq('status', 'open').is('assigned_to', null);
+      } else if (tab === 'resolved') {
+        query = query.eq('status', 'resolved');
+      }
+    }
+
+    // Always sort by most recent activity
+    query = query.order('last_message_at', { ascending: false });
+
+    // ✅ Pattern seguro: garante que só o último fetch atualiza o state
+    const reqId = ++pendingReq.current;
+
+    const { data, error } = await query;
+
+    // ✅ Se outro fetch foi disparado depois, ignora este resultado (race condition protection)
+    if (reqId !== pendingReq.current) return;
 
     if (!error && data) {
       const mapped = data.map((conv: any) => {
@@ -86,9 +112,18 @@ export function useRealtimeInbox({ onNewInboundMessage }: UseRealtimeInboxProps 
       setConversations(mapped);
     }
     setLoading(false);
-  }, []);
+  }, [tab, userId]);
+
+  // Invalidate old requests when tab changes
+  useEffect(() => {
+    pendingReq.current++;
+    setLoading(true); // Optional: show loading when tab switches deeply
+    fetchConversations();
+  }, [tab, userId]);
 
   useEffect(() => {
+    // Initial fetch handled by the dependency effect above or manually if distinct
+    // kept for safe measure if deps are stable
     fetchConversations();
 
     // Canal estável para Inbox global

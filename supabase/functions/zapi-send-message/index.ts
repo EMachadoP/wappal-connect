@@ -197,23 +197,65 @@ serve(async (req: Request) => {
     const json: Json = await req.json();
 
     // Inputs
-    let { content, chatId, recipient: inputRecipient } = json;
-    const {
-      message_type,
+    let {
+      content,
+      chatId,
+      recipient: inputRecipient,
+      message_type = "text",
       media_url,
       sender_name: overrideSenderName,
-      is_system = false,    // ✅ NEW: Explicit system flag (default: human)
-      takeover = false,     // ✅ NEW: Explicit assignment flag (default: no takeover)
-      assign = false        // ✅ NEW: Explicit assignment flag
+      is_system = false,     // ✅ novo
+      takeover = false,      // ✅ novo
+      assign = false         // ✅ kept for compatibility
     } = json;
 
     conversation_id = json.conversation_id;
     const isGroupInput = toBool(json.isGroup);
 
-    // ✅ FIX: Use explicit is_system instead of userId detection (strict boolean parsing)
-    const isSystem = toBool(is_system) || userId === "system";
+    // ✅ Re-use top-level auth checks for validation (authHeader, apikeyHeader, isServiceKey are defined at top)
 
-    console.log(`[zapi-send-message] 📋 Input: conv=${conversation_id} isSystem=${isSystem} content="${(content || '').slice(0, 50)}..."`);
+    // ✅ Descobre usuário autenticado (quando vier do app)
+    async function getCurrentUser() {
+      // Se for service call, não existe user real
+      if (isServiceKey) return { userId: null as string | null, isPrivileged: false };
+
+      const auth = authHeader || ""; // safe access
+      if (!auth.toLowerCase().startsWith("bearer ")) {
+        return { userId: null, isPrivileged: false };
+      }
+
+      // Usa o próprio service key para validar o JWT no GoTrue
+      const supabaseAuth = createClient(supabaseUrl, supabaseServiceKey, {
+        global: { headers: { Authorization: auth } }
+      });
+
+      const { data: userData, error: userErr } = await supabaseAuth.auth.getUser();
+      const userId = userData?.user?.id ?? null;
+      if (userErr || !userId) return { userId: null, isPrivileged: false };
+
+      const { data: profile } = await supabaseAdmin
+        .from("profiles")
+        .select("role")
+        .eq("id", userId)
+        .maybeSingle();
+
+      const role = String((profile as any)?.role || "").toLowerCase();
+      const isPrivileged = role === "admin" || role === "owner";
+
+      return { userId, isPrivileged };
+    }
+
+    const { userId: currentUserId, isPrivileged } = await getCurrentUser();
+
+    // ✅ is_system só é aceito se for service call (ou admin/owner)
+    const requestedIsSystem = toBool(is_system);
+    const isSystem = requestedIsSystem && (isServiceKey || isPrivileged);
+
+    if (requestedIsSystem && !isSystem) {
+      console.warn("[zapi-send-message] is_system spoof attempt downgraded to false");
+    }
+
+    console.log(`[zapi-send-message] 📋 Input: conv=${conversation_id} isSystem=${isSystem} takeover=${takeover} content="${(content || '').slice(0, 50)}..."`);
 
     // idempotency_key - caller should pass trigger-based key, fallback uses content hash
     const idempotency_key: string =
@@ -234,11 +276,15 @@ serve(async (req: Request) => {
     let recipient = chatId as string | undefined;
 
     if (conversation_id) {
-      const { data: foundConv } = await supabaseAdmin
+      const { data: foundConv, error: convErr } = await supabaseAdmin
         .from("conversations")
-        .select("id, chat_id, assigned_to, ai_mode, human_control, contacts(phone, is_group)")
+        .select("id, chat_id, assigned_to, ai_mode, human_control, ai_paused_until, status, contacts(phone, is_group)")
         .eq("id", conversation_id)
         .maybeSingle();
+
+      if (convErr || !foundConv) {
+        throw new Error("Conversation not found for conversation_id=" + conversation_id);
+      }
 
       if (!foundConv) {
         return new Response(
@@ -354,6 +400,7 @@ serve(async (req: Request) => {
 
     // ✅ ROBUST CONVERSATION RESOLUTION (App Sync Fix)
     const cleanJid = formattedRecipient.trim().toLowerCase().replace(/^(u:|g:)/i, "");
+
     // ✅ FIX: Remover duplicate cleanJid
     const candidateKeys = finalIsGroup
       ? [cleanJid, `g:${cleanJid}`]
@@ -382,7 +429,7 @@ serve(async (req: Request) => {
           const nowIso = new Date().toISOString();
           console.log(`[zapi-send-message] Dedup reconciliation for conv=${resolvedConversationId}`);
 
-          // Upsert to messages (needs unique index on provider_message_id)
+          // Upsert to messages
           await supabaseAdmin.from("messages").upsert({
             conversation_id: resolvedConversationId,
             sender_type: isSystem ? "assistant" : "agent",
@@ -401,20 +448,14 @@ serve(async (req: Request) => {
             sent_at: nowIso,
           }, { onConflict: "provider_message_id" });
 
-          // Update conversation preview (without changing AI state if system)
+          // Update conversation (legacy logic - will be fixed in rewrite)
+          // For now, idempotency just updates the basic stats
           const updateData: any = {
             last_message: (content || "").trim() ? content.slice(0, 500) : (message_type !== "text" ? `[${message_type}]` : ""),
             last_message_type: message_type || "text",
             last_message_at: nowIso,
             chat_id: dbChatId,
           };
-
-          // Only human messages should disable AI
-          if (!isSystem) {
-            updateData.human_control = true;
-            updateData.ai_mode = "OFF";
-            updateData.ai_paused_until = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-          }
 
           await supabaseAdmin.from("conversations")
             .update(updateData)
@@ -443,7 +484,6 @@ serve(async (req: Request) => {
     const { data: outboxRow, error: outboxErr } = await supabaseAdmin
       .from("message_outbox")
       .upsert({
-
         idempotency_key,
         provider: "zapi",
         conversation_id: resolvedConversationId,
@@ -544,36 +584,69 @@ serve(async (req: Request) => {
         chat_id: dbChatId,  // ✅ FIX: Usa JID canônico (com @s.whatsapp.net)
       };
 
-      // ✅ FIX: Conditional state updates based on system/assignment
-      if (!isSystem) {
-        // ✅ FIX: Only pause AI when explicit takeover/assign, not on every message
-        const shouldAssign = (toBool(assign) || toBool(takeover)) && userId && userId !== "system";
+      // ✅ 1) Mensagens de sistema/IA: NUNCA alteram controle humano/AI mode
+      if (isSystem) {
+        // não mexe em assigned_to, human_control, ai_mode, ai_paused_until
+        console.log(`[zapi-send-message] 🤖 System message: preserving AI state`);
+      } else {
+        // ✅ Mensagem humana
+        const pauseUntilIso = new Date(Date.now() + 30 * 60 * 1000).toISOString();
 
-        if (shouldAssign) {
-          // Only pause AI when actually taking over
+        // Need to fetch fresh state to be safe if variable scopes are tricky
+        const { data: convState } = await supabaseAdmin
+          .from("conversations")
+          .select("assigned_to")
+          .eq("id", resolvedConversationId)
+          .single();
+
+        const assignedTo = convState?.assigned_to;
+
+        // A) takeover explícito
+        if (toBool(takeover)) {
+          console.log(`[zapi-send-message] 👤 Takeover request explicitly by ${currentUserId}`);
+
+          if (!currentUserId) {
+            return new Response(JSON.stringify({ error: "UNAUTHENTICATED_TAKEOVER" }), {
+              status: 401,
+              headers: { "Content-Type": "application/json" }
+            });
+          }
+
+          // Admin/Owner pode reassumir sempre
+          if (assignedTo && assignedTo !== currentUserId && !isPrivileged) {
+            return new Response(JSON.stringify({ error: "ALREADY_ASSIGNED" }), {
+              status: 409,
+              headers: { "Content-Type": "application/json" }
+            });
+          }
+
+          updateData.assigned_to = currentUserId;
+          updateData.assigned_at = nowIso;
+          updateData.assigned_by = currentUserId;
+
           updateData.human_control = true;
           updateData.ai_mode = "OFF";
-          updateData.ai_paused_until = new Date(Date.now() + 30 * 60 * 1000).toISOString(); // +30min pause
-
-          const { data: convState } = await supabaseAdmin
-            .from("conversations")
-            .select("assigned_to")
-            .eq("id", resolvedConversationId)
-            .single();
-
-          // Atribuir apenas se não tiver ninguém (ou se for o próprio usuário reafirmando)
-          if (!convState?.assigned_to || convState.assigned_to === userId) {
-            updateData.assigned_to = userId;
-            updateData.assigned_at = nowIso;
-            updateData.assigned_by = userId;
-            console.log(`[zapi-send-message] ✅ Assigning conversation to ${userId}`);
-          }
+          updateData.ai_paused_until = pauseUntilIso;
+          console.log(`[zapi-send-message] 👤 Takeover success for ${currentUserId}`);
         } else {
-          console.log(`[zapi-send-message] 👤 Human message without takeover - AI state preserved`);
+          // B) Mensagem manual no Inbox (sem assumir): pausa IA sem atribuir
+          if (!assignedTo) {
+            updateData.ai_paused_until = pauseUntilIso;
+            console.log(`[zapi-send-message] 👤 Manual message in Inbox: Pausing AI for 30m (no assign)`);
+
+            // ⚠️ Importante: NÃO setar human_control aqui pra não vazar pra “Minha Caixa”
+          } else {
+            // C) Mensagem em conversa atribuída
+            if (currentUserId && assignedTo !== currentUserId && !isPrivileged) {
+              // Opcional: Bloquear se não for o dono
+              // return new Response(JSON.stringify({ error: "NOT_ASSIGNED_TO_YOU" }), { status: 403, ... });
+            }
+
+            updateData.human_control = true;
+            updateData.ai_paused_until = pauseUntilIso;
+            console.log(`[zapi-send-message] 👤 Message in assigned conv: Extending pause`);
+          }
         }
-      } else {
-        console.log(`[zapi-send-message] 🤖 System message: preserving AI state`);
-        // ✅ System/AI messages NEVER change control state
       }
 
       const { error: convErr } = await supabaseAdmin

@@ -5,7 +5,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useNotificationSound } from '@/hooks/useNotificationSound';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { ConversationList } from '@/components/inbox/ConversationList';
+import { ConversationList, TabValue } from '@/components/inbox/ConversationList';
 import { ChatArea } from '@/components/inbox/ChatArea';
 import { useRealtimeMessages } from '@/hooks/useRealtimeMessages';
 import { ChatSkeleton } from '@/components/inbox/ChatSkeleton';
@@ -25,9 +25,14 @@ export default function InboxPage() {
   const [activeConvData, setActiveConvData] = useState<any>(null);
   const [agents, setAgents] = useState<{ id: string; name: string }[]>([]);
 
+  const [activeTab, setActiveTab] = useState<TabValue>('inbox');
+
   // Hook customizado para gerenciar a lista e realtime global
+  // ✅ Passes tab/userId for SQL-level filtering
   const { conversations, loading: loadingConversations, refetch: refetchConversations } = useRealtimeInbox({
-    onNewInboundMessage: playNotificationSound
+    onNewInboundMessage: playNotificationSound,
+    tab: activeTab,
+    userId: user?.id
   });
 
   // Hook para mensagens da conversa ativa
@@ -378,6 +383,8 @@ export default function InboxPage() {
               userId={user.id}
               onSelectConversation={handleSelectConversation}
               isMobile={isMobile}
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
             />
           )
         ) : (
@@ -389,6 +396,8 @@ export default function InboxPage() {
                 userId={user.id}
                 onSelectConversation={handleSelectConversation}
                 isMobile={isMobile}
+                activeTab={activeTab}
+                onTabChange={setActiveTab}
               />
             </Panel>
 

@@ -97,8 +97,24 @@ serve(async (req) => {
       ai_mode: conv.ai_mode,
       participant_role: participantState?.participants?.role_type,
       participant_name: participantState?.participants?.name,
-      has_participant: !!participantState?.participants
+      has_participant: !!participantState?.participants,
+      ai_paused_until: conv.ai_paused_until
     });
+
+    // ✅ FIX: Respect Option B (Manual Pause with AI_MODE=AUTO)
+    if (conv.ai_paused_until) {
+      const pausedUntil = new Date(conv.ai_paused_until).getTime();
+      if (!Number.isNaN(pausedUntil) && pausedUntil > Date.now()) {
+        console.log('[ai-maybe-reply] ⏸️ AI paused temporarily until', conv.ai_paused_until);
+        await supabase.from('ai_logs').insert({
+          conversation_id,
+          status: 'skipped',
+          reason: 'paused_temporarily',
+          model: 'ai-maybe-reply'
+        });
+        return new Response(JSON.stringify({ success: false, reason: 'AI Temporarily Paused' }));
+      }
+    }
 
     // ✅ FIX: Auto-reactivate AI when pause expires
     if (conv.ai_mode === 'OFF' && conv.ai_paused_until) {
@@ -287,26 +303,14 @@ serve(async (req) => {
     }
 
     const aiData = JSON.parse(aiText);
-    const text = (aiData?.text ?? "").toString().trim();
+    let text = (aiData?.text ?? "").toString().trim();
 
-    // ✅ FIX: Don't throw error on empty text - treat as intentional skip
+    // ✅ FIX: Don't throw error on empty text - use fallback if LLM fails
     if (!text) {
-      console.log("[ai-maybe-reply] No reply text. Skipping.", {
-        skipped: aiData?.skipped,
-        finish_reason: aiData?.finish_reason,
-        provider: aiData?.provider,
-        model: aiData?.model,
-      });
-
-      return new Response(JSON.stringify({
-        ok: true,
-        skipped: true,
-        reason: aiData?.skipped || aiData?.finish_reason || "empty_text",
-      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      console.warn('[ai-maybe-reply] IA retornou texto vazio ou null. Usando fallback.');
+      text = "Olá! Me conta rapidinho o que está acontecendo por aí?";
+      aiData.text = text;
     }
-
-    // Assign back for rest of code
-    aiData.text = text;
 
     // 6.5. DEDUPLICATION: Check if identical message was sent recently
     const { data: recentDuplicate } = await supabase

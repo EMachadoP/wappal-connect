@@ -28,7 +28,17 @@ interface ConversationListProps {
   isMobile?: boolean;
 }
 
-type TabValue = 'mine' | 'inbox' | 'resolved';
+export type TabValue = 'mine' | 'inbox' | 'resolved';
+
+interface ConversationListProps {
+  conversations: Conversation[];
+  activeConversationId: string | null;
+  userId: string;
+  onSelectConversation: (id: string) => void;
+  isMobile?: boolean;
+  activeTab: TabValue;
+  onTabChange: (tab: TabValue) => void;
+}
 
 export function ConversationList({
   conversations,
@@ -36,52 +46,23 @@ export function ConversationList({
   userId,
   onSelectConversation,
   isMobile = false,
+  activeTab,
+  onTabChange,
 }: ConversationListProps) {
   const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState<TabValue>('inbox');
   const [newMessageModalOpen, setNewMessageModalOpen] = useState(false);
 
-  console.log('[ConversationList] Total conversations:', conversations.length);
-  if (conversations.length > 0) {
-    console.table(conversations.map(t => ({
-      conversation_id: t.id,
-      contact_id: (t as any).contact?.id,
-      name: t.contact?.name,
-      last_message: t.last_message,
-      status: t.status
-    })));
-  }
+  // Filter mainly by search now, as the LIST is already filtered by SQL based on activeTab
+  const filteredConversations = conversations.filter((conv) => {
+    const contactName = conv.contact?.name || "Contato Desconhecido";
+    if (!contactName.toLowerCase().includes(search.toLowerCase())) return false;
 
-  const filteredConversations = conversations
-    .filter((conv) => {
-      const contactName = conv.contact?.name || "Contato Desconhecido"; // Fallback name
-      if (!contactName.toLowerCase().includes(search.toLowerCase())) return false;
+    // HIDE EMPTY SHELLS check (keep this for safety)
+    const hasHistory = conv.last_message_at || conv.status === 'resolved';
+    if (!hasHistory) return false;
 
-      // HIDE EMPTY SHELLS: Only show conversations that have been interacted with
-      // (either have a last_message_at timestamp or are explicitly resolved)
-      const hasHistory = conv.last_message_at || conv.status === 'resolved';
-      if (!hasHistory) return false;
-
-      switch (activeTab) {
-        case 'mine':
-          // Minhas: Apenas ABERTAS atribuídas a mim
-          return conv.status === 'open' && conv.assigned_to === userId;
-        case 'inbox':
-          // Entrada: Apenas ABERTAS SEM atribuição (fila)
-          return conv.status === 'open' && !conv.assigned_to;
-        case 'resolved':
-          // Resolvidos: Apenas RESOLVIDAS
-          return conv.status === 'resolved';
-        default:
-          return true;
-      }
-    });
-
-  const countByTab = {
-    mine: conversations.filter(c => c.status === 'open' && c.assigned_to === userId).length,
-    inbox: conversations.filter(c => c.status === 'open' && !c.assigned_to).length,
-    resolved: conversations.filter(c => c.status === 'resolved').length,
-  };
+    return true;
+  });
 
   return (
     <div className={`w-full border-r border-border flex flex-col bg-card h-full overflow-hidden`}>
@@ -115,11 +96,17 @@ export function ConversationList({
         onSelectConversation={onSelectConversation}
       />
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabValue)} className="shrink-0 border-b border-border">
+      <Tabs value={activeTab} onValueChange={(v) => onTabChange(v as TabValue)} className="shrink-0 border-b border-border">
         <TabsList className="w-full h-auto p-0 bg-transparent grid grid-cols-3">
-          <TabsTrigger value="mine" className="text-xs px-2 py-3 h-auto">Minhas ({countByTab.mine})</TabsTrigger>
-          <TabsTrigger value="inbox" className="text-xs px-2 py-3 h-auto">Entrada ({countByTab.inbox})</TabsTrigger>
-          <TabsTrigger value="resolved" className="text-xs px-2 py-3 h-auto">Resolvidos ({countByTab.resolved})</TabsTrigger>
+          <TabsTrigger value="mine" className="text-xs px-2 py-3 h-auto">
+            Minhas {activeTab === 'mine' && `(${filteredConversations.length})`}
+          </TabsTrigger>
+          <TabsTrigger value="inbox" className="text-xs px-2 py-3 h-auto">
+            Entrada {activeTab === 'inbox' && `(${filteredConversations.length})`}
+          </TabsTrigger>
+          <TabsTrigger value="resolved" className="text-xs px-2 py-3 h-auto">
+            Resolvidos {activeTab === 'resolved' && `(${filteredConversations.length})`}
+          </TabsTrigger>
         </TabsList>
       </Tabs>
 

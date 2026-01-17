@@ -14,15 +14,14 @@ function isOperationalIssue(text: string) {
   return /(câmera|camera|cftv|dvr|gravador|nvr|port[aã]o|motor|cerca|interfone|controle de acesso|catraca|fechadura|tv coletiva|antena|acesso remoto|sem imagem|sem sinal|travado|n[aã]o abre|n[aã]o fecha|parou|quebrado|defeito)/i.test(text);
 }
 
-// ✅ FIX: Extract apartment from "apt 1901" / "apto 1901" / "1901"
 function extractApartment(text: string): string | null {
   const t = (text || "").trim();
 
-  // "apto 1901" / "apt 1901" / "apartamento: 1901" / "unidade 1901"
-  const m1 = t.match(/(?:\bapto\b|\bapt\.?\b|\bapartamento\b|\bunidade\b)\s*[:\-]?\s*(\d{1,6}[A-Za-z]?)/i);
-  if (m1) return m1[1];
+  // “apto 1901”, “apt 1901”, “apartamento 1901”, “unidade 1901”
+  const m1 = t.match(/\b(apto|apt|apartamento|unidade)\s*(?:n[ºo]\s*)?(?:#\s*)?(\d{1,6}[A-Za-z]?)\b/i);
+  if (m1) return m1[2];
 
-  // Just "1901"
+  // se vier só “1901”
   const m2 = t.match(/^\s*(\d{1,6}[A-Za-z]?)\s*$/);
   if (m2) return m2[1];
 
@@ -31,6 +30,20 @@ function extractApartment(text: string): string | null {
 
 function looksLikeApartment(text: string) {
   return Boolean(extractApartment(text));
+}
+
+function extractRequesterName(text: string): string | null {
+  const t = (text || "").trim();
+
+  // “meu nome é X”, “sou X”
+  const m1 = t.match(/\b(meu nome é|sou)\s+([A-Za-zÀ-ÿ]{2,})(?:\s+([A-Za-zÀ-ÿ]{2,}))?/i);
+  if (m1) return [m1[2], m1[3]].filter(Boolean).join(" ").trim();
+
+  // “Luciana é apt 1901”
+  const m2 = t.match(/^\s*([A-Za-zÀ-ÿ]{2,})(?:\s+([A-Za-zÀ-ÿ]{2,}))?\s+(?:é|eh)\b/i);
+  if (m2) return [m2[1], m2[2]].filter(Boolean).join(" ").trim();
+
+  return null;
 }
 
 function buildSummaryFromRecentUserMessages(msgs: { role: string; content: string }[], max = 3) {
@@ -94,7 +107,75 @@ function normalizeForSearch(text: string): string {
     .replace(/\s+/g, ' ');
 }
 
-// ✅ NEW: Question variations to avoid robotic repetition
+function tokensForCondoSearch(text: string): string[] {
+  const norm = normalizeForSearch(text);
+  return norm.split(" ").map(w => w.trim()).filter(w => w.length > 2);
+}
+
+function scoreCondoCandidate(userTokens: string[], condoName: string): number {
+  const n = normalizeForSearch(condoName);
+  let hit = 0;
+  for (const tok of userTokens) if (n.includes(tok)) hit++;
+  const all = (userTokens.length > 0 && hit === userTokens.length);
+  return (hit * 10) + (all ? 100 : 0);
+}
+
+async function resolveCondoByTokens(supabase: any, userText: string) {
+  const tokens = tokensForCondoSearch(userText);
+  if (!tokens.length) return { kind: "none" as const };
+
+  const patterns = tokens.slice(0, 5).map(t => `%${t}%`);
+
+  const { data: candidates } = await supabase
+    .from("condominiums")
+    .select("id, name")
+    .or(patterns.map(p => `name.ilike.${p}`).join(","))
+    .limit(10);
+
+  const list = (candidates || []).map((c: any) => ({
+    id: c.id,
+    name: c.name,
+    score: scoreCondoCandidate(tokens, c.name),
+  })).sort((a: any, b: any) => b.score - a.score);
+
+  if (!list.length) return { kind: "not_found" as const };
+
+  const best = list[0];
+  const second = list[1];
+
+  const bestHasAll = best.score >= 100;
+  const clearWin = !second || (best.score - second.score) >= 50;
+
+  if (bestHasAll && clearWin) return { kind: "matched" as const, condo: best };
+
+  return { kind: "ambiguous" as const, options: list.slice(0, 3) };
+}
+
+function pickOptionIndex(text: string): number | null {
+  const t = (text || "").toLowerCase().trim();
+  if (/^\d+$/.test(t)) {
+    const n = parseInt(t, 10);
+    if (n >= 1 && n <= 3) return n - 1;
+  }
+  if (/\bprimeir[oa]\b/.test(t)) return 0;
+  if (/\bsegund[oa]\b/.test(t)) return 1;
+  if (/\bterceir[oa]\b/.test(t)) return 2;
+  return null;
+}
+
+function pickByHash(id: string, arr: string[]) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = ((h << 5) - h) + id.charCodeAt(i);
+  return arr[Math.abs(h) % arr.length];
+}
+
+function fallbackQuestionForPending(pendingField: string | null) {
+  if (pendingField === "condominium") return "Me confirma o nome do condomínio, por favor?";
+  if (pendingField === "apartment") return "Me confirma o número do apartamento/unidade, por favor?";
+  if (pendingField === "requester_name") return "Me confirma seu nome, por favor?";
+  return "Me conta rapidinho o que está acontecendo por aí?";
+}
+
 const CONDO_QUESTIONS = [
   "Para que eu possa abrir o chamado corretamente, poderia me confirmar qual é o seu condomínio?",
   "Pra eu registrar certinho, qual é o nome do seu condomínio?",
@@ -445,122 +526,129 @@ serve(async (req) => {
     // --- TIER 4: DETERMINISTIC (Bulletproof Context-Aware) ---
     const { data: convData } = await supabase
       .from('conversations')
-      .select('active_condominium_id')
+      .select('active_condominium_id, pending_field, pending_payload')
       .eq('id', conversationId)
       .maybeSingle();
 
+    const pendingField = (convData?.pending_field ?? null) as string | null;
+    const pendingPayload = (convData?.pending_payload ?? {}) as any;
     const hasIdentifiedCondo = Boolean(convData?.active_condominium_id);
 
     const lastIssueMsg = [...messagesNoSystem].reverse().find((m: any) => m.role === 'user' && isOperationalIssue(m.content));
     const hasOperationalContext = isOperationalIssue(recentText);
 
-    // ✅ FIX: Use extractApartment for better parsing of "apt 1901"
-    const aptCandidate = [...messagesNoSystem]
-      .reverse()
-      .map((m: any) => (m.role === "user" ? extractApartment(m.content) : null))
-      .find(Boolean) || null;
+    // 1) sempre tentar extrair “nome/apto” do texto atual (mesmo sem pending)
+    const autoApt = extractApartment(lastUserMsgText);
+    const autoName = extractRequesterName(lastUserMsgText);
 
-    const isProvidingApartment = Boolean(extractApartment(lastUserMsgText)) && hasOperationalContext;
-    const needsApartment = /(interfone|tv|controle|apartamento|apto|unidade)/i.test(recentText);
-    const canOpenNow = hasIdentifiedCondo && hasOperationalContext && (!needsApartment || Boolean(aptCandidate));
+    if (conversationId && (autoApt || autoName)) {
+      const patch: any = { pending_payload: { ...pendingPayload } };
+      if (autoApt) patch.pending_payload.apartment = autoApt;
+      if (autoName) patch.pending_payload.requester_name = autoName;
 
-    let deterministicOverride: DeterministicOverride | null = null;
+      await supabase.from("conversations").update(patch).eq("id", conversationId);
+    }
 
-    if (!hasIdentifiedCondo && hasOperationalContext && conversationId) {
-      // ✅ SMART CONDO DETECTION: Search history for condo name, not just when assistant asked
-      const condoCandidateText = findRecentCondoCandidate(messagesNoSystem);
-      const userProvidedCondoName = Boolean(condoCandidateText);
-      const condoText = condoCandidateText || lastUserMsgText;
+    // 2) se estava pendente de algo, interpretar resposta e atualizar estado
+    if (conversationId && pendingField) {
+      if (pendingField === "condominium") {
+        // se havia opções salvas, aceitar “1/2/3”, “primeiro”, etc.
+        const options = pendingPayload?.condo_options as any[] | undefined;
+        const pickIdx = options?.length ? pickOptionIndex(lastUserMsgText) : null;
+        if (options?.length && pickIdx != null && options[pickIdx]) {
+          const chosen = options[pickIdx];
+          await supabase.from("conversations").update({
+            active_condominium_id: chosen.id,
+            pending_field: null,
+            pending_payload: { ...pendingPayload, condo_options: null },
+            pending_set_at: null
+          }).eq("id", conversationId);
+        } else {
+          const r = await resolveCondoByTokens(supabase, lastUserMsgText);
 
-      if (userProvidedCondoName) {
-        console.log(`[TICKET] User appears to have provided condo name: "${condoText}"`);
-
-        // ✅ FIX: Use AND matching (all words must be present) instead of OR
-        const searchTerm = normalizeForSearch(condoText);
-        const words = searchTerm.split(" ").filter(w => w.length > 2);
-
-        if (words.length > 0) {
-          // Use the longest word as seed for initial search to reduce noise
-          const seed = words.slice().sort((a, b) => b.length - a.length)[0];
-
-          const { data: candidates } = await supabase
-            .from("condominiums")
-            .select("id, name")
-            .ilike("name", `%${seed}%`)
-            .limit(30);
-
-          // ✅ AND filter: must contain ALL words
-          const matchingCondos = (candidates || []).filter((c: any) => {
-            const n = normalizeForSearch(c.name || "");
-            return words.every(w => n.includes(w));
-          }).slice(0, 5);
-
-          if (matchingCondos && matchingCondos.length === 1) {
-            // Single match - auto-link and proceed
-            const matchedCondo = matchingCondos[0];
-            console.log(`[TICKET] Auto-linking to condo: ${matchedCondo.name} (${matchedCondo.id})`);
-
-            await supabase.from('conversations')
-              .update({ active_condominium_id: matchedCondo.id })
-              .eq('id', conversationId);
-
-            // Now we have condo, let flow continue to check if can open ticket
-            // (will be handled in the next block)
-          } else if (matchingCondos && matchingCondos.length > 1) {
-            // Multiple matches - ask for clarification
-            const options = matchingCondos.slice(0, 3).map((c: any) => c.name);
-            console.log(`[TICKET] Multiple condo matches found: ${options.join(', ')}`);
-            deterministicOverride = {
-              kind: 'condo_clarification',
-              options: options
-            };
-          } else {
-            // No matches - confirm what they said
-            console.log(`[TICKET] No condo match for: "${condoText}"`);
-            deterministicOverride = { kind: 'condo_not_found', condoName: condoText };
+          if (r.kind === "matched") {
+            await supabase.from("conversations").update({
+              active_condominium_id: r.condo.id,
+              pending_field: null,
+              pending_payload: { ...pendingPayload, condo_options: null },
+              pending_set_at: null
+            }).eq("id", conversationId);
+          } else if (r.kind === "ambiguous") {
+            await supabase.from("conversations").update({
+              pending_payload: { ...pendingPayload, condo_options: r.options },
+              pending_set_at: new Date().toISOString()
+            }).eq("id", conversationId);
+          } else if (r.kind === "not_found") {
+            await supabase.from("conversations").update({
+              pending_payload: { ...pendingPayload, condo_raw: lastUserMsgText },
+              pending_set_at: new Date().toISOString()
+            }).eq("id", conversationId);
           }
         }
-      } else {
-        // First time asking for condo
-        console.log('[TICKET] Deterministic block: Missing condominium identification.');
-        deterministicOverride = { kind: 'need_condo' };
+      }
+
+      if (pendingField === "apartment") {
+        const apt = extractApartment(lastUserMsgText);
+        if (apt) {
+          await supabase.from("conversations").update({
+            pending_field: null,
+            pending_payload: { ...pendingPayload, apartment: apt },
+            pending_set_at: null
+          }).eq("id", conversationId);
+        }
+      }
+
+      if (pendingField === "requester_name") {
+        const nm = extractRequesterName(lastUserMsgText);
+        if (nm) {
+          await supabase.from("conversations").update({
+            pending_field: null,
+            pending_payload: { ...pendingPayload, requester_name: nm },
+            pending_set_at: null
+          }).eq("id", conversationId);
+        }
       }
     }
 
-    // Re-check if we just linked a condo
-    const { data: convDataRefresh } = await supabase
-      .from('conversations')
-      .select('active_condominium_id')
-      .eq('id', conversationId)
-      .maybeSingle();
-    const hasIdentifiedCondoNow = Boolean(convDataRefresh?.active_condominium_id);
-    const canOpenNowRefresh = hasIdentifiedCondoNow && hasOperationalContext && (!needsApartment || Boolean(aptCandidate));
+    // Recalcular contexto para as próximas verificações
+    const aptCandidate = [...messagesNoSystem]
+      .reverse()
+      .map((m: any) => (m.role === "user" ? extractApartment(m.content) : (m.role === "system" && m.payload?.apartment ? m.payload.apartment : null)))
+      .find(Boolean) || pendingPayload?.apartment || null;
 
-    // ✅ FIX: isProvidingApartment must also have condo identified
-    const canActuallyOpen = (canOpenNow || canOpenNowRefresh) && !deterministicOverride;
-    const isProvidingApartmentWithCondo = isProvidingApartment && hasIdentifiedCondoNow && !deterministicOverride;
+    const needsApartment = /(interfone|tv|controle|apartamento|apto|unidade)/i.test(recentText);
+
+    const canOpenNow = hasIdentifiedCondo && hasOperationalContext && (!needsApartment || Boolean(aptCandidate));
+
+    // ✅ FIX: re-declare for downstream uses
+    const isProvidingApartment = Boolean(extractApartment(lastUserMsgText)) && hasOperationalContext;
+    const isProvidingApartmentWithCondo = isProvidingApartment && hasIdentifiedCondo;
+    const canActuallyOpen = canOpenNow;
 
     if (conversationId && (canActuallyOpen || isProvidingApartmentWithCondo)) {
-      if (needsApartment && !aptCandidate) {
-        console.log('[TICKET] Deterministic block: Need apartment for issue:', lastIssueMsg?.content);
-        deterministicOverride = { kind: 'need_apartment' };
-      }
-
       try {
         const ticketData = await executeCreateProtocol(
           supabase,
           supabaseUrl,
           supabaseServiceKey,
           conversationId,
-          participant_id,  // ✅ FIX: Added missing parameter
+          participant_id,
           {
             summary: (lastIssueMsg?.content || lastUserMsgText).slice(0, 500),
             priority: /travado|urgente|urgência|emergência/i.test(recentText) ? 'critical' : 'normal',
-            apartment: aptCandidate
+            apartment: aptCandidate,
+            requester_name: pendingPayload?.requester_name || undefined
           }
         );
 
         const protocolCode = ticketData.protocol?.protocol_code || ticketData.protocol_code;
+
+        // Limpar estados pendentes após sucesso
+        await supabase.from("conversations").update({
+          pending_field: null,
+          pending_payload: {},
+          pending_set_at: null
+        }).eq("id", conversationId);
 
         // Protocol confirmation variations
         const CONFIRMS = [
@@ -588,15 +676,39 @@ serve(async (req) => {
 
     // --- TIER 5: IA (LLM) ---
 
-    // Build override instruction if deterministic guardrail triggered
-    const overrideInstruction = deterministicOverride ? buildOverrideInstruction(deterministicOverride) : '';
+    // 5.1 Recarregar estado atualizado para o Hint
+    const { data: stateNow } = await supabase
+      .from("conversations")
+      .select("pending_field, pending_payload, active_condominium_id")
+      .eq("id", conversationId)
+      .maybeSingle();
+
+    const pf = (stateNow?.pending_field ?? null) as string | null;
+    const pp = (stateNow?.pending_payload ?? {}) as any;
+
+    const stateHint =
+      pf === "condominium" && pp?.condo_options?.length
+        ? `PENDENTE: confirmar condomínio. Opções encontradas: ${pp.condo_options.map((o: any) => o.name).join(" | ")}. Peça para o cliente escolher uma.`
+        : pf === "condominium"
+          ? `PENDENTE: confirmar o nome do condomínio (ainda não identificado).`
+          : pf === "apartment"
+            ? `PENDENTE: confirmar o número do apartamento/unidade.`
+            : pf === "requester_name"
+              ? `PENDENTE: confirmar o nome do solicitante.`
+              : `SEM PENDÊNCIAS.`;
 
     // Final Prompt Reinforcement
     const cleanPrompt = `${basePrompt}
 
-Reforce as regras críticas do atendimento (tom humano, sem repetição, 1 pergunta por vez, sem prometer prazo).
-Quando faltar dado obrigatório para protocolo, pergunte apenas o que falta e aguarde.
-${overrideInstruction ? `\n[INSTRUÇÕES DE CONTROLE]\n${overrideInstruction}\n` : ''}`;
+[ESTADO INTERNO - NÃO MOSTRAR AO CLIENTE]
+${stateHint}
+
+REGRAS DE EXECUÇÃO:
+- Se existir PENDENTE, faça apenas 1 pergunta curta para resolver. Não faça checklists longos.
+- Não repita perguntas já respondidas no histórico.
+- Só chame create_protocol quando tiver: nome do condomínio + descrição clara + (apartamento quando for unidade) + nome do solicitante.
+- Responda sempre em português natural, sem blocos estruturados, sem tom robótico.`;
+
 
     const { data: providerConfig } = await supabase
       .from('ai_provider_configs')
@@ -639,9 +751,8 @@ ${overrideInstruction ? `\n[INSTRUÇÕES DE CONTROLE]\n${overrideInstruction}\n`
           body: JSON.stringify({
             model: provider.model,
             messages: [{ role: 'system', content: cleanPrompt }, ...messagesNoSystem],
-            // ✅ If deterministicOverride is set, disable tools (text-only response)
-            tools: deterministicOverride ? [] : protocolTool,
-            tool_choice: deterministicOverride ? 'none' : 'auto',
+            tools: pf ? [] : protocolTool,
+            tool_choice: pf ? 'none' : 'auto',
             temperature: Number(provider.temperature) || 0.7
           })
         }
@@ -657,9 +768,8 @@ ${overrideInstruction ? `\n[INSTRUÇÕES DE CONTROLE]\n${overrideInstruction}\n`
             role: m.role === 'assistant' ? 'model' : 'user',
             parts: [{ text: m.content }]
           })),
-          // ✅ If deterministicOverride is set, disable tools (text-only response)
-          ...(deterministicOverride ? {} : { tools: [{ functionDeclarations: [protocolTool[0].function] }] }),
-          toolConfig: { functionCallingConfig: { mode: deterministicOverride ? "NONE" : "AUTO" } },
+          ...(pf ? {} : { tools: [{ functionDeclarations: [protocolTool[0].function] }] }),
+          toolConfig: { functionCallingConfig: { mode: pf ? "NONE" : "AUTO" } },
           generationConfig: { temperature: Number(provider.temperature) || 0.7 }
         })
       });
@@ -699,15 +809,16 @@ ${overrideInstruction ? `\n[INSTRUÇÕES DE CONTROLE]\n${overrideInstruction}\n`
 
     // --- FALLBACK INTENT DETECTION ---
     const aiSaidWillRegister = /vou registrar|vou abrir|vou encaminhar|registrei/i.test(generatedText);
-    // ✅ Don't trigger fallback when in guardrail mode (deterministicOverride)
-    if (!deterministicOverride && !functionCall && aiSaidWillRegister) {
+    // ✅ Don't trigger fallback when in pending state
+    if (!pf && !functionCall && aiSaidWillRegister) {
       console.warn('FALLBACK: Intent detected. Forcing protocol creation...');
       functionCall = {
         name: 'create_protocol',
         args: {
           summary: (lastIssueMsg?.content || buildSummaryFromRecentUserMessages(messagesNoSystem)).slice(0, 500),
           priority: /travado|urgente|urgência|emergência/i.test(recentText) ? 'critical' : 'normal',
-          apartment: aptCandidate
+          apartment: aptCandidate,
+          requester_name: pp?.requester_name || undefined
         }
       };
     }
@@ -731,19 +842,10 @@ ${overrideInstruction ? `\n[INSTRUÇÕES DE CONTROLE]\n${overrideInstruction}\n`
       }
     }
 
-    // ✅ FALLBACK: If LLM returned empty text and we have a deterministicOverride, use fallback text
-    if (!generatedText.trim() && deterministicOverride) {
-      console.warn(`[AI] LLM returned empty text with override=${deterministicOverride.kind}, using fallback`);
-      if (deterministicOverride.kind === 'need_condo') {
-        generatedText = getCondoQuestion(conversationId || '');
-      } else if (deterministicOverride.kind === 'need_apartment') {
-        generatedText = "Entendido. Para que eu possa registrar certinho, poderia me confirmar o número do seu apartamento?";
-      } else if (deterministicOverride.kind === 'condo_clarification') {
-        const opts = deterministicOverride.options.slice(0, 3).join(', ');
-        generatedText = `Encontrei algumas opções: ${opts}. Qual desses é o seu condomínio?`;
-      } else if (deterministicOverride.kind === 'condo_not_found') {
-        generatedText = `Perfeito — é o condomínio ${deterministicOverride.condoName}, certo? Me confirma por favor.`;
-      }
+    // ✅ FALLBACK: If LLM returned empty text and we have a pending field, use fallback text
+    if (!generatedText.trim()) {
+      console.warn(`[AI] LLM returned empty text, pf=${pf}. Using fallback.`);
+      generatedText = fallbackQuestionForPending(pf);
     }
 
     return new Response(JSON.stringify({
