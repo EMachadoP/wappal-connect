@@ -147,7 +147,8 @@ const stableKey = (obj: any) => {
 };
 
 serve(async (req: Request) => {
-  console.log('[zapi-send-message] ▶️ Request received');
+  const reqId = crypto.randomUUID().slice(0, 8);
+  console.log(`[zapi-send-message] HIT reqId=${reqId} method=${req.method}`);
 
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -161,8 +162,14 @@ serve(async (req: Request) => {
 
   try {
     const authHeader = req.headers.get("Authorization");
-    // ✅ FIX: Validação exata do service key (não usar includes())
-    const isServiceKey = authHeader?.trim() === `Bearer ${supabaseServiceKey}`;
+    const apiKeyHeader = req.headers.get("apikey");
+
+    // ✅ FIX: Accept BOTH Authorization Bearer AND apikey header for internal function calls
+    const isServiceKey =
+      authHeader?.trim() === `Bearer ${supabaseServiceKey}` ||
+      apiKeyHeader?.trim() === supabaseServiceKey;
+
+    console.log(`[zapi-send-message] reqId=${reqId} auth: hasAuth=${!!authHeader} hasApiKey=${!!apiKeyHeader} isServiceKey=${isServiceKey}`);
 
     if (!isServiceKey) {
       if (!authHeader) throw new Error("Não autorizado: Sessão ausente");

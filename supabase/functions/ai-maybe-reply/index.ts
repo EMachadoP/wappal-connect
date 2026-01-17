@@ -307,6 +307,8 @@ serve(async (req) => {
 
     // ✅ FIX: Validate Z-API response
     const zapiText = await zapiResponse.text();
+    console.log(`[ai-maybe-reply] zapi-send-message response: status=${zapiResponse.status} body=${zapiText.slice(0, 500)}`);
+
     if (!zapiResponse.ok) {
       console.error('[ai-maybe-reply] zapi-send-message FAILED:', zapiResponse.status, zapiText);
       throw new Error(`zapi-send-message failed: ${zapiResponse.status}`);
