@@ -100,6 +100,24 @@ serve(async (req) => {
       has_participant: !!participantState?.participants
     });
 
+    // ✅ FIX: Auto-reactivate AI when pause expires
+    if (conv.ai_mode === 'OFF' && conv.ai_paused_until) {
+      const pausedUntil = new Date(conv.ai_paused_until).getTime();
+      if (!Number.isNaN(pausedUntil) && Date.now() >= pausedUntil) {
+        console.log("[ai-maybe-reply] Pause expired. Re-enabling AI.", { conversation_id });
+        await supabase.from("conversations").update({
+          ai_mode: "AUTO",
+          human_control: false,
+          ai_paused_until: null,
+        }).eq("id", conversation_id);
+
+        // Update local ref for rest of this invocation
+        conv.ai_mode = "AUTO";
+        conv.human_control = false;
+        conv.ai_paused_until = null;
+      }
+    }
+
     if (conv.ai_mode === 'OFF') {
       console.log('[ai-maybe-reply] IA está desligada (OFF) para esta conversa.');
       await supabase.from('ai_logs').insert({
@@ -269,7 +287,26 @@ serve(async (req) => {
     }
 
     const aiData = JSON.parse(aiText);
-    if (!aiData.text) throw new Error('IA não gerou texto');
+    const text = (aiData?.text ?? "").toString().trim();
+
+    // ✅ FIX: Don't throw error on empty text - treat as intentional skip
+    if (!text) {
+      console.log("[ai-maybe-reply] No reply text. Skipping.", {
+        skipped: aiData?.skipped,
+        finish_reason: aiData?.finish_reason,
+        provider: aiData?.provider,
+        model: aiData?.model,
+      });
+
+      return new Response(JSON.stringify({
+        ok: true,
+        skipped: true,
+        reason: aiData?.skipped || aiData?.finish_reason || "empty_text",
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // Assign back for rest of code
+    aiData.text = text;
 
     // 6.5. DEDUPLICATION: Check if identical message was sent recently
     const { data: recentDuplicate } = await supabase

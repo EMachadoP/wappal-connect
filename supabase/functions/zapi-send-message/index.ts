@@ -546,16 +546,15 @@ serve(async (req: Request) => {
 
       // ✅ FIX: Conditional state updates based on system/assignment
       if (!isSystem) {
-        // ✅ Sempre que humano envia, desliga IA (regra simples e previsível)
-        updateData.human_control = true;
-        updateData.ai_mode = "OFF";
-        updateData.ai_paused_until = new Date(Date.now() + 30 * 60 * 1000).toISOString(); // +30min pause
-
-        // ✅ Assignment só se o frontend pedir explicitamente (ou takeover legacy)
-        // Se assign=true OU takeover=true, tentamos atribuir
+        // ✅ FIX: Only pause AI when explicit takeover/assign, not on every message
         const shouldAssign = (toBool(assign) || toBool(takeover)) && userId && userId !== "system";
 
         if (shouldAssign) {
+          // Only pause AI when actually taking over
+          updateData.human_control = true;
+          updateData.ai_mode = "OFF";
+          updateData.ai_paused_until = new Date(Date.now() + 30 * 60 * 1000).toISOString(); // +30min pause
+
           const { data: convState } = await supabaseAdmin
             .from("conversations")
             .select("assigned_to")
@@ -569,6 +568,8 @@ serve(async (req: Request) => {
             updateData.assigned_by = userId;
             console.log(`[zapi-send-message] ✅ Assigning conversation to ${userId}`);
           }
+        } else {
+          console.log(`[zapi-send-message] 👤 Human message without takeover - AI state preserved`);
         }
       } else {
         console.log(`[zapi-send-message] 🤖 System message: preserving AI state`);
