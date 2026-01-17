@@ -216,6 +216,7 @@ serve(async (req: Request) => {
     console.log(`[zapi-send-message] 📋 Input: conv=${conversation_id} isSystem=${isSystem} content="${(content || '').slice(0, 50)}..."`);
 
     // idempotency_key (recomendado sempre mandar)
+    // ✅ FIX: Include timestamp to prevent false duplicates for similar messages
     const idempotency_key: string =
       json.idempotency_key ||
       stableKey({
@@ -225,6 +226,7 @@ serve(async (req: Request) => {
         message_type: message_type || "text",
         media_url: media_url || null,
         senderName: overrideSenderName || senderName,
+        ts: Date.now(),  // ✅ Make each call unique
       });
 
     if (inputRecipient && !chatId) chatId = inputRecipient;
