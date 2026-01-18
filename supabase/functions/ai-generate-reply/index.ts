@@ -550,15 +550,48 @@ serve(async (req) => {
           }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
 
-        // generic loop prevention: if it failed twice, maybe ask for a brief description again
+        // ✅ FIX: Prevent infinite retry loop - after 2 attempts, force switch to condominium_name
+        const retryCount = (payload?.retry_count || 0) + 1;
+
+        if (retryCount >= 2) {
+          console.log(`[STATE] retry_protocol failed ${retryCount} times. Forcing switch to condominium_name.`);
+          await setPending(conversationId, 'condominium_name', supabase, {
+            ...payload,
+            last_summary: newSummary || summaryFromPayload,
+            retry_count: 0, // Reset counter
+          });
+          return new Response(JSON.stringify({
+            text: "Vamos tentar de outro jeito. Para registrar seu chamado, preciso saber: qual é o nome do seu condomínio?",
+            finish_reason: 'FORCE_SWITCH_TO_CONDO',
+            provider: 'state-machine',
+            model: 'deterministic'
+          }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+
+        // ✅ First retry with message variation (more human)
+        const RETRY_MESSAGES = [
+          "Desculpe, tive um problema técnico aqui. Pode repetir qual é o chamado que você precisa abrir?",
+          "Ops, deu um erro no sistema. Me confirma de novo o problema, por favor?",
+          "Perdão, tive uma falha técnica. Você pode me dizer novamente qual é a situação?",
+        ];
+
+        // Deterministic variation based on conversation_id
+        let hash = 0;
+        for (let i = 0; i < conversationId.length; i++) {
+          hash = ((hash << 5) - hash) + conversationId.charCodeAt(i);
+          hash |= 0;
+        }
+        const retryMessage = RETRY_MESSAGES[Math.abs(hash + retryCount) % RETRY_MESSAGES.length];
+
         await setPending(conversationId, 'retry_protocol', supabase, {
           ...payload,
           last_summary: newSummary || summaryFromPayload,
           last_error: String(e.message || e).slice(0, 500),
+          retry_count: retryCount,
         });
 
         return new Response(JSON.stringify({
-          text: "Sinto muito, tive uma instabilidade técnica persistente agora. Você poderia me descrever o problema em poucas palavras uma última vez?",
+          text: retryMessage,
           finish_reason: 'RETRY_PROTOCOL_STILL_FAILING',
           provider: 'state-machine',
           model: 'deterministic'
