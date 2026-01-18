@@ -66,7 +66,7 @@ export function CreateTaskModal({
             const { data } = await supabase
                 .from('profiles')
                 .select('id, name')
-                .eq('status', 'active')
+                .eq('is_active', true)  // ✅ FIX: Use correct column name
                 .order('name');
 
             if (data) setProfiles(data);
