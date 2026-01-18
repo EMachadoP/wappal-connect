@@ -53,8 +53,8 @@ export function useRealtimeInbox({ onNewInboundMessage, tab = 'inbox', userId }:
       if (userId) query = query.eq('status', 'open').eq('assigned_to', userId);
       else query = query.eq('status', 'open').eq('assigned_to', '__MISSING_USER__'); // evita vazar tudo
     } else if (tab === 'inbox') {
-      // ✅ ENTRADA = tudo aberto (atribuído ou não)
-      query = query.eq('status', 'open');
+      // ✅ ENTRADA = apenas conversas NÃO atribuídas
+      query = query.eq('status', 'open').is('assigned_to', null);
     } else if (tab === 'resolved') {
       query = query.eq('status', 'resolved');
     }
