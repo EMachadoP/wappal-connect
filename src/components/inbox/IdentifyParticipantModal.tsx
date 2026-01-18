@@ -45,20 +45,21 @@ interface IdentifyParticipantModalProps {
 }
 
 const ROLE_TYPES = [
+  { value: 'administrador', label: 'Administrador' },
+  { value: 'cliente', label: 'Cliente' },
+  { value: 'conselheiro', label: 'Conselheiro' },
+  { value: 'fornecedor', label: 'Fornecedor' },
+  { value: 'funcionario', label: 'Funcionário' },
+  { value: 'gerente_predio', label: 'Gerente de Prédio' },
+  { value: 'morador', label: 'Morador' },
+  { value: 'outro', label: 'Outro' },
+  { value: 'porteiro', label: 'Porteiro' },
+  { value: 'prestador', label: 'Prestador de Serviço' },
   { value: 'sindico', label: 'Síndico' },
   { value: 'subsindico', label: 'Subsíndico' },
-  { value: 'porteiro', label: 'Porteiro' },
-  { value: 'zelador', label: 'Zelador' },
-  { value: 'morador', label: 'Morador' },
-  { value: 'administrador', label: 'Administrador' },
-  { value: 'conselheiro', label: 'Conselheiro' },
-  { value: 'funcionario', label: 'Funcionário' },
   { value: 'supervisor_condominial', label: 'Supervisor Condominial' },
   { value: 'visitante', label: 'Visitante' },
-  { value: 'prestador', label: 'Prestador de Serviço' },
-  { value: 'fornecedor', label: 'Fornecedor' },
-  { value: 'cliente', label: 'Cliente' },
-  { value: 'outro', label: 'Outro' },
+  { value: 'zelador', label: 'Zelador' },
 ];
 
 export function IdentifyParticipantModal({

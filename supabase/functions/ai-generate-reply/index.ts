@@ -727,6 +727,37 @@ serve(async (req) => {
     const pendingPayload = (convData?.pending_payload ?? {}) as any;
     let hasIdentifiedCondo = Boolean(convData?.active_condominium_id);
 
+    // ✅ AUTO-LINK: Use contact's registered condominium for single-building roles
+    if (!hasIdentifiedCondo && conversationId) {
+      const SINGLE_CONDO_ROLES = [
+        'sindico', 'subsindico', 'zelador', 'morador',
+        'porteiro', 'conselheiro', 'gerente_predio'
+      ];
+
+      // Get contact info with entity via participants
+      const { data: participant } = await supabase
+        .from('participants')
+        .select('role_type, entity_id, entities(name)')
+        .eq('contact_id', contact.id)
+        .eq('is_primary', true)
+        .maybeSingle();
+
+      if (participant && participant.entity_id) {
+        const role = String(participant.role_type || '').toLowerCase();
+
+        if (SINGLE_CONDO_ROLES.includes(role)) {
+          console.log(`[AUTO-LINK] Role "${role}" → auto-using condominium ${participant.entity_id}`);
+
+          await supabase.from('conversations').update({
+            active_condominium_id: participant.entity_id,
+            active_condominium_confidence: 1.0
+          }).eq('id', conversationId);
+
+          hasIdentifiedCondo = true;
+        }
+      }
+    }
+
     const lastIssueMsg = [...messagesNoSystem].reverse().find((m: any) => m.role === 'user' && isOperationalIssue(m.content));
     const hasOperationalContext = isOperationalIssue(recentText);
 
