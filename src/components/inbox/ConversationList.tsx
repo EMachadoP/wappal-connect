@@ -28,7 +28,7 @@ interface ConversationListProps {
   isMobile?: boolean;
 }
 
-export type TabValue = 'mine' | 'inbox' | 'resolved';
+export type TabValue = 'mine' | 'inbox' | 'resolved' | 'all';
 
 interface ConversationListProps {
   conversations: Conversation[];
@@ -97,7 +97,7 @@ export function ConversationList({
       />
 
       <Tabs value={activeTab} onValueChange={(v) => onTabChange(v as TabValue)} className="shrink-0 border-b border-border">
-        <TabsList className="w-full h-auto p-0 bg-transparent grid grid-cols-3">
+        <TabsList className="w-full h-auto p-0 bg-transparent grid grid-cols-4">
           <TabsTrigger value="mine" className="text-xs px-2 py-3 h-auto">
             Minhas {activeTab === 'mine' && `(${filteredConversations.length})`}
           </TabsTrigger>
@@ -106,6 +106,9 @@ export function ConversationList({
           </TabsTrigger>
           <TabsTrigger value="resolved" className="text-xs px-2 py-3 h-auto">
             Resolvidos {activeTab === 'resolved' && `(${filteredConversations.length})`}
+          </TabsTrigger>
+          <TabsTrigger value="all" className="text-xs px-2 py-3 h-auto">
+            Todas {activeTab === 'all' && `(${filteredConversations.length})`}
           </TabsTrigger>
         </TabsList>
       </Tabs>

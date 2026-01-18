@@ -761,6 +761,17 @@ serve(async (req) => {
       }
 
       if (pendingField === "apartment") {
+        // ✅ SAFETY FIX: If we are asking for apartment but somehow lost the Condo ID, go back!
+        if (!hasIdentifiedCondo) {
+          await setPending(conversationId, 'condominium_name', supabase, pendingPayload);
+          return new Response(JSON.stringify({
+            text: "Perdão, antes de verificarmos a unidade, qual é o nome do condomínio?",
+            finish_reason: 'BACKTRACK_TO_CONDO',
+            provider: 'state-machine',
+            model: 'deterministic'
+          }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+
         const apt = extractApartment(lastUserMsgText);
         if (apt) {
           await supabase.from("conversations").update({
