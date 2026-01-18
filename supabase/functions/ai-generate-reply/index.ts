@@ -1063,6 +1063,27 @@ REGRAS DE EXECUÇÃO:
       generatedText = fallbackQuestionForPending(pf);
     }
 
+    // ✅ ANTI-LOOP: Don't send the same AI message again within 10 minutes
+    const norm = (s?: string | null) => (s ?? "").trim();
+
+    const { data: lastAiOut } = await supabase
+      .from("messages")
+      .select("content, sent_at")
+      .eq("conversation_id", conversationId)
+      .eq("direction", "outbound")
+      .eq("sender_type", "assistant")
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (lastAiOut && norm(lastAiOut.content) === norm(generatedText)) {
+      const ms = Date.now() - new Date(lastAiOut.sent_at).getTime();
+      if (ms < 10 * 60 * 1000) {
+        console.log("[AI] Skipping duplicate assistant message (anti-loop).");
+        return new Response(JSON.stringify({ text: null, skipped: "duplicate_ai_message" }), { headers: corsHeaders });
+      }
+    }
+
     return new Response(JSON.stringify({
       text: generatedText,
       provider: provider.provider,

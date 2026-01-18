@@ -28,7 +28,7 @@ interface ConversationListProps {
   isMobile?: boolean;
 }
 
-export type TabValue = 'mine' | 'inbox' | 'resolved' | 'all' | 'others';
+export type TabValue = 'inbox' | 'mine' | 'resolved';
 
 interface ConversationListProps {
   conversations: Conversation[];
@@ -97,18 +97,12 @@ export function ConversationList({
       />
 
       <Tabs value={activeTab} onValueChange={(v) => onTabChange(v as TabValue)} className="shrink-0 border-b border-border">
-        <TabsList className="w-full h-auto p-0 bg-transparent grid grid-cols-5">
-          <TabsTrigger value="mine" className="text-xs px-2 py-3 h-auto">
-            Minhas {activeTab === 'mine' && `(${filteredConversations.length})`}
-          </TabsTrigger>
+        <TabsList className="w-full h-auto p-0 bg-transparent grid grid-cols-3">
           <TabsTrigger value="inbox" className="text-xs px-2 py-3 h-auto">
             Entrada {activeTab === 'inbox' && `(${filteredConversations.length})`}
           </TabsTrigger>
-          <TabsTrigger value="others" className="text-xs px-2 py-3 h-auto">
-            Outros {activeTab === 'others' && `(${filteredConversations.length})`}
-          </TabsTrigger>
-          <TabsTrigger value="all" className="text-xs px-2 py-3 h-auto">
-            Todas {activeTab === 'all' && `(${filteredConversations.length})`}
+          <TabsTrigger value="mine" className="text-xs px-2 py-3 h-auto">
+            Minhas {activeTab === 'mine' && `(${filteredConversations.length})`}
           </TabsTrigger>
           <TabsTrigger value="resolved" className="text-xs px-2 py-3 h-auto">
             Resolvidos {activeTab === 'resolved' && `(${filteredConversations.length})`}
