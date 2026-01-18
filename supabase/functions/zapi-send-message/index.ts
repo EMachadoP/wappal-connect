@@ -554,15 +554,24 @@ serve(async (req: Request) => {
       console.log(`[zapi-send-message] Inserting message: type=${isSystem ? 'assistant' : 'agent'} name=${senderName || 'Ana Mônica'}`);
 
       // 1) Save to public.messages
+      const normalizeName = (v: string | null | undefined) => {
+        const s = (v ?? "").trim();
+        return s.length ? s : null;
+      };
+
+      const safeSenderName =
+        normalizeName(senderName) ??
+        (isSystem ? "Ana Mônica" : "Atendente G7");
+
       const { error: msgErr } = await supabaseAdmin.from("messages").insert({
         conversation_id: resolvedConversationId,
         // ✅ FIX: Sender fields for UI compatibility
         sender_type: isSystem ? "assistant" : "agent",
         sender_id: isSystem ? null : (userId || null),
-        sender_name: senderName || (isSystem ? "Ana Mônica" : "Atendente G7"),
+        sender_name: safeSenderName,
         // Legacy agent fields (mantidos para compatibilidade)
         agent_id: isSystem ? null : (userId || null),
-        agent_name: senderName || (isSystem ? "Ana Mônica" : "Atendente G7"),
+        agent_name: safeSenderName,
         content: content || null,
         message_type: message_type || "text",
         media_url: media_url || null,
@@ -631,12 +640,11 @@ serve(async (req: Request) => {
           updateData.ai_paused_until = pauseUntilIso;
           console.log(`[zapi-send-message] 👤 Takeover success for ${currentUserId}`);
         } else {
-          // B) Mensagem manual no Inbox (sem assumir): pausa IA sem atribuir
+          // B) Mensagem manual no Inbox (sem assumir): não pausa IA para não puxar pra Minha Caixa
           if (!assignedTo) {
-            updateData.ai_paused_until = pauseUntilIso;
-            console.log(`[zapi-send-message] 👤 Manual message in Inbox: Pausing AI for 30m (no assign)`);
-
-            // ⚠️ Importante: NÃO setar human_control aqui pra não vazar pra “Minha Caixa”
+            // ✅ NÃO pausa IA aqui para não “puxar” pra Minha Caixa por engano
+            // Se você precisa evitar auto-resposta, resolva no ai-generate (checando last agent msg)
+            console.log(`[zapi-send-message] Manual msg (unassigned): not pausing AI to preserve inbox routing`);
           } else {
             // C) Mensagem em conversa atribuída
             if (currentUserId && assignedTo !== currentUserId && !isPrivileged) {

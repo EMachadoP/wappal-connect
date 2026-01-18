@@ -14,6 +14,7 @@ interface MessageListProps {
   conversationId?: string | null;
   profiles: any[];
   contactName?: string;
+  focusMessageId?: string | null; // ✅ novo
 }
 
 const MemoizedChatMessage = memo(ChatMessage);
@@ -55,6 +56,7 @@ export function MessageList({
   conversationId,
   profiles,
   contactName,
+  focusMessageId
 }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -130,6 +132,40 @@ export function MessageList({
     ro.observe(el);
     return () => ro.disconnect();
   }, [scrollToBottom]);
+
+  // ✅ Scroll para mensagem específica (com "load more")
+  useEffect(() => {
+    if (!focusMessageId) return;
+    const el = containerRef.current;
+    if (!el) return;
+
+    let tries = 0;
+    const maxTries = 8;
+
+    const tryScroll = () => {
+      const target = el.querySelector(`[data-message-id="${focusMessageId}"]`) as HTMLElement | null;
+
+      if (target) {
+        // ✅ achou: centraliza e para
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        // destaque (opcional)
+        target.classList.add("ring-2", "ring-primary", "ring-offset-2", "rounded-lg", "transition-all", "duration-1000");
+        setTimeout(() => target.classList.remove("ring-2", "ring-primary", "ring-offset-2"), 3000);
+        return;
+      }
+
+      // não achou: tenta carregar mais (mensagens antigas) até achar
+      if (hasMore && onLoadMore && tries < maxTries && !loadingMore) {
+        tries++;
+        console.log(`[MessageList] Searching for focusMessageId ${focusMessageId}, try ${tries}/${maxTries}`);
+        onLoadMore();
+        // espera render
+        raf2(tryScroll);
+      }
+    };
+
+    raf2(tryScroll);
+  }, [focusMessageId, hasMore, onLoadMore, loadingMore, messages]);
 
   // Scroll behavior AFTER render (mais confiável que setTimeout)
   useLayoutEffect(() => {
@@ -272,7 +308,18 @@ export function MessageList({
           }
 
           const msg = item;
-          const isAIGenerated = msg.sender_type === "assistant";
+
+          const norm = (v?: string | null) => {
+            const s = (v ?? "").trim();
+            return s.length ? s : null;
+          };
+
+          const isAIGenerated =
+            msg.sender_type === "assistant" ||
+            msg.is_system === true ||
+            norm(msg.sender_name) === "Ana Mônica" ||
+            (msg.direction === "outbound" && !msg.sender_id && !msg.agent_id);
+
           const isOutgoing = msg.sender_type === "agent" || isAIGenerated;
           let name: string | null = null;
 
@@ -280,11 +327,17 @@ export function MessageList({
             if (isAIGenerated) {
               name = "Ana Mônica";
             } else {
-              name = msg.agent_name || getAgentName(msg.sender_id || msg.agent_id) || msg.sender_name;
+              name =
+                norm(msg.agent_name) ||
+                norm(getAgentName(msg.sender_id || msg.agent_id)) ||
+                norm(msg.sender_name) ||
+                "Atendente G7";
             }
           } else {
-            if (msg.sender_name && !isPhoneNumber(msg.sender_name)) name = msg.sender_name;
-            else name = contactName || msg.sender_name;
+            name =
+              (norm(msg.sender_name) && !isPhoneNumber(norm(msg.sender_name)!))
+                ? norm(msg.sender_name)!
+                : (norm(contactName) || norm(msg.sender_name));
           }
 
           return (

@@ -189,9 +189,14 @@ function pickByHash(id: string, arr: string[]) {
 }
 
 function fallbackQuestionForPending(pendingField: string | null) {
-  if (pendingField === "condominium") return "Por favor, poderia me confirmar o nome do seu condomínio?";
-  if (pendingField === "apartment") return "Poderia me informar o número do seu apartamento ou unidade, por favor?";
-  if (pendingField === "requester_name") return "Como devo te chamar? Por favor, me informe seu nome.";
+  if (pendingField === "condominium" || pendingField === "condominium_name")
+    return "Por favor, poderia me confirmar o nome do seu condomínio?";
+  if (pendingField === "apartment")
+    return "Poderia me informar o número do seu apartamento ou unidade, por favor?";
+  if (pendingField === "requester_name")
+    return "Como devo te chamar? Por favor, me informe seu nome.";
+  if (pendingField === "retry_protocol")
+    return "Consegue me confirmar em poucas palavras o problema para eu tentar registrar novamente?";
   return "Como posso te ajudar hoje?";
 }
 
@@ -561,11 +566,15 @@ serve(async (req) => {
     // Load the last message's raw_payload for employee detection
     const { data: lastMsg } = await supabase
       .from('messages')
-      .select('id, content, transcript, raw_payload')
+      .select('id, content, transcript, raw_payload, sender_type, direction')
       .eq('conversation_id', conversationId)
       .order('sent_at', { ascending: false })
       .limit(1)
       .maybeSingle();
+
+    const lastIsFromAgent =
+      (lastMsg?.direction === 'outbound') ||
+      (String(lastMsg?.sender_type || '').toLowerCase() === 'agent');
 
     const rawPayload = lastMsg?.raw_payload ?? {};
     const employee = await isEmployeeSender(supabase, rawPayload);
@@ -581,7 +590,7 @@ serve(async (req) => {
     // ✅ PATCH: Allow 'owner' or 'admin' roles to bypass this block
     const isPrivileged = (employee.roles ?? []).some(r => ['owner', 'admin'].includes(String(r).toLowerCase()));
 
-    if (isEmployee && !hasCommand && !isPrivileged) {
+    if (isEmployee && lastIsFromAgent && !hasCommand && !isPrivileged) {
       console.log('[AI] Employee message without command, skipping AI response.');
       return new Response(JSON.stringify({
         text: null,
@@ -747,7 +756,7 @@ serve(async (req) => {
 
           // ✅ CRITICAL FIX: Set local state to force execution NOW
           hasIdentifiedCondo = true;
-          participant_id = participant_id || r.condo.id; // ensure we have a valid participant link if needed
+          // ❌ NÃO faça: participant_id = participant_id || r.condo.id;
         } else {
           // Still not found - return error immediately
           return new Response(JSON.stringify({

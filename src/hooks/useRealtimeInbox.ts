@@ -14,7 +14,7 @@ export interface Conversation {
   chat_id?: string | null;
 }
 
-type InboxTab = 'all' | 'mine' | 'inbox' | 'resolved';
+type InboxTab = 'all' | 'mine' | 'inbox' | 'resolved' | 'others';
 
 interface UseRealtimeInboxProps {
   onNewInboundMessage?: () => void;
@@ -54,6 +54,13 @@ export function useRealtimeInbox({ onNewInboundMessage, tab = 'all', userId }: U
       else query = query.eq('status', 'open').eq('assigned_to', '__MISSING_USER__'); // evita vazar tudo
     } else if (tab === 'inbox') {
       query = query.eq('status', 'open').is('assigned_to', null);
+    } else if (tab === 'others') {
+      // 👀 aberto, atribuído para alguém, mas não você (útil para owner/admin)
+      if (userId) query = query.eq('status', 'open').not('assigned_to', 'is', null).neq('assigned_to', userId);
+      else query = query.eq('status', 'open').not('assigned_to', 'is', null);
+    } else if (tab === 'all') {
+      // ✅ mostra tudo aberto (atribuído ou não)
+      query = query.eq('status', 'open');
     } else if (tab === 'resolved') {
       query = query.eq('status', 'resolved');
     }
