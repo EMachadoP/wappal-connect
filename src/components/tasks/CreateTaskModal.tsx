@@ -66,6 +66,7 @@ export function CreateTaskModal({
             const { data } = await supabase
                 .from('profiles')
                 .select('id, name')
+                .eq('status', 'active')
                 .order('name');
 
             if (data) setProfiles(data);
