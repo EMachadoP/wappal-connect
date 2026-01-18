@@ -766,9 +766,8 @@ serve(async (req) => {
               pending_set_at: null,
             }).eq("id", conversationId);
 
-            // ✅ etapa concluída
+            // ✅ etapa concluída (será detectada por hasCondoInfo via active_condominium_id)
             condoStepDone = true;
-            hasIdentifiedCondo = true;
           }
         }
 
@@ -785,7 +784,7 @@ serve(async (req) => {
             }).eq("id", conversationId);
 
             condoStepDone = true;
-            hasIdentifiedCondo = true;
+            // ✅ hasCondoInfo will be true on next read via active_condominium_id
 
           } else if (r.kind === "ambiguous") {
             await supabase.from("conversations").update({
@@ -888,11 +887,17 @@ serve(async (req) => {
 
     const needsApartment = /(interfone|tv|controle|apartamento|apto|unidade)/i.test(recentText);
 
-    const canOpenNow = hasIdentifiedCondo && hasOperationalContext && (!needsApartment || Boolean(aptCandidate));
+    // ✅ FIX: Considerar "condomínio identificado" quando tem ID OU nome raw (escape hatch)
+    const condoRawName = (pendingPayload?.condo_raw_name ?? pendingPayload?.condominium_raw_name ?? null);
+
+    const hasIdentifiedCondoId = Boolean(convData?.active_condominium_id); // Analytics/legacy
+    const hasCondoInfo = hasIdentifiedCondoId || Boolean(condoRawName && String(condoRawName).trim().length > 0);
+
+    const canOpenNow = hasCondoInfo && hasOperationalContext && (!needsApartment || Boolean(aptCandidate));
 
     // ✅ FIX: re-declare for downstream uses
     const isProvidingApartment = Boolean(extractApartment(lastUserMsgText)) && hasOperationalContext;
-    const isProvidingApartmentWithCondo = isProvidingApartment && hasIdentifiedCondo;
+    const isProvidingApartmentWithCondo = isProvidingApartment && hasCondoInfo;
     const canActuallyOpen = canOpenNow;
 
     if (conversationId && (canActuallyOpen || isProvidingApartmentWithCondo)) {
