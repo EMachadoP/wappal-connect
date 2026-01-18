@@ -127,6 +127,13 @@ serve(async (req) => {
 
             if (msgErr) {
                 console.warn("[create-task] Failed to create system message:", msgErr.message);
+            } else {
+                // ✅ Update last_message_at so conversation appears in assignee's inbox
+                const now = new Date().toISOString();
+                await admin
+                    .from("conversations")
+                    .update({ last_message_at: now })
+                    .eq("id", payload.conversation_id);
             }
         }
 
