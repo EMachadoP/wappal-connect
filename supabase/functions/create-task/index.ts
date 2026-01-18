@@ -103,6 +103,31 @@ serve(async (req) => {
                 console.warn("[create-task] Conversation assign failed:", convErr.message);
                 return json(200, { task, warning: "Conversation assign failed", details: convErr.message });
             }
+
+            // ✅ ADD: Create system message in chat for task creation
+            const { data: assigneeProfile } = await admin
+                .from("profiles")
+                .select("name")
+                .eq("id", payload.assignee_id)
+                .maybeSingle();
+
+            const assigneeName = assigneeProfile?.name || "Responsável";
+            const messageText = `📋 Tarefa criada: "${title}" - Responsável: ${assigneeName}`;
+
+            const { error: msgErr } = await admin
+                .from("messages")
+                .insert({
+                    conversation_id: payload.conversation_id,
+                    content: messageText,
+                    direction: "outbound",
+                    sender_type: "system",
+                    status: "delivered",
+                    sent_at: new Date().toISOString()
+                });
+
+            if (msgErr) {
+                console.warn("[create-task] Failed to create system message:", msgErr.message);
+            }
         }
 
         return json(200, { task });
