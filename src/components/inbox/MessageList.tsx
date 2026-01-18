@@ -272,11 +272,16 @@ export function MessageList({
           }
 
           const msg = item;
-          const isOutgoing = msg.sender_type === "agent";
+          const isAIGenerated = msg.sender_type === "assistant";
+          const isOutgoing = msg.sender_type === "agent" || isAIGenerated;
           let name: string | null = null;
 
           if (isOutgoing) {
-            name = msg.agent_name || getAgentName(msg.sender_id || msg.agent_id) || msg.sender_name;
+            if (isAIGenerated) {
+              name = "Ana Mônica";
+            } else {
+              name = msg.agent_name || getAgentName(msg.sender_id || msg.agent_id) || msg.sender_name;
+            }
           } else {
             if (msg.sender_name && !isPhoneNumber(msg.sender_name)) name = msg.sender_name;
             else name = contactName || msg.sender_name;
@@ -296,7 +301,7 @@ export function MessageList({
                 deliveredAt={msg.delivered_at}
                 readAt={msg.read_at}
                 senderName={name}
-                isAIGenerated={isOutgoing && !msg.sender_id && !msg.agent_id}
+                isAIGenerated={isAIGenerated}
                 transcript={msg.transcript}
               />
             </div>

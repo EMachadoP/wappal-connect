@@ -511,22 +511,48 @@ serve(async (req) => {
           request_id: crypto.randomUUID()
         }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
-      } catch (e) {
+      } catch (e: any) {
         console.error('[STATE] retry_protocol failed again:', e);
 
-        // mantém pendência e pede um retry “curto” (sem prometer contato manual)
+        // ✅ BREAK LOOP: If specific data is missing, switch to that state instead of looping in retry
+        if (isMissingCondoError(e)) {
+          await setPending(conversationId, 'condominium_name', supabase, {
+            ...payload,
+            last_summary: newSummary || summaryFromPayload
+          });
+          return new Response(JSON.stringify({
+            text: "Quase lá! Para concluir o registro, você poderia me confirmar o nome do seu condomínio, por favor?",
+            finish_reason: 'SWITCH_TO_CONDO',
+            provider: 'state-machine',
+            model: 'deterministic'
+          }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+
+        if (isMissingAptError(e)) {
+          await setPending(conversationId, 'apartment', supabase, {
+            ...payload,
+            last_summary: newSummary || summaryFromPayload
+          });
+          return new Response(JSON.stringify({
+            text: "Entendido. Para finalizar, poderia me informar o número do seu apartamento ou unidade?",
+            finish_reason: 'SWITCH_TO_APT',
+            provider: 'state-machine',
+            model: 'deterministic'
+          }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+
+        // generic loop prevention: if it failed twice, maybe ask for a brief description again
         await setPending(conversationId, 'retry_protocol', supabase, {
           ...payload,
           last_summary: newSummary || summaryFromPayload,
-          last_error: String((e as any)?.message || e).slice(0, 500),
+          last_error: String(e.message || e).slice(0, 500),
         });
 
         return new Response(JSON.stringify({
-          text: "Sinto muito, tive uma pequena instabilidade para registrar o chamado agora. Você poderia me descrever em uma frase o problema novamente para eu tentar de novo?",
+          text: "Sinto muito, tive uma instabilidade técnica persistente agora. Você poderia me descrever o problema em poucas palavras uma última vez?",
           finish_reason: 'RETRY_PROTOCOL_STILL_FAILING',
           provider: 'state-machine',
-          model: 'deterministic',
-          request_requestId: crypto.randomUUID()
+          model: 'deterministic'
         }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
     }
