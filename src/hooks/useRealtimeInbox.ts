@@ -49,14 +49,15 @@ export function useRealtimeInbox({ onNewInboundMessage, tab, userId }: UseRealti
       `);
 
     // ✅ SQL-level filtering for performance + correctness
-    if (userId && tab) {
-      if (tab === 'mine') {
-        query = query.eq('status', 'open').eq('assigned_to', userId);
-      } else if (tab === 'inbox') {
-        query = query.eq('status', 'open').is('assigned_to', null);
-      } else if (tab === 'resolved') {
-        query = query.eq('status', 'resolved');
-      }
+    if (tab === 'mine' && userId) {
+      query = query.eq('status', 'open').eq('assigned_to', userId);
+    } else if (tab === 'inbox') {
+      query = query.eq('status', 'open').is('assigned_to', null);
+    } else if (tab === 'resolved') {
+      query = query.eq('status', 'resolved');
+    } else {
+      // 'all' or default: show everything open (assigned or not)
+      query = query.eq('status', 'open');
     }
 
     // Always sort by most recent activity

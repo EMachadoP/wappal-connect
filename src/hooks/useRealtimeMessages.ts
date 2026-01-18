@@ -10,12 +10,21 @@ export function useRealtimeMessages(conversationId: string | null) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const channelRef = useRef<any>(null);
+  const pendingReq = useRef(0);
+  const lastFetchTime = useRef(0);
   const PAGE_SIZE = 100;
 
   const fetchMessages = useCallback(async (id: string) => {
+    // Throttle fetches
+    const now = Date.now();
+    if (now - lastFetchTime.current < 200) return;
+    lastFetchTime.current = now;
+
     console.log(`[RealtimeMessages] Fetching initial messages for: ${id}`);
     setLoading(true);
     setHasMore(true);
+
+    const reqId = ++pendingReq.current;
 
     try {
       const { data, error } = await supabase
@@ -27,6 +36,9 @@ export function useRealtimeMessages(conversationId: string | null) {
 
       if (error) throw error;
 
+      // ✅ Stale response protection
+      if (reqId !== pendingReq.current) return;
+
       if (data) {
         setMessages(data.reverse());
         setHasMore(data.length === PAGE_SIZE);
@@ -34,7 +46,9 @@ export function useRealtimeMessages(conversationId: string | null) {
     } catch (err) {
       console.error('[RealtimeMessages] Error fetching:', err);
     } finally {
-      setLoading(false);
+      if (reqId === pendingReq.current) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -78,6 +92,7 @@ export function useRealtimeMessages(conversationId: string | null) {
       return;
     }
 
+    pendingReq.current++;
     fetchMessages(conversationId);
 
     // Cleanup previous channel

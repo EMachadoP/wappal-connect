@@ -189,10 +189,10 @@ function pickByHash(id: string, arr: string[]) {
 }
 
 function fallbackQuestionForPending(pendingField: string | null) {
-  if (pendingField === "condominium") return "Aqui é a Ana Mônica. Me confirma o nome do condomínio, por favor?";
-  if (pendingField === "apartment") return "Aqui é a Ana Mônica. Me confirma o número do apartamento/unidade, por favor?";
-  if (pendingField === "requester_name") return "Aqui é a Ana Mônica. Me confirma seu nome, por favor?";
-  return "Aqui é a Ana Mônica. Em que posso ajudar?";
+  if (pendingField === "condominium") return "Por favor, poderia me confirmar o nome do seu condomínio?";
+  if (pendingField === "apartment") return "Poderia me informar o número do seu apartamento ou unidade, por favor?";
+  if (pendingField === "requester_name") return "Como devo te chamar? Por favor, me informe seu nome.";
+  return "Como posso te ajudar hoje?";
 }
 
 const CONDO_QUESTIONS = [
@@ -338,7 +338,7 @@ async function executeCreateProtocol(
 
   console.log('[TICKET] Starting protocol creation for conversation:', conversationId);
 
-  // 1. Deep Condominium Lookup (Critical for Asana/G7)
+  // ✅ Consolidated Condominium Lookup (Critical for Asana/G7)
   const { data: conv, error: convError } = await supabase
     .from('conversations')
     .select('contact_id, condominium_id, active_condominium_id, contacts(name), condominiums(name)')
@@ -353,6 +353,12 @@ async function executeCreateProtocol(
   if (!conv) {
     console.error('[TICKET] Conversation not found:', conversationId);
     throw new Error(`Conversation not found: ${conversationId}`);
+  }
+
+  // ✅ HARD GUARD: se não tiver condomínio ativo na conversa, não consegue criar
+  if (!conv.active_condominium_id) {
+    console.error('[TICKET] Missing active_condominium_id in conversation');
+    throw new Error('MISSING_CONDOMINIUM');
   }
 
   let condominiumId = (conv as any)?.condominium_id || (conv as any)?.active_condominium_id;
@@ -516,11 +522,11 @@ serve(async (req) => {
         });
 
         return new Response(JSON.stringify({
-          text: "Tive uma instabilidade para registrar agora. Você pode me confirmar em uma frase o problema (ex.: “interfone sem chamada no bloco B”) para eu tentar de novo?",
+          text: "Sinto muito, tive uma pequena instabilidade para registrar o chamado agora. Você poderia me descrever em uma frase o problema novamente para eu tentar de novo?",
           finish_reason: 'RETRY_PROTOCOL_STILL_FAILING',
           provider: 'state-machine',
           model: 'deterministic',
-          request_id: crypto.randomUUID()
+          request_requestId: crypto.randomUUID()
         }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
     }
@@ -997,12 +1003,12 @@ REGRAS DE EXECUÇÃO:
           if (conversationId) {
             await setPending(conversationId, 'condominium_name', supabase, { last_summary: functionCall.args?.summary || null });
           }
-          generatedText = "Certo. Só me confirma o nome do condomínio, por favor.";
+          generatedText = "Gostaria de registrar seu chamado, mas poderia me confirmar o nome do condomínio primeiro, por favor?";
         } else if (isMissingAptError(e)) {
           if (conversationId) {
             await setPending(conversationId, 'apartment', supabase, { last_summary: functionCall.args?.summary || null });
           }
-          generatedText = "Perfeito — me confirma o número do apartamento/unidade, por favor.";
+          generatedText = "Registrei o problema, mas poderia me informar o número do seu apartamento ou unidade para concluir?";
         } else {
           // ✅ Erro genérico: não prometer contato; pedir retry simples
           if (conversationId) {
@@ -1013,7 +1019,7 @@ REGRAS DE EXECUÇÃO:
               last_error: String((e as any)?.message || e).slice(0, 500),
             });
           }
-          generatedText = "Entendi. Tive uma instabilidade pra registrar o protocolo agora. Pode me mandar uma mensagem curta confirmando o problema novamente?";
+          generatedText = "Sinto muito, tive um erro técnico para registrar o chamado agora. Você poderia confirmar o problema brevemente para que eu tente novamente?";
         }
       }
     }
