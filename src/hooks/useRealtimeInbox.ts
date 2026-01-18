@@ -11,20 +11,26 @@ export interface Conversation {
   assigned_to: string | null;
   status: string;
   priority: string | null;
+  chat_id?: string | null;
 }
+
+type InboxTab = 'all' | 'mine' | 'inbox' | 'resolved';
 
 interface UseRealtimeInboxProps {
   onNewInboundMessage?: () => void;
-  tab?: string;
-  userId?: string;
+  tab?: InboxTab;
+  userId?: string | null;
 }
 
-export function useRealtimeInbox({ onNewInboundMessage, tab, userId }: UseRealtimeInboxProps = {}) {
+export function useRealtimeInbox({ onNewInboundMessage, tab = 'all', userId }: UseRealtimeInboxProps = {}) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
+
   const processedMessageIds = useRef<Set<string>>(new Set());
   const lastFetchTime = useRef<number>(0);
-  const pendingReq = useRef(0);
+
+  // ✅ Anti out-of-order: só o fetch mais recente pode setar state
+  const fetchSeq = useRef(0);
 
   const fetchConversations = useCallback(async () => {
     // Throttle fetches to max once every 300ms
@@ -32,148 +38,90 @@ export function useRealtimeInbox({ onNewInboundMessage, tab, userId }: UseRealti
     if (now - lastFetchTime.current < 300) return;
     lastFetchTime.current = now;
 
-    console.log('[RealtimeInbox] Fetching conversations for tab:', tab || 'all');
+    const seq = ++fetchSeq.current;
+
+    console.log('[RealtimeInbox] Fetching conversations...', { tab });
 
     let query = supabase
       .from('conversations')
-      .select(`
-        *,
-        contacts (
-          *,
-          participants (
-            id,
-            name,
-            is_primary
-          )
-        )
-      `);
+      .select(`*, contacts (*)`)
+      .order('last_message_at', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false });
 
-    // ✅ SQL-level filtering for performance + correctness
-    if (tab === 'mine' && userId) {
-      query = query.eq('status', 'open').eq('assigned_to', userId);
+    // ✅ Filtra na query (sem view, sem join com messages)
+    if (tab === 'mine') {
+      if (userId) query = query.eq('status', 'open').eq('assigned_to', userId);
+      else query = query.eq('status', 'open').eq('assigned_to', '__MISSING_USER__'); // evita vazar tudo
     } else if (tab === 'inbox') {
       query = query.eq('status', 'open').is('assigned_to', null);
     } else if (tab === 'resolved') {
       query = query.eq('status', 'resolved');
-    } else {
-      // 'all' or default: show everything open (assigned or not)
-      query = query.eq('status', 'open');
     }
-
-    // Always sort by most recent activity
-    query = query.order('last_message_at', { ascending: false });
-
-    // ✅ Pattern seguro: garante que só o último fetch atualiza o state
-    const reqId = ++pendingReq.current;
 
     const { data, error } = await query;
 
-    // ✅ Se outro fetch foi disparado depois, ignora este resultado (race condition protection)
-    if (reqId !== pendingReq.current) return;
+    // ✅ Se um fetch mais novo já rodou, ignora este resultado
+    if (seq !== fetchSeq.current) return;
 
     if (!error && data) {
-      const mapped = data.map((conv: any) => {
-        // Get primary participant name if available
-        const participants = conv.contacts?.participants || [];
-        const primaryParticipant = participants.find((p: any) => p.is_primary) || participants[0];
-        const participantName = primaryParticipant?.name;
-
-        return {
+      setConversations(
+        data.map((conv: any) => ({
           id: conv.id,
-          contact: {
-            ...conv.contacts,
-            // Prioritize participant name over contact name/phone
-            name: participantName || conv.contacts?.name || conv.contacts?.phone || 'Sem Nome',
-          },
-          // Falback safe para o preview
-          last_message: conv.last_message || conv.last_message_content || 'Nenhuma mensagem',
-          last_message_type: 'text',
+          contact: conv.contacts,
+          last_message:
+            conv.last_message ??
+            conv.last_message_content ??
+            conv.last_message_text ??
+            'Nenhuma mensagem',
+          last_message_type: conv.last_message_type ?? 'text',
           last_message_at: conv.last_message_at,
-          reopened_at: conv.reopened_at,
-          unread_count: conv.unread_count,
+          unread_count: conv.unread_count ?? 0,
           assigned_to: conv.assigned_to,
           status: conv.status,
           priority: conv.priority,
-        };
-      });
-
-      // Sort by greatest of last_message_at or reopened_at
-      mapped.sort((a, b) => {
-        const timeA = Math.max(
-          a.last_message_at ? new Date(a.last_message_at).getTime() : 0,
-          a.reopened_at ? new Date(a.reopened_at).getTime() : 0
-        );
-        const timeB = Math.max(
-          b.last_message_at ? new Date(b.last_message_at).getTime() : 0,
-          b.reopened_at ? new Date(b.reopened_at).getTime() : 0
-        );
-        return timeB - timeA;
-      });
-
-      setConversations(mapped);
+          chat_id: conv.chat_id ?? null,
+        }))
+      );
+    } else {
+      console.error('[RealtimeInbox] fetch error:', error);
     }
+
     setLoading(false);
   }, [tab, userId]);
 
-  // Invalidate old requests when tab changes
   useEffect(() => {
-    pendingReq.current++;
-    setLoading(true); // Optional: show loading when tab switches deeply
-    fetchConversations();
-  }, [tab, userId]);
-
-  useEffect(() => {
-    // Initial fetch handled by the dependency effect above or manually if distinct
-    // kept for safe measure if deps are stable
     fetchConversations();
 
-    // Canal estável para Inbox global
-    const channel = supabase.channel('global-inbox-updates')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'conversations' },
-        (payload) => {
-          console.log('[RealtimeInbox] Conversation record update');
-          fetchConversations();
+    const channel = supabase
+      .channel(`global-inbox-updates:${tab}:${userId ?? 'anon'}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, () => {
+        console.log('[RealtimeInbox] Conversation record update');
+        fetchConversations();
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
+        const newMessage: any = payload.new;
+        if (!newMessage || processedMessageIds.current.has(newMessage.id)) return;
+
+        processedMessageIds.current.add(newMessage.id);
+        console.log('[RealtimeInbox] New message incoming:', newMessage.id);
+
+        if (newMessage.sender_type === 'contact') {
+          onNewInboundMessage?.();
         }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'participants' },
-        (payload) => {
-          console.log('[RealtimeInbox] Participant updated - refreshing list');
-          fetchConversations();
+
+        fetchConversations();
+
+        if (processedMessageIds.current.size > 200) {
+          processedMessageIds.current = new Set([...processedMessageIds.current].slice(-100));
         }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages' },
-        (payload) => {
-          const newMessage = payload.new;
-          if (!newMessage || processedMessageIds.current.has(newMessage.id)) return;
-
-          processedMessageIds.current.add(newMessage.id);
-          console.log('[RealtimeInbox] New message incoming:', newMessage.id);
-
-          if (newMessage.sender_type === 'contact') {
-            onNewInboundMessage?.();
-          }
-
-          fetchConversations();
-
-          // Limpa o set ocasionalmente para não crescer infinitamente
-          if (processedMessageIds.current.size > 100) {
-            processedMessageIds.current = new Set([...processedMessageIds.current].slice(-50));
-          }
-        }
-      )
+      })
       .subscribe();
 
     return () => {
       console.log('[RealtimeInbox] Cleaning up channel');
       supabase.removeChannel(channel);
     };
-  }, [fetchConversations, onNewInboundMessage]);
+  }, [fetchConversations, onNewInboundMessage, tab, userId]);
 
   return { conversations, loading, refetch: fetchConversations };
 }

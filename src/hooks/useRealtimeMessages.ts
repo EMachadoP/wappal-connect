@@ -7,24 +7,17 @@ type Message = Database['public']['Tables']['messages']['Row'];
 export function useRealtimeMessages(conversationId: string | null) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
   const channelRef = useRef<any>(null);
-  const pendingReq = useRef(0);
-  const lastFetchTime = useRef(0);
-  const PAGE_SIZE = 100;
+
+  const fetchSeq = useRef(0);
+  const activeIdRef = useRef<string | null>(null);
 
   const fetchMessages = useCallback(async (id: string) => {
-    // Throttle fetches
-    const now = Date.now();
-    if (now - lastFetchTime.current < 200) return;
-    lastFetchTime.current = now;
+    const seq = ++fetchSeq.current;
+    activeIdRef.current = id;
 
-    console.log(`[RealtimeMessages] Fetching initial messages for: ${id}`);
+    console.log(`[RealtimeMessages] Fetching messages for: ${id}`);
     setLoading(true);
-    setHasMore(true);
-
-    const reqId = ++pendingReq.current;
 
     try {
       const { data, error } = await supabase
@@ -32,76 +25,40 @@ export function useRealtimeMessages(conversationId: string | null) {
         .select('*')
         .eq('conversation_id', id)
         .order('sent_at', { ascending: false })
-        .limit(PAGE_SIZE);
+        .limit(50);
 
       if (error) throw error;
 
-      // ✅ Stale response protection
-      if (reqId !== pendingReq.current) return;
+      // ✅ ignora resultado velho (out-of-order)
+      if (seq !== fetchSeq.current) return;
+      if (activeIdRef.current !== id) return;
 
-      if (data) {
-        setMessages(data.reverse());
-        setHasMore(data.length === PAGE_SIZE);
-      }
+      setMessages((data ?? []).reverse());
     } catch (err) {
       console.error('[RealtimeMessages] Error fetching:', err);
     } finally {
-      if (reqId === pendingReq.current) {
-        setLoading(false);
-      }
+      if (seq === fetchSeq.current) setLoading(false);
     }
   }, []);
 
-  const loadMoreMessages = useCallback(async () => {
-    if (!conversationId || loadingMore || !hasMore || messages.length === 0) return;
-
-    setLoadingMore(true);
-    const oldestMessage = messages[0];
-
-    console.log(`[RealtimeMessages] Loading more messages before: ${oldestMessage.sent_at}`);
-
-    try {
-      const { data, error } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('conversation_id', conversationId)
-        .lt('sent_at', oldestMessage.sent_at)
-        .order('sent_at', { ascending: false })
-        .limit(PAGE_SIZE);
-
-      if (error) throw error;
-
-      if (data && data.length > 0) {
-        const olderMessages = data.reverse();
-        setMessages(prev => [...olderMessages, ...prev]);
-        setHasMore(data.length === PAGE_SIZE);
-      } else {
-        setHasMore(false);
-      }
-    } catch (err) {
-      console.error('[RealtimeMessages] Error loading more:', err);
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [conversationId, loadingMore, hasMore, messages]);
-
   useEffect(() => {
     setMessages([]);
+
     if (!conversationId) {
       setLoading(false);
       return;
     }
 
-    pendingReq.current++;
+    console.log(`[RealtimeMessages] Conversation changed to: ${conversationId}`);
     fetchMessages(conversationId);
 
-    // Cleanup previous channel
     if (channelRef.current) {
+      console.log('[RealtimeMessages] Cleaning up previous channel');
       supabase.removeChannel(channelRef.current);
     }
 
-    // Subscribe to ALL changes for this conversation's messages
-    const channel = supabase.channel(`chat:${conversationId}`)
+    const channel = supabase
+      .channel(`chat:${conversationId}`)
       .on(
         'postgres_changes',
         {
@@ -111,8 +68,12 @@ export function useRealtimeMessages(conversationId: string | null) {
           filter: `conversation_id=eq.${conversationId}`,
         },
         (payload) => {
+          const activeId = activeIdRef.current;
+          if (!activeId || activeId !== conversationId) return;
+
           if (payload.eventType === 'INSERT') {
             const newMessage = payload.new as Message;
+
             setMessages((prev) => {
               if (newMessage.conversation_id !== conversationId) return prev;
               if (prev.some((m) => m.id === newMessage.id)) return prev;
@@ -125,27 +86,25 @@ export function useRealtimeMessages(conversationId: string | null) {
             const updated = payload.new as Message;
             setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
           } else if (payload.eventType === 'DELETE') {
-            setMessages((prev) => prev.filter((m) => m.id !== payload.old.id));
+            const oldId = (payload.old as any)?.id;
+            if (!oldId) return;
+            setMessages((prev) => prev.filter((m) => m.id !== oldId));
           }
         }
       )
-      .subscribe();
+      .subscribe((status: string) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.error(`[RealtimeMessages] Subscription error (${status}), retrying...`);
+          setTimeout(() => conversationId && fetchMessages(conversationId), 1500);
+        }
+      });
 
     channelRef.current = channel;
 
     return () => {
-      if (channelRef.current) {
-        supabase.removeChannel(channelRef.current);
-      }
+      if (channelRef.current) supabase.removeChannel(channelRef.current);
     };
   }, [conversationId, fetchMessages]);
 
-  return {
-    messages,
-    loading,
-    loadingMore,
-    hasMore,
-    loadMoreMessages,
-    setMessages
-  };
+  return { messages, loading, setMessages };
 }
