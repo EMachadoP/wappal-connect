@@ -212,11 +212,14 @@ serve(async (req: Request) => {
     let resolvedCondoId = null;
     let source = 'none';
 
+    // ✅ PRIORITY 1: ID explícito tem prioridade
     if (condominium_id && isValidUUID(condominium_id)) {
       resolvedCondoId = condominium_id;
       source = 'input_direct';
+      log(`[create-protocol] Using explicit condominium_id: ${resolvedCondoId}`);
     }
 
+    // ✅ PRIORITY 2: ID ativo com confiança >= 70%
     if (!resolvedCondoId) {
       // Use active_condominium_id only if confidence >= 0.70 (reasonably confident)
       if (conv.active_condominium_id && (conv.active_condominium_confidence ?? 0) >= 0.70) {
@@ -226,7 +229,7 @@ serve(async (req: Request) => {
       }
     }
 
-    // Try resolving by name if still no ID
+    // ✅ PRIORITY 3: Tentar resolver por nome
     if (!resolvedCondoId && condominium_name) {
       log(`[create-protocol] Attempting to resolve condominium by name: "${condominium_name}"`);
       const nameResolution = await resolveCondominiumIdByName(condominium_name);
@@ -246,6 +249,11 @@ serve(async (req: Request) => {
         resolvedCondoId = nameResolution;
         source = 'name_lookup';
         log(`[create-protocol] Resolved condominium by name: ${resolvedCondoId}`);
+      } else {
+        // ✅ NEW: Not found - log warning but allow creation with raw name
+        log(`[create-protocol] WARNING: Condominium "${condominium_name}" not found in DB. Creating protocol without condo_id.`);
+        resolvedCondoId = null; // Explicitly set to null
+        source = 'name_only_not_in_db';
       }
     }
 
@@ -367,7 +375,8 @@ serve(async (req: Request) => {
         protocol_code: protocolCode,
         conversation_id,
         contact_id: isValidUUID(contact_id) ? contact_id : null,
-        condominium_id: isValidUUID(resolvedCondoId) ? resolvedCondoId : null,
+        condominium_id: isValidUUID(resolvedCondoId) ? resolvedCondoId : null, // ✅ Allow NULL
+        condominium_raw_name: !resolvedCondoId && condominium_name ? condominium_name : null, // ✅ NEW FIELD
         participant_id: isValidUUID(participant_id) ? participant_id : null,
         category: finalCategory,
         priority: priority || 'normal',

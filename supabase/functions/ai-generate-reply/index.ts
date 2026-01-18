@@ -343,30 +343,33 @@ async function executeCreateProtocol(
 
   console.log('[TICKET] Starting protocol creation for conversation:', conversationId);
 
-  // ✅ Consolidated Condominium Lookup (Critical for Asana/G7)
-  const { data: conv, error: convError } = await supabase
+  // ✅ FIX: Get pending payload to check for condo_raw_name
+  const { data: convWithPayload, error: convPayloadError } = await supabase
     .from('conversations')
-    .select('contact_id, condominium_id, active_condominium_id, contacts(name), condominiums(name)')
+    .select('id, active_condominium_id, condominium_id, pending_payload, contacts(name), condominiums(name)')
     .eq('id', conversationId)
     .single();
 
-  if (convError) {
-    console.error('[TICKET] Failed to fetch conversation:', convError);
-    throw new Error(`Failed to fetch conversation: ${convError.message}`);
+  if (convPayloadError) {
+    console.error('[TICKET] Failed to fetch conversation:', convPayloadError);
+    throw new Error(`Failed to fetch conversation: ${convPayloadError.message}`);
   }
 
-  if (!conv) {
+  if (!convWithPayload) {
     console.error('[TICKET] Conversation not found:', conversationId);
     throw new Error(`Conversation not found: ${conversationId}`);
   }
 
-  // ✅ HARD GUARD: se não tiver condomínio ativo na conversa, não consegue criar
-  if (!conv.active_condominium_id) {
-    console.error('[TICKET] Missing active_condominium_id in conversation');
+  const pendingPayload = (convWithPayload.pending_payload ?? {}) as any;
+  const condominiumRawName = (pendingPayload.condo_raw_name ?? null) as string | null;
+
+  // ✅ MODIFIED: Só bloqueia se não tiver NEM ID NEM nome raw
+  if (!convWithPayload.active_condominium_id && !condominiumRawName) {
+    console.error('[TICKET] Missing active_condominium_id and no condo_raw_name');
     throw new Error('MISSING_CONDOMINIUM');
   }
 
-  let condominiumId = (conv as any)?.condominium_id || (conv as any)?.active_condominium_id;
+  let condominiumId = (convWithPayload as any)?.condominium_id || (convWithPayload as any)?.active_condominium_id;
 
   if (!condominiumId) {
     const { data: part } = await supabase
@@ -379,20 +382,21 @@ async function executeCreateProtocol(
     if (part) condominiumId = part.entity_id;
   }
 
-  // ✅ HARD GUARD: não chama create-protocol sem condo
-  if (!condominiumId) {
-    console.error('[TICKET] Missing condominiumId - cannot create protocol');
+  // ✅ MODIFIED: Só bloqueia se não tiver NEM ID NEM nome raw
+  if (!condominiumId && !condominiumRawName) {
+    console.error('[TICKET] Missing condominiumId and no raw name - cannot create protocol');
     throw new Error('MISSING_CONDOMINIUM');
   }
 
   const bodyObj = {
     conversation_id: conversationId,
     condominium_id: condominiumId,
+    condominium_name: condominiumRawName, // ✅ IMPORTANT: passa o nome raw quando não tem ID
     participant_id: participantId, // Pass participant_id for better condominium resolution
     summary: args.summary,
     priority: args.priority || 'normal',
     category: args.category || 'operational',
-    requester_name: args.requester_name || (conv?.contacts as any)?.name || 'Não informado',
+    requester_name: args.requester_name || (convWithPayload?.contacts as any)?.name || 'Não informado',
     requester_role: args.requester_role || 'Morador',
     apartment: args.apartment,
     notify_group: true // IMPORTANT: Triggers WhatsApp + Asana
@@ -743,30 +747,103 @@ serve(async (req) => {
         }
       }
 
+      // ✅ FIX: Escape hatch with condoStepDone flag
       if (pendingField === "condominium_name") {
-        const r = await resolveCondoByTokens(supabase, lastUserMsgText);
-        if (r.kind === "matched") {
-          // Found condo, update DB and LOCAL state to allow fall-through execution
-          await supabase.from("conversations").update({
-            active_condominium_id: r.condo.id,
-            pending_field: null,
-            pending_payload: { ...pendingPayload, condo_options: null },
-            pending_set_at: null
-          }).eq("id", conversationId);
+        let condoStepDone = false;
+        const lastText = lastUserMsgText.trim();
+        const retryCount = (pendingPayload.condo_retry_count || 0) + 1;
 
-          // ✅ CRITICAL FIX: Set local state to force execution NOW
-          hasIdentifiedCondo = true;
-          // ❌ NÃO faça: participant_id = participant_id || r.condo.id;
-        } else {
-          // Still not found - return error immediately
-          return new Response(JSON.stringify({
-            text: "Não localizei esse nome exato. Pode confirmar como aparece na fatura ou o nome completo?",
-            finish_reason: 'CONDO_NOT_FOUND',
-            provider: 'state-machine',
-            model: 'deterministic',
-            request_id: crypto.randomUUID()
-          }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        // 0) Se tinha opções e o usuário escolheu um número
+        if (Array.isArray(pendingPayload.condo_options) && pendingPayload.condo_options.length) {
+          const choice = parseInt(lastText, 10);
+          if (!Number.isNaN(choice) && choice >= 1 && choice <= pendingPayload.condo_options.length) {
+            const picked = pendingPayload.condo_options[choice - 1];
+
+            await supabase.from("conversations").update({
+              active_condominium_id: picked.id,
+              pending_field: null,
+              pending_payload: { ...pendingPayload, condo_options: null, condo_retry_count: 0 },
+              pending_set_at: null,
+            }).eq("id", conversationId);
+
+            // ✅ etapa concluída
+            condoStepDone = true;
+            hasIdentifiedCondo = true;
+          }
         }
+
+        // 1) Se ainda não concluiu, tenta resolver por tokens
+        if (!condoStepDone) {
+          const r = await resolveCondoByTokens(supabase, lastText);
+
+          if (r.kind === "matched") {
+            await supabase.from("conversations").update({
+              active_condominium_id: r.condo.id,
+              pending_field: null,
+              pending_payload: { ...pendingPayload, condo_options: null, condo_retry_count: 0 },
+              pending_set_at: null,
+            }).eq("id", conversationId);
+
+            condoStepDone = true;
+            hasIdentifiedCondo = true;
+
+          } else if (r.kind === "ambiguous") {
+            await supabase.from("conversations").update({
+              pending_payload: { ...pendingPayload, condo_options: r.options, condo_retry_count: retryCount },
+              pending_set_at: new Date().toISOString(),
+            }).eq("id", conversationId);
+
+            return new Response(JSON.stringify({
+              text: `Encontrei ${r.options.length} condomínios parecidos. Qual deles é o correto?\n` +
+                r.options.map((o: any, i: number) => `${i + 1}. ${o.name}`).join("\n"),
+              finish_reason: "CONDO_AMBIGUOUS",
+              provider: "state-machine",
+              model: "deterministic",
+              request_id: crypto.randomUUID()
+            }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+
+          } else {
+            // not_found
+            if (retryCount >= 2) {
+              // ✅ ESCAPE: fecha etapa do condomínio mesmo sem ID
+              console.log(`[STATE] Condo not found after ${retryCount} attempts. Proceeding without ID using raw name: "${lastText}"`);
+
+              await supabase.from("conversations").update({
+                pending_field: null,
+                pending_payload: {
+                  ...pendingPayload,
+                  condo_raw_name: lastText,
+                  condo_not_in_db: true,
+                  condo_options: null,
+                  condo_retry_count: retryCount,
+                },
+                pending_set_at: null,
+              }).eq("id", conversationId);
+
+              condoStepDone = true; // ✅ importante: NÃO voltar para "perguntar condomínio" de novo
+              // NÃO seta hasIdentifiedCondo = true, pois não temos ID
+
+            } else {
+              // 1ª tentativa: orientar melhor
+              await supabase.from("conversations").update({
+                pending_payload: { ...pendingPayload, condo_raw: lastText, condo_retry_count: retryCount },
+                pending_set_at: new Date().toISOString(),
+              }).eq("id", conversationId);
+
+              return new Response(JSON.stringify({
+                text: "Não localizei esse nome exato. Pode confirmar como aparece na fatura ou o nome completo? " +
+                  "(ex.: 'Residencial Portal do Sol' / 'Condomínio Vista Verde')",
+                finish_reason: "CONDO_NOT_FOUND_RETRY",
+                provider: "state-machine",
+                model: "deterministic",
+                request_id: crypto.randomUUID()
+              }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+            }
+          }
+        }
+
+        // ✅ daqui pra frente o fluxo continua normalmente (vai para create-protocol)
+        // NÃO retorne mensagem pedindo o problema de novo.
       }
 
       if (pendingField === "apartment") {
@@ -1063,7 +1140,7 @@ REGRAS DE EXECUÇÃO:
       generatedText = fallbackQuestionForPending(pf);
     }
 
-    // ✅ ANTI-LOOP: Don't send the same AI message again within 10 minutes
+    // ✅ ANTI-REPETITION: Bloquear envio da mesma mensagem em janela de tempo (1h)
     const norm = (s?: string | null) => (s ?? "").trim();
 
     const { data: lastAiOut } = await supabase
@@ -1078,9 +1155,11 @@ REGRAS DE EXECUÇÃO:
 
     if (lastAiOut && norm(lastAiOut.content) === norm(generatedText)) {
       const ms = Date.now() - new Date(lastAiOut.sent_at).getTime();
-      if (ms < 10 * 60 * 1000) {
+      if (ms < 60 * 60 * 1000) { // 1 hour window
         console.log("[AI] Skipping duplicate assistant message (anti-loop).");
-        return new Response(JSON.stringify({ text: null, skipped: "duplicate_ai_message" }), { headers: corsHeaders });
+        return new Response(JSON.stringify({ text: null, skipped: "duplicate_ai_message" }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
       }
     }
 
