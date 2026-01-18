@@ -840,15 +840,15 @@ serve(async (req) => {
               // ✅ ESCAPE: fecha etapa do condomínio mesmo sem ID
               console.log(`[STATE] Condo not found after ${retryCount} attempts. Proceeding without ID using raw name: "${lastText}"`);
 
+              // ✅ CRITICAL FIX: Update LOCAL variable FIRST
+              pendingPayload.condo_raw_name = lastText;
+              pendingPayload.condo_not_in_db = true;
+              pendingPayload.condo_options = null;
+              pendingPayload.condo_retry_count = retryCount;
+
               await supabase.from("conversations").update({
                 pending_field: null,
-                pending_payload: {
-                  ...pendingPayload,
-                  condo_raw_name: lastText,
-                  condo_not_in_db: true,
-                  condo_options: null,
-                  condo_retry_count: retryCount,
-                },
+                pending_payload: pendingPayload,
                 pending_set_at: null,
               }).eq("id", conversationId);
 
