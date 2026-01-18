@@ -450,7 +450,7 @@ serve(async (req) => {
     const messages = (rawBody.messages || []).slice(0, 50); // Limit to 50
     const conversationIdRaw = rawBody.conversation_id || rawBody.conversationId || rawBody.conversation?.id;
     const conversationId = (typeof conversationIdRaw === 'string') ? conversationIdRaw : undefined;
-    const participant_id = rawBody.participant_id; // Extract participant_id from request
+    let participant_id = rawBody.participant_id; // Extract participant_id from request
 
     // Dynamically clean passed systemPrompt from negative examples (mimicry prevention)
     let basePrompt = rawBody.systemPrompt || "";
@@ -679,7 +679,7 @@ serve(async (req) => {
 
     const pendingField = (convData?.pending_field ?? null) as string | null;
     const pendingPayload = (convData?.pending_payload ?? {}) as any;
-    const hasIdentifiedCondo = Boolean(convData?.active_condominium_id);
+    let hasIdentifiedCondo = Boolean(convData?.active_condominium_id);
 
     const lastIssueMsg = [...messagesNoSystem].reverse().find((m: any) => m.role === 'user' && isOperationalIssue(m.content));
     const hasOperationalContext = isOperationalIssue(recentText);
@@ -737,7 +737,7 @@ serve(async (req) => {
       if (pendingField === "condominium_name") {
         const r = await resolveCondoByTokens(supabase, lastUserMsgText);
         if (r.kind === "matched") {
-          // Found condo, now check if we can execute the pending protocol
+          // Found condo, update DB and LOCAL state to allow fall-through execution
           await supabase.from("conversations").update({
             active_condominium_id: r.condo.id,
             pending_field: null,
@@ -745,24 +745,11 @@ serve(async (req) => {
             pending_set_at: null
           }).eq("id", conversationId);
 
-          // TRY TO EXECUTE PROTOCOL IF SUMMARY EXISTS
-          if (pendingPayload.last_summary) {
-            // ... similar to retry_protocol logic, but we might just clear pending and let next turn handle it or do it here. 
-            // For simplicity, let's clear pending and let the "Can Open Now" logic below catch it if desired, OR set up a retry_protocol to trigger immediately.
-            // Actually, setting retry_protocol immediately is safer to ensure execution.
-            await setPending(conversationId, 'retry_protocol', supabase, { ...pendingPayload, last_summary: pendingPayload.last_summary });
-            // Re-run this function logic? No, easiest is to let the NEXT message trigger it, 
-            // OR we can just return a text saying "Got it". 
-            return new Response(JSON.stringify({
-              text: `Entendido, ${r.condo.name}. Já localizei aqui.`,
-              finish_reason: 'CONDO_RESOLVED',
-              provider: 'state-machine',
-              model: 'deterministic',
-              request_id: crypto.randomUUID()
-            }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-          }
+          // ✅ CRITICAL FIX: Set local state to force execution NOW
+          hasIdentifiedCondo = true;
+          participant_id = participant_id || r.condo.id; // ensure we have a valid participant link if needed
         } else {
-          // Still not found
+          // Still not found - return error immediately
           return new Response(JSON.stringify({
             text: "Não localizei esse nome exato. Pode confirmar como aparece na fatura ou o nome completo?",
             finish_reason: 'CONDO_NOT_FOUND',

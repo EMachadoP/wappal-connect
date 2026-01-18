@@ -551,6 +551,8 @@ serve(async (req: Request) => {
     if (resolvedConversationId) {
       const nowIso = new Date().toISOString();
 
+      console.log(`[zapi-send-message] Inserting message: type=${isSystem ? 'assistant' : 'agent'} name=${senderName || 'Ana Mônica'}`);
+
       // 1) Save to public.messages
       const { error: msgErr } = await supabaseAdmin.from("messages").insert({
         conversation_id: resolvedConversationId,
