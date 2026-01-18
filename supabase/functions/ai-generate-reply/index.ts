@@ -346,7 +346,7 @@ async function executeCreateProtocol(
   // ✅ FIX: Get pending payload to check for condo_raw_name
   const { data: convWithPayload, error: convPayloadError } = await supabase
     .from('conversations')
-    .select('id, active_condominium_id, condominium_id, pending_payload, contacts(name), condominiums(name)')
+    .select('id, active_condominium_id, pending_payload, contacts(name), condominiums(name)')
     .eq('id', conversationId)
     .single();
 
@@ -369,7 +369,7 @@ async function executeCreateProtocol(
     throw new Error('MISSING_CONDOMINIUM');
   }
 
-  let condominiumId = (convWithPayload as any)?.condominium_id || (convWithPayload as any)?.active_condominium_id;
+  let condominiumId = convWithPayload.active_condominium_id;
 
   if (!condominiumId) {
     const { data: part } = await supabase
