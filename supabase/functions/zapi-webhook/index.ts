@@ -532,82 +532,33 @@ serve(async (req: Request): Promise<Response> => {
     let msgError = null;
 
     if (!existingMsg) {
-      // Só tenta deduplicar se tiver providerMsgId
-      if (!providerMsgId) {
-        // fallback: sem id do provider, insere normal (não dá pra deduplicar com segurança)
-        const insertResult = await supabase
-          .from("messages")
-          .insert({
-            conversation_id: conv.id,
-            sender_type: fromMe ? "agent" : "contact",
-            sender_name: senderName,
-            sender_phone: senderPhone,
-            message_type: msgType,
-            content,
-            provider: "zapi",
-            provider_message_id: null,
-            chat_id: finalChatIdentifier,
-            direction: fromMe ? "outbound" : "inbound",
-            sent_at: payload.timestamp ? new Date(payload.timestamp).toISOString() : now,
-            raw_payload: payload,
-            media_url:
-              payload.imageUrl || payload.audioUrl || payload.videoUrl || payload.documentUrl ||
-              payload.image?.url || payload.audio?.url || payload.video?.url || payload.document?.url ||
-              payload.image?.imageUrl || payload.audio?.audioUrl || payload.video?.videoUrl || payload.document?.documentUrl ||
-              null,
-          })
-          .select("id")
-          .single();
+      // ✅ Insert simples - já checamos duplicado acima por provider_message_id
+      const insertResult = await supabase
+        .from("messages")
+        .insert({
+          conversation_id: conv.id,
+          sender_type: fromMe ? "agent" : "contact",
+          sender_name: senderName,
+          sender_phone: senderPhone,
+          message_type: msgType,
+          content,
+          provider: "zapi",
+          provider_message_id: providerMsgId,
+          chat_id: finalChatIdentifier,
+          direction: fromMe ? "outbound" : "inbound",
+          sent_at: payload.timestamp ? new Date(payload.timestamp).toISOString() : now,
+          raw_payload: payload,
+          media_url:
+            payload.imageUrl || payload.audioUrl || payload.videoUrl || payload.documentUrl ||
+            payload.image?.url || payload.audio?.url || payload.video?.url || payload.document?.url ||
+            payload.image?.imageUrl || payload.audio?.audioUrl || payload.video?.videoUrl || payload.document?.documentUrl ||
+            null,
+        })
+        .select("id")
+        .single();
 
-        msgResult = insertResult.data;
-        msgError = insertResult.error;
-
-      } else {
-        // ✅ Upsert com DO NOTHING (dedupe real)
-        const upsertResult = await supabase
-          .from("messages")
-          .upsert(
-            {
-              conversation_id: conv.id,
-              sender_type: fromMe ? "agent" : "contact",
-              sender_name: senderName,
-              sender_phone: senderPhone,
-              message_type: msgType,
-              content,
-              provider: "zapi",
-              provider_message_id: providerMsgId,
-              chat_id: finalChatIdentifier,
-              direction: fromMe ? "outbound" : "inbound",
-              sent_at: payload.timestamp ? new Date(payload.timestamp).toISOString() : now,
-              raw_payload: payload,
-              media_url:
-                payload.imageUrl || payload.audioUrl || payload.videoUrl || payload.documentUrl ||
-                payload.image?.url || payload.audio?.url || payload.video?.url || payload.document?.url ||
-                payload.image?.imageUrl || payload.audio?.audioUrl || payload.video?.videoUrl || payload.document?.documentUrl ||
-                null,
-            },
-            {
-              onConflict: "provider,provider_message_id",
-              ignoreDuplicates: true, // ✅ chave do dedupe: ON CONFLICT DO NOTHING
-            }
-          )
-          .select("id")
-          .maybeSingle();
-
-        msgResult = upsertResult.data;
-        msgError = upsertResult.error;
-
-        if (msgError) {
-          console.log("[Webhook] Error upserting message:", msgError);
-          return new Response(JSON.stringify({ success: false, error: msgError }), { headers: corsHeaders, status: 500 });
-        }
-
-        // ✅ Se veio null, é duplicado (não inseriu nada) => NÃO dispara IA
-        if (!msgResult?.id) {
-          console.log("[Webhook] Duplicate message blocked (no insert) - not triggering AI");
-          return new Response(JSON.stringify({ success: true, duplicate: true }), { headers: corsHeaders });
-        }
-      }
+      msgResult = insertResult.data;
+      msgError = insertResult.error;
     }
 
     if (msgError) throw new Error(`Falha ao salvar mensagem: ${msgError.message}`);
