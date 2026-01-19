@@ -154,19 +154,19 @@ serve(async (req) => {
         entity_id: participant.entity_id
       });
 
-      // IMPORTANTE: Só bloqueia se for REALMENTE fornecedor
-      if (participant.role_type === 'fornecedor') {
-        console.log('[ai-maybe-reply] ⛔ Bloqueando: Fornecedor confirmado');
+      // IMPORTANTE: Só bloqueia se for REALMENTE fornecedor ou funcionario
+      if (participant.role_type === 'fornecedor' || participant.role_type === 'funcionario') {
+        console.log(`[ai-maybe-reply] ⛔ Bloqueando: ${participant.role_type} confirmado`);
         await supabase.from('ai_logs').insert({
           conversation_id,
           status: 'skipped',
-          reason: 'role_fornecedor',
+          reason: `role_${participant.role_type}`,
           model: 'ai-maybe-reply',
           metadata: { participant_name: participant.name }
         });
         return new Response(JSON.stringify({
           success: false,
-          reason: 'Role: fornecedor'
+          reason: `Role: ${participant.role_type}`
         }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       } else {
         console.log('[ai-maybe-reply] ✅ Role permitido:', participant.role_type);

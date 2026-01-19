@@ -134,7 +134,15 @@ serve(async (req: Request): Promise<Response> => {
 
     if (isGroupId(rawChatId) || payloadIsGroup) {
       isGroupChat = true;
-      const gId = (rawChatId || "").trim().toLowerCase().includes('@g.us') ? rawChatId : `${(rawChatId || "").replace(/^(u:|g:)/, '')}@g.us`;
+      let gId = (rawChatId || "").trim().toLowerCase().replace(/^(u:|g:)/, '');
+
+      // Normalizar @gus para @g.us ou adicionar @g.us se não tiver
+      if (gId.includes('@')) {
+        gId = gId.split('@')[0] + '@g.us';
+      } else {
+        gId = gId + '@g.us';
+      }
+
       threadKey = `g:${gId.replace('@g.us', '')}@g.us`;
       canonicalChatId = gId;
     } else {
