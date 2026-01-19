@@ -100,7 +100,8 @@ $functions = @(
     "evolution-session",
     "notify-open-tickets-group",
     "queue-stats",
-    "dlq-manager"
+    "dlq-manager",
+    "zapi-send-file"
 )
 
 $success = 0
