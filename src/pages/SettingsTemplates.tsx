@@ -97,6 +97,7 @@ export default function SettingsTemplates() {
     const [loading, setLoading] = useState(true);
     const [filterCategory, setFilterCategory] = useState<string>('all');
     const [filterActive, setFilterActive] = useState<string>('all');
+    const [keywordsInput, setKeywordsInput] = useState('');
 
     // Form state
     const [showModal, setShowModal] = useState(false);
@@ -169,6 +170,7 @@ export default function SettingsTemplates() {
                 match_priority: template.match_priority ?? 0,
                 active: template.active,
             });
+            setKeywordsInput((template.match_keywords || []).join(', '));
         } else {
             setEditingTemplate(null);
             setForm({
@@ -184,6 +186,7 @@ export default function SettingsTemplates() {
                 match_priority: 0,
                 active: true,
             });
+            setKeywordsInput('');
         }
         setShowModal(true);
     };
@@ -217,7 +220,7 @@ export default function SettingsTemplates() {
                 default_minutes: form.default_minutes,
                 required_people: form.required_people,
                 required_skill_codes: form.required_skill_codes,
-                match_keywords: form.match_keywords,
+                match_keywords: keywordsInput.split(/[,.]/).map(s => s.trim()).filter(s => s.length > 0),
                 default_materials: form.default_materials,
                 criticality: form.criticality,
                 sla_business_days: form.sla_business_days,
@@ -524,11 +527,8 @@ export default function SettingsTemplates() {
                                 </div>
                                 <Input
                                     placeholder="Ex: portão, travado, motor (separados por vírgula)"
-                                    value={form.match_keywords.join(', ')}
-                                    onChange={(e) => setForm({
-                                        ...form,
-                                        match_keywords: e.target.value.split(/[,.]/).map(s => s.trim()).filter(s => s.length > 0)
-                                    })}
+                                    value={keywordsInput}
+                                    onChange={(e) => setKeywordsInput(e.target.value)}
                                     className="mt-2"
                                 />
                                 <p className="text-xs text-muted-foreground mt-1">
