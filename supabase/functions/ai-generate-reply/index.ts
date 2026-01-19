@@ -361,7 +361,11 @@ async function executeCreateProtocol(
   }
 
   const pendingPayload = (convWithPayload.pending_payload ?? {}) as any;
-  const condominiumRawName = (pendingPayload.condo_raw_name ?? null) as string | null;
+  const condominiumRawName =
+    pendingPayload.condo_raw_name ||
+    pendingPayload.condo_raw ||
+    (pendingPayload.condominium_name) ||
+    null;
 
   // ✅ MODIFIED: Só bloqueia se não tiver NEM ID NEM nome raw
   if (!convWithPayload.active_condominium_id && !condominiumRawName) {
@@ -719,7 +723,7 @@ serve(async (req) => {
     // --- TIER 4: DETERMINISTIC (Bulletproof Context-Aware) ---
     const { data: convData } = await supabase
       .from('conversations')
-      .select('active_condominium_id, pending_field, pending_payload')
+      .select('active_condominium_id, pending_field, pending_payload, contact_id')
       .eq('id', conversationId)
       .maybeSingle();
 
@@ -738,7 +742,7 @@ serve(async (req) => {
       const { data: participant } = await supabase
         .from('participants')
         .select('role_type, entity_id, entities(name)')
-        .eq('contact_id', contact.id)
+        .eq('contact_id', convData.contact_id)
         .eq('is_primary', true)
         .maybeSingle();
 
@@ -952,9 +956,9 @@ serve(async (req) => {
     const needsApartment = /(interfone|tv|controle|apartamento|apto|unidade)/i.test(recentText);
 
     // ✅ FIX: Considerar "condomínio identificado" quando tem ID OU nome raw (escape hatch)
-    const condoRawName = (pendingPayload?.condo_raw_name ?? pendingPayload?.condominium_raw_name ?? null);
+    const condoRawName = (pendingPayload?.condo_raw_name || pendingPayload?.condo_raw || pendingPayload?.condominium_raw_name || null);
 
-    const hasIdentifiedCondoId = Boolean(convData?.active_condominium_id); // Analytics/legacy
+    const hasIdentifiedCondoId = Boolean(convData?.active_condominium_id);
     const hasCondoInfo = hasIdentifiedCondoId || Boolean(condoRawName && String(condoRawName).trim().length > 0);
 
     const canOpenNow = hasCondoInfo && hasOperationalContext && (!needsApartment || Boolean(aptCandidate));

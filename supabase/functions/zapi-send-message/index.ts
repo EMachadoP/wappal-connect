@@ -181,19 +181,6 @@ serve(async (req: Request) => {
       userId = user.id;
     }
 
-    // Sender name
-    let senderName = "Atendente G7";
-    if (userId !== "system") {
-      const { data: profile } = await supabaseAdmin
-        .from("profiles")
-        .select("name, display_name")
-        .eq("id", userId)
-        .maybeSingle();
-      if (profile) senderName = profile.display_name || profile.name || "Atendente G7";
-    } else {
-      senderName = "Ana Mônica";
-    }
-
     const json: Json = await req.json();
 
     // Inputs
@@ -204,50 +191,32 @@ serve(async (req: Request) => {
       message_type = "text",
       media_url,
       sender_name: overrideSenderName,
-      is_system = false,     // ✅ novo
-      takeover = false,      // ✅ novo
-      assign = false         // ✅ kept for compatibility
+      is_system = false,
+      takeover = false,
+      assign = false
     } = json;
 
     conversation_id = json.conversation_id;
     const isGroupInput = toBool(json.isGroup);
 
-    // ✅ Re-use top-level auth checks for validation (authHeader, apikeyHeader, isServiceKey are defined at top)
-
-    // ✅ Descobre usuário autenticado (quando vier do app)
+    // ✅ Descobre usuário autenticado
     async function getCurrentUser() {
-      // Se for service call, não existe user real
-      if (isServiceKey) return { userId: null as string | null, isPrivileged: false };
-
-      const auth = authHeader || ""; // safe access
-      if (!auth.toLowerCase().startsWith("bearer ")) {
-        return { userId: null, isPrivileged: false };
-      }
-
-      // Usa o próprio service key para validar o JWT no GoTrue
+      if (isServiceKey) return { userId: null, isPrivileged: false };
+      const auth = authHeader || "";
+      if (!auth.toLowerCase().startsWith("bearer ")) return { userId: null, isPrivileged: false };
       const supabaseAuth = createClient(supabaseUrl, supabaseServiceKey, {
         global: { headers: { Authorization: auth } }
       });
-
       const { data: userData, error: userErr } = await supabaseAuth.auth.getUser();
       const userId = userData?.user?.id ?? null;
       if (userErr || !userId) return { userId: null, isPrivileged: false };
-
-      const { data: profile } = await supabaseAdmin
-        .from("profiles")
-        .select("role")
-        .eq("id", userId)
-        .maybeSingle();
-
+      const { data: profile } = await supabaseAdmin.from("profiles").select("role").eq("id", userId).maybeSingle();
       const role = String((profile as any)?.role || "").toLowerCase();
       const isPrivileged = role === "admin" || role === "owner";
-
       return { userId, isPrivileged };
     }
 
     const { userId: currentUserId, isPrivileged } = await getCurrentUser();
-
-    // ✅ is_system só é aceito se for service call (ou admin/owner)
     const requestedIsSystem = toBool(is_system);
     const isSystem = requestedIsSystem && (isServiceKey || isPrivileged);
 
@@ -255,9 +224,21 @@ serve(async (req: Request) => {
       console.warn("[zapi-send-message] is_system spoof attempt downgraded to false");
     }
 
-    console.log(`[zapi-send-message] 📋 Input: conv=${conversation_id} isSystem=${isSystem} takeover=${takeover} content="${(content || '').slice(0, 50)}..."`);
+    // ✅ IDENTIFICAÇÃO SEGURA DO REMETENTE
+    let senderName = "Atendente G7";
+    if (!isSystem && userId !== "system") {
+      const { data: profile } = await supabaseAdmin
+        .from("profiles")
+        .select("name, display_name")
+        .eq("id", userId)
+        .maybeSingle();
+      if (profile) {
+        senderName = profile.display_name || profile.name || "Atendente G7";
+      }
+    } else {
+      senderName = isSystem ? (overrideSenderName || "Ana Mônica") : "Atendente G7";
+    }
 
-    // idempotency_key - caller should pass trigger-based key, fallback uses content hash
     const idempotency_key: string =
       json.idempotency_key ||
       stableKey({
@@ -266,11 +247,10 @@ serve(async (req: Request) => {
         content: content || "",
         message_type: message_type || "text",
         media_url: media_url || null,
-        senderName: overrideSenderName || senderName,
+        senderName: senderName,
       });
 
     if (inputRecipient && !chatId) chatId = inputRecipient;
-    if (overrideSenderName) senderName = overrideSenderName;
 
     // Recipient selection
     let recipient = chatId as string | undefined;

@@ -80,13 +80,11 @@ serve(async (req: Request): Promise<Response> => {
       if (raw.includes("@g.us")) return true;
 
       // REGRA 2: padrão de grupo "5511...-1234" (sem @) OU "...-1234@g.us"
-      const stripped = stripPrefix(raw);
+      const stripped = (raw.replace(/^(u:|g:)/, '')).trim();
       if (/^\d{10,14}-\d+/.test(stripped)) return true;
 
       return false;
     };
-
-    const isLid = (id?: string | null) => !!id && id.endsWith("@lid");
 
     const fromMeRaw = payload.fromMe;
     const direction = String(payload.direction || '').toLowerCase(); // 'inbound' | 'outbound'
@@ -96,20 +94,24 @@ serve(async (req: Request): Promise<Response> => {
         direction === 'inbound' ? false :
           (fromMeRaw === true || fromMeRaw === 1 || fromMeRaw === "true" || fromMeRaw === "1");
 
-    // Extrai o melhor telefone possível do payload
-    function extractPhone(payload: any, fromMe: boolean) {
-      // Quando fromMe, procurar destinatário primeiro (priorizando 'to' e 'recipient')
-      // Ajuste: 'phone' muitas vezes é o remetente, então deixamos por último no fromMe
+    // ✅ IDENTIFICAÇÃO DO INTERLOCUTOR (PATCH DEFINITIVO)
+    // Regra de ouro: remoteChatId deve ser o REMOTO (Karla), nunca o número do aparelho conectado.
+    const rawFrom = payload?.from || payload?.message?.from || payload?.senderPhone || payload?.phone;
+    const rawTo = payload?.to || payload?.message?.to || payload?.recipient || payload?.chatId;
+
+    // Se fui eu que mandei (outbound), o interlocutor é o 'to'. Se recebi (inbound), é o 'from'.
+    const rawChatId = fromMe ? rawTo : rawFrom;
+
+    // Extrai o melhor telefone possível do interlocutor
+    function extractPhone(payload: any, fromMe: boolean, remoteChatId: string | null) {
       const candidates = fromMe
-        ? [payload.to, payload.recipient, payload.chatName, payload.chatId, payload.phone]
-        : [payload.senderPhone, payload.contact?.phone, payload.from, payload.participantPhone, payload.phone, payload.chatId];
+        ? [remoteChatId, payload.to, payload.recipient, payload.chatName, payload.chatId]
+        : [payload.senderPhone, remoteChatId, payload.contact?.phone, payload.from, payload.participantPhone, payload.chatId];
 
       for (const c of candidates) {
         if (!c || typeof c !== 'string') continue;
-        // Se for LID ou Grupo, ignora números curtos, pega só se parecer telefone
         if (c.endsWith('@lid') || c.endsWith('@g.us')) continue;
 
-        // ✅ FIX: Se termina com @s.whatsapp.net, extrair dígitos
         if (c.endsWith('@s.whatsapp.net')) {
           const digits = c.split('@')[0].replace(/\D/g, '');
           if (digits.length >= 10) return digits;
@@ -117,30 +119,27 @@ serve(async (req: Request): Promise<Response> => {
         }
 
         const d = onlyDigits(c);
-        if (d.length >= 10) return d; // 10+ dígitos (BR normalmente 12-13 com DDI 55)
+        if (d.length >= 10) return d;
       }
       return null;
     }
 
-    const rawChatId = payload.chatId || payload.chat?.chatId || payload.id || null;
-
     // 1. Determinar Thread Key (Identidade Canônica) e Chat ID
     let threadKey: string | null = null;
-    let canonicalChatId: string | null = null; // ✅ Agora sempre telefone para pessoa
+    let canonicalChatId: string | null = null;
     let isGroupChat = false;
 
-    // ✅ FIX: Strict boolean parse for isGroup (same fix as fromMe - strings like "false" should be false)
     const payloadIsGroup = payload.isGroup === true || payload.isGroup === 1 || payload.isGroup === "1" ||
       (typeof payload.isGroup === "string" && payload.isGroup.toLowerCase() === "true");
 
     if (isGroupId(rawChatId) || payloadIsGroup) {
       isGroupChat = true;
-      const gId = normalizeGroupJid(rawChatId || payload.phone || "");
+      const gId = (rawChatId || "").trim().toLowerCase().includes('@g.us') ? rawChatId : `${(rawChatId || "").replace(/^(u:|g:)/, '')}@g.us`;
       threadKey = `g:${gId.replace('@g.us', '')}@g.us`;
-      canonicalChatId = gId; // ✅ Para grupo, mantém ...@g.us (JID enviável)
+      canonicalChatId = gId;
     } else {
       // 1:1 chat
-      let phone = extractPhone(payload, fromMe);
+      let phone = extractPhone(payload, fromMe, rawChatId);
 
       let resolvedFromLidContact: any = null;
 
@@ -284,69 +283,68 @@ serve(async (req: Request): Promise<Response> => {
 
     console.log(`[Webhook] Normalizing: ID=${chatIdentifier} -> Key=${chatKey} (Group: ${isGroupChat})`);
 
-    // 4. Salvar/Atualizar Contato usando CHAT_KEY
+    // 4. Salvar/Atualizar Contato
     let contactId: string;
-    let { data: existingContact } = await supabase.from('contacts')
+
+    // ✅ ESTRATÉGIA DE RESOLUÇÃO (PATCH DEFINITIVO)
+    // 1. Tentar por telefone (E.164)
+    // 2. Se não achar, tentar por chat_lid
+    // 3. Se achou por telefone e o chat_lid mudou -> atualizar
+
+    const phone = extractPhone(payload, fromMe, rawChatId);
+    const finalPhone = phone ? (phone.length === 10 || phone.length === 11 ? "55" + phone : phone) : null;
+    const currentLid = (typeof rawChatId === 'string' && rawChatId.endsWith('@lid')) ? rawChatId : null;
+
+    let { data: contactFound } = await supabase.from('contacts')
       .select('id, chat_lid, phone, name, chat_key')
-      .eq('chat_key', chatKey)
+      .eq('phone', finalPhone || 'none')
       .maybeSingle();
 
-    // ✅ RECOVERY: Se não achou pelo Phone Key, tenta achar pelo LID Key (Split-Brain Fix)
-    // Isso acontece quando tínhamos LID, e agora recebemos Phone. Vamos achar o contato antigo e migrar.
-    const phone = extractPhone(payload, fromMe);
-    let finalPhone = phone ? (phone.length === 10 || phone.length === 11 ? "55" + phone : phone) : null;
-
-    if (!existingContact && finalPhone && rawChatId && rawChatId.endsWith('@lid')) {
-      const lidKey = `u:${rawChatId}`;
-      const { data: lidContact } = await supabase.from('contacts')
+    if (!contactFound && currentLid) {
+      const { data: byLid } = await supabase.from('contacts')
         .select('id, chat_lid, phone, name, chat_key')
-        .eq('chat_key', lidKey)
+        .eq('chat_lid', currentLid)
         .maybeSingle();
-
-      if (lidContact) {
-        console.log(`[Webhook] 🔄 Found existing contact by LID (${lidKey}). Will upgrade to Phone (${chatKey}).`);
-        existingContact = lidContact;
-      }
+      contactFound = byLid;
     }
 
-    if (existingContact) {
-      contactId = existingContact.id;
+    if (!contactFound && chatKey) {
+      const { data: byKey } = await supabase.from('contacts')
+        .select('id, chat_lid, phone, name, chat_key')
+        .eq('chat_key', chatKey)
+        .maybeSingle();
+      contactFound = byKey;
+    }
+
+    if (contactFound) {
+      contactId = contactFound.id;
       const updates: any = { updated_at: now };
 
-      // ✅ UPGRADE: If we have a phone now and contact is on LID, upgrade it
-      const hasPhoneNow = finalPhone && finalPhone.length >= 10;
-      const isCurrentlyLID = existingContact.chat_lid?.includes('@lid') || existingContact.chat_key?.includes('@lid');
-
-      if (hasPhoneNow && isCurrentlyLID) {
-        console.log(`[Webhook] 🔄 Upgrading contact from LID to phone: ${finalPhone}`);
-        updates.chat_lid = `${finalPhone}@s.whatsapp.net`;
-        updates.phone = finalPhone;
-        updates.chat_key = `u:${finalPhone}`; // Unify thread
-      } else {
-        // ✅ PATCH 2: Sempre atualizar chat_lid e phone quando disponíveis
-        // Se tivermos novo LID identificado
-        if (chatIdentifier.includes('@lid')) {
-          updates.chat_lid = chatIdentifier;
-        }
-
-        const p = extractPhone(payload, fromMe);
-        if (!isGroupChat && p) {
-          let finalP = p;
-          if (finalP.length === 10 || finalP.length === 11) finalP = "55" + finalP;
-          updates.phone = finalP;
-        }
+      // ✅ RECOVERY: Se achou por phone mas threadKey mudou (ex: era LID e agora é Phone)
+      if (finalPhone && contactFound.chat_key !== chatKey && chatKey?.startsWith('u:55')) {
+        console.log(`[Webhook] 🔄 Migrando contato ${contactId} para nova threadKey: ${chatKey}`);
+        updates.chat_key = chatKey;
       }
 
-      // ✅ MOVED: Update call is strictly OUTSIDE the inner if/else, INSIDE existingContact block
+      // ✅ PATCH: Sempre manter o LID mais atualizado
+      if (currentLid && contactFound.chat_lid !== currentLid) {
+        console.log(`[Webhook] 🔄 Atualizando LID do contato ${contactId}: ${currentLid}`);
+        updates.chat_lid = currentLid;
+      }
+
+      if (finalPhone && !contactFound.phone) {
+        updates.phone = finalPhone;
+      }
+
       await supabase.from('contacts').update(updates).eq('id', contactId);
     } else {
       const { data: newContact, error: insertError } = await supabase.from('contacts').insert({
         chat_key: chatKey,
-        chat_lid: chatIdentifier,
-        lid: chatIdentifier,
+        chat_lid: currentLid || chatIdentifier,
+        lid: currentLid || chatIdentifier,
         name: chatName,
         is_group: isGroupChat,
-        phone: !isGroupChat && !chatIdentifier.includes('@') ? chatIdentifier : null,
+        phone: finalPhone,
         updated_at: now
       }).select('id').single();
 
