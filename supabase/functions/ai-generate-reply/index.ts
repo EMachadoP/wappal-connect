@@ -447,12 +447,34 @@ async function setPending(conversationId: string, field: string, supabase: any, 
     .eq('id', conversationId);
 }
 
+// --- LOCK HELPERS ---
+async function acquireLock(supabase: any, conversationId: string) {
+  const staleBefore = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+
+  // Limpa locks travados (stale > 2min)
+  await supabase
+    .from('ai_conversation_locks')
+    .delete()
+    .eq('conversation_id', conversationId)
+    .lt('locked_at', staleBefore);
+
+  // Tenta inserir novo lock
+  const { error } = await supabase
+    .from('ai_conversation_locks')
+    .insert({ conversation_id: conversationId });
+
+  if (error?.code === '23505') return false; // Já existe lock ativo
+  if (error) throw error;
+  return true;
+}
+
 // --- SERVE ---
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   const startTime = Date.now();
+  let cid: string | undefined;
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -460,9 +482,22 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     const rawBody = await req.json();
-    const messages = (rawBody.messages || []).slice(0, 50); // Limit to 50
     const conversationIdRaw = rawBody.conversation_id || rawBody.conversationId || rawBody.conversation?.id;
-    const conversationId = (typeof conversationIdRaw === 'string') ? conversationIdRaw : undefined;
+    cid = (typeof conversationIdRaw === 'string') ? conversationIdRaw : undefined;
+
+    // ✅ ADQUIRIR LOCK (Previne concorrência)
+    if (cid) {
+      const locked = await acquireLock(supabase, cid);
+      if (!locked) {
+        console.log('[AI] 🔒 Lock busy for conversation:', cid);
+        return new Response(JSON.stringify({ text: null, skipped: "lock_busy" }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    const messages = (rawBody.messages || []).slice(0, 50); // Limit to 50
+    const conversationId = cid; // Keep internal name compatibility
     let participant_id = rawBody.participant_id; // Extract participant_id from request
 
     // Dynamically clean passed systemPrompt from negative examples (mimicry prevention)
@@ -1249,5 +1284,18 @@ REGRAS DE EXECUÇÃO:
   } catch (error: any) {
     console.error('AI Error:', error);
     return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: corsHeaders });
+  } finally {
+    // ✅ LIBERAR LOCK
+    if (cid) {
+      try {
+        const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+        const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+        const supabase = createClient(supabaseUrl, supabaseServiceKey);
+        await supabase.from('ai_conversation_locks').delete().eq('conversation_id', cid);
+        console.log('[AI] 🔓 Lock released:', cid);
+      } catch (e) {
+        console.error('[AI] ❌ Error releasing lock:', e);
+      }
+    }
   }
 });

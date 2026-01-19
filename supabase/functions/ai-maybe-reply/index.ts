@@ -70,7 +70,24 @@ serve(async (req) => {
       return new Response(JSON.stringify({ success: false, reason: 'Debounced at 6s' }));
     }
 
-    console.log('[ai-maybe-reply] Debounce OK após 6s. Processando...');
+    console.log('[ai-maybe-reply] Debounce OK após 6s. Verificando se é a última inbound...');
+
+    const { data: latestInbound } = await supabase
+      .from('messages')
+      .select('id, sent_at')
+      .eq('conversation_id', conversation_id)
+      .eq('direction', 'inbound')
+      .order('sent_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    // ✅ FIX: Se já chegou uma mensagem mais nova, esta execução foi "atropelada"
+    if (latestInbound?.id && initialId && latestInbound.id !== initialId) {
+      console.log('[ai-maybe-reply] ⏭️ Atropelado por mensagem mais nova, cancelando resposta.');
+      return new Response(JSON.stringify({ success: false, reason: 'superseded_by_newer_inbound' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    console.log('[ai-maybe-reply] Processando...');
 
     // 2. Carregar dados da conversa e configurações
     const { data: conv } = await supabase

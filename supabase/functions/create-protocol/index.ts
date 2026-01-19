@@ -212,6 +212,30 @@ serve(async (req: Request) => {
     let resolvedCondoId = null;
     let source = 'none';
 
+    // ✅ CHECK IDEMPOTENCY: Se já existe um protocolo aberto nesta conversa, reusa ele.
+    // O 'force_new' permite ignorar esta trava se vier explicitamente via botão manual.
+    if (!force_new) {
+      log(`[create-protocol] Checking idempotency for conversation ${conversation_id}`);
+      const { data: existingProtocol } = await supabaseClient
+        .from('protocols')
+        .select('id, protocol_code, status, created_at')
+        .eq('conversation_id', conversation_id)
+        .in('status', ['open', 'queued', 'in_progress'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (existingProtocol) {
+        log(`[IDEMPOTENCY] Reusing existing protocol: ${existingProtocol.protocol_code}`);
+        return new Response(JSON.stringify({
+          success: true,
+          protocol_id: existingProtocol.id,
+          protocol_code: existingProtocol.protocol_code,
+          reused: true
+        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+    }
+
     // ✅ PRIORITY 1: ID explícito tem prioridade
     if (condominium_id && isValidUUID(condominium_id)) {
       resolvedCondoId = condominium_id;
