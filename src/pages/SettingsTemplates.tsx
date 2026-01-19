@@ -527,7 +527,7 @@ export default function SettingsTemplates() {
                                     value={form.match_keywords.join(', ')}
                                     onChange={(e) => setForm({
                                         ...form,
-                                        match_keywords: e.target.value.split(',').map(s => s.trim()).filter(s => s.length > 0)
+                                        match_keywords: e.target.value.split(/[,.]/).map(s => s.trim()).filter(s => s.length > 0)
                                     })}
                                     className="mt-2"
                                 />
