@@ -186,8 +186,9 @@ serve(async (req: Request): Promise<Response> => {
     const currentLid = (typeof rawIdentity === 'string' && rawIdentity.endsWith('@lid')) ? rawIdentity : null;
 
     let contactId: string;
+    // let contactId: string; // Removed duplicate
     const { data: contactFound } = await supabase.from('contacts')
-      .select('id, chat_key, chat_lid')
+      .select('id, name, chat_key, chat_lid')
       .or(`chat_key.eq.${threadKey},chat_key.eq.${threadKey.replace(/^(u:|g:)/, '')},phone.eq.${phone || 'none'},chat_lid.eq.${rawIdentity || 'none'}`)
       .limit(1)
       .maybeSingle();
@@ -199,6 +200,16 @@ serve(async (req: Request): Promise<Response> => {
         updates.chat_key = threadKey;
       }
       if (currentLid && contactFound.chat_lid !== currentLid) updates.chat_lid = currentLid;
+
+      // ✅ Auto-Correction of Name: If current name acts like an ID, try to update it
+      const currentName = contactFound.name || "";
+      const isNameInvalid = !currentName || /^\d+$/.test(currentName.replace(/\D/g, '')) || (currentName.includes('@') && currentName.length > 15);
+
+      if (isNameInvalid && chatName && chatName !== 'Desconhecido' && !/^\d+$/.test(chatName.replace(/\D/g, ''))) {
+        updates.name = chatName;
+        console.log(`[Webhook] 🔄 Updating contact name from '${currentName}' to '${chatName}'`);
+      }
+
       await supabase.from('contacts').update(updates).eq('id', contactId);
     } else {
       const { data: newContact, error: insErr } = await supabase.from('contacts').insert({
