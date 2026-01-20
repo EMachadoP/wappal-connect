@@ -259,17 +259,20 @@ serve(async (req: Request) => {
 
     // Recipient selection
     let recipient = chatId as string | undefined;
+    let foundConv: any = null; // Hoist variable
 
     if (conversation_id) {
-      const { data: foundConv, error: convErr } = await supabaseAdmin
+      const { data: convData, error: convErr } = await supabaseAdmin
         .from("conversations")
         .select("id, chat_id, assigned_to, ai_mode, human_control, ai_paused_until, status, contacts(phone, is_group)")
         .eq("id", conversation_id)
         .maybeSingle();
 
-      if (convErr || !foundConv) {
+      if (convErr || !convData) {
         throw new Error("Conversation not found for conversation_id=" + conversation_id);
       }
+
+      foundConv = convData;
 
       if (!foundConv) {
         return new Response(
@@ -325,10 +328,29 @@ serve(async (req: Request) => {
     const formattedRecipient = normalized.to_chat_id;
     const finalIsGroup = normalized.isGroup;
 
+    // ✅ FIX: Prioritize Phone over LID for delivery
+    // If we're sending to a LID (14-16 digits) but have a real phone, switch to phone!
+    let effectiveRecipient = formattedRecipient;
+    const digits = effectiveRecipient.replace(/\D/g, '');
+    const isLID = digits.length >= 14 && digits.length <= 16;
+
+    if (!finalIsGroup && isLID) {
+      // Try to find the phone from the contact loaded earlier (if available)
+      // We loaded 'foundConv' earlier which has 'contacts(phone, is_group)'
+      const contactData = (foundConv?.contacts) as any;
+      if (contactData?.phone) {
+        const phoneDigits = contactData.phone.replace(/\D/g, '');
+        if (phoneDigits.startsWith('55') && (phoneDigits.length === 12 || phoneDigits.length === 13)) {
+          console.log(`[zapi-send-message] 🔄 Swapping LID ${effectiveRecipient} -> Phone ${phoneDigits} for delivery`);
+          effectiveRecipient = phoneDigits;
+        }
+      }
+    }
+
     // ✅ FIX: dbChatId = JID canônico para o banco (sempre com sufixo @s.whatsapp.net ou @g.us)
     const dbChatId = finalIsGroup
-      ? formattedRecipient  // grupos já vêm com @g.us
-      : (formattedRecipient.includes('@') ? formattedRecipient : `${formattedRecipient}@s.whatsapp.net`);
+      ? effectiveRecipient  // grupos já vêm com @g.us
+      : (effectiveRecipient.includes('@') ? effectiveRecipient : `${effectiveRecipient}@s.whatsapp.net`);
 
     // ✅ VALIDAÇÃO: recipient DEVE ser JID enviável (não aceitar LID interno)
     const isSendableJID = formattedRecipient.includes('@s.whatsapp.net') || formattedRecipient.includes('@g.us');
