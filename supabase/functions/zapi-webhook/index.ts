@@ -436,44 +436,52 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     // AI & Group Resolution...
-    if (!fromMe && !isGroupChat && !msgError && msgResult && !existingMsg) {
-      // ✅ Só dispara IA para inbound do contato
+    // ✅ PASSO 3: A IA não deve rodar quando a mensagem for duplicada
+    if (!fromMe && !isGroupChat && !msgError && msgResult && (existingMsg === null || existingMsg === undefined)) {
       if (!msgResult?.id) {
+        console.log("[Webhook] Skipping AI: No message ID");
         return new Response(JSON.stringify({ success: true, skipped_ai: "no_message_id" }), { headers: corsHeaders });
       }
 
       const audioUrl = payload.audioUrl || payload.audio?.url || payload.audio?.audioUrl || payload.document?.documentUrl || "";
-      if (msgType === 'audio') {
-        await fetch(`${supabaseUrl}/functions/v1/transcribe-audio`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${supabaseServiceKey}`,
-            'apikey': supabaseServiceKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ message_id: msgResult.id, audio_url: audioUrl, conversation_id: conv.id }),
-        });
-      } else {
-        await fetch(`${supabaseUrl}/functions/v1/ai-maybe-reply`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${supabaseServiceKey}`,
-            'apikey': supabaseServiceKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ conversation_id: conv.id, initial_message_id: msgResult.id }),
-        }).then(async r => {
-          const text = await r.text();
-          console.log(`[Webhook] ai-maybe-reply result: ${r.status} ${text}`);
-          if (!r.ok) {
-            await supabase.from('ai_logs').insert({
-              conversation_id: conv.id,
-              status: 'error',
-              error_message: `ai-maybe-reply failed: ${r.status} ${text}`,
-              model: 'webhook-handler'
-            });
-          }
-        }).catch(err => console.error('[Webhook] Erro calling ai-maybe-reply:', err));
+
+      // ✅ PASSO 2: Webhook NUNCA pode “morrer” por erro de IA
+      try {
+        if (msgType === 'audio') {
+          fetch(`${supabaseUrl}/functions/v1/transcribe-audio`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${supabaseServiceKey}`,
+              'apikey': supabaseServiceKey,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ message_id: msgResult.id, audio_url: audioUrl, conversation_id: conv.id }),
+          }).catch(err => console.error('[Webhook] transcription call failed (background):', err));
+        } else {
+          // Chamada para ai-maybe-reply
+          fetch(`${supabaseUrl}/functions/v1/ai-maybe-reply`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${supabaseServiceKey}`,
+              'apikey': supabaseServiceKey,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ conversation_id: conv.id, initial_message_id: msgResult.id }),
+          }).then(async r => {
+            const text = await r.text();
+            console.log(`[Webhook] ai-maybe-reply result: ${r.status} ${text}`);
+            if (!r.ok) {
+              await supabase.from('ai_logs').insert({
+                conversation_id: conv.id,
+                status: 'error',
+                error_message: `ai-maybe-reply failed: ${r.status} ${text}`,
+                model: 'webhook-handler'
+              });
+            }
+          }).catch(err => console.error('[Webhook] ai-maybe-reply failed (background):', err));
+        }
+      } catch (aiErr) {
+        console.error('[Webhook] AI/Transcription invocation error (non-fatal):', aiErr);
       }
     }
 
@@ -500,6 +508,7 @@ serve(async (req: Request): Promise<Response> => {
 
   } catch (error: any) {
     console.error('[Webhook Error]', error.message);
-    return new Response(JSON.stringify({ error: error.message }), { status: 200, headers: corsHeaders });
+    // ✅ PASSO 2: Webhook NUNCA deve retornar 500 para retries da Z-API se a mensagem foi tratada
+    return new Response(JSON.stringify({ success: false, error: error.message }), { status: 200, headers: corsHeaders });
   }
 });

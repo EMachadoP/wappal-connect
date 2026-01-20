@@ -450,35 +450,43 @@ async function setPending(conversationId: string, field: string, supabase: any, 
 // --- LOCK HELPERS ---
 async function acquireLock(supabase: any, conversationId: string) {
   try {
-    const staleBefore = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    const now = new Date().toISOString();
 
-    // Limpa locks travados (stale > 2min)
-    const { error: delError } = await supabase
+    // 1. Limpa locks expirados de qualquer conversa (manutenção preventiva)
+    await supabase
       .from('ai_conversation_locks')
       .delete()
-      .eq('conversation_id', conversationId)
-      .lt('locked_at', staleBefore);
+      .lt('locked_until', now);
 
-    // Se a tabela não existe, ignoramos o lock e seguimos
-    if (delError?.message?.includes('ai_conversation_locks')) {
-      console.warn('[AI] ⚠️ Lock table missing (ai_conversation_locks). Skipping lock acquisition.');
-      return true;
-    }
+    // 2. Tenta inserir lock para esta conversa
+    // locked_until: 20 segundos de trava para evitar colisão imediata
+    const lockedUntil = new Date(Date.now() + 20 * 1000).toISOString();
 
-    // Tenta inserir novo lock
     const { error } = await supabase
       .from('ai_conversation_locks')
-      .insert({ conversation_id: conversationId });
+      .insert({
+        conversation_id: conversationId,
+        locked_until: lockedUntil,
+        lock_owner: 'ai-generate-reply'
+      });
 
-    if (error?.code === '23505') return false; // Já existe lock ativo
+    if (error?.code === '23505') {
+      console.log('[AI] 🔒 Lock busy for conversation (23505):', conversationId);
+      return false;
+    }
+
     if (error) {
-      if (error.message?.includes('ai_conversation_locks')) return true;
+      if (error.message?.includes('ai_conversation_locks')) {
+        console.warn('[AI] ⚠️ Lock table missing or cache error. Proceeding without lock.');
+        return true;
+      }
       throw error;
     }
+
     return true;
   } catch (e: any) {
-    console.warn('[AI] ⚠️ Error in acquireLock safety check:', e.message);
-    return true; // Fallback: segue processamento se infra de lock falhar
+    console.warn('[AI] ⚠️ acquireLock exception:', e.message);
+    return true; // Resilience: segue se infra de lock falhar
   }
 }
 
@@ -1305,16 +1313,12 @@ REGRAS DE EXECUÇÃO:
         const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
         const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
         const supabase = createClient(supabaseUrl, supabaseServiceKey);
-        const { error: delError } = await supabase.from('ai_conversation_locks').delete().eq('conversation_id', cid);
-
-        if (delError && !delError.message?.includes('ai_conversation_locks')) {
-          console.error('[AI] ❌ Error releasing lock:', delError.message);
-        } else {
-          console.log('[AI] 🔓 Lock released:', cid);
-        }
+        await supabase.from('ai_conversation_locks').delete().eq('conversation_id', cid);
+        console.log('[AI] 🔓 Lock released:', cid);
       } catch (e: any) {
+        // Silencioso se for erro de tabela inexistente
         if (!e.message?.includes('ai_conversation_locks')) {
-          console.error('[AI] ❌ Unexpected error in lock release:', e.message);
+          console.error('[AI] ❌ Error releasing lock:', e.message);
         }
       }
     }
