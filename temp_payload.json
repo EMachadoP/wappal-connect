@@ -1,0 +1,10 @@
+{
+    "phone": "558197438430",
+    "chatLid": "144723385778292@lid",
+    "fromMe": true,
+    "type": "ReceivedCallback",
+    "text": {
+        "message": "Teste verificado 123"
+    },
+    "timestamp": 1768875556000
+}

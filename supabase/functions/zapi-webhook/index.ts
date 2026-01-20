@@ -39,6 +39,15 @@ async function buildFallbackProviderMsgId(opts: {
   return `fallback:${hex.slice(0, 32)}`;
 }
 
+function pickFirst(...vals: any[]) {
+  for (const v of vals) {
+    if (v === undefined || v === null) continue;
+    const s = String(v).trim();
+    if (s) return s;
+  }
+  return null;
+}
+
 serve(async (req: Request): Promise<Response> => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
@@ -98,16 +107,24 @@ serve(async (req: Request): Promise<Response> => {
 
     const onlyDigits = (v?: string | null) => (v ?? "").replace(/\D/g, "");
 
-    function normalizeChatId(raw: string) {
-      const v = (raw || "").trim().toLowerCase().replace("@gus", "@g.us");
-      const left = v.split("@")[0] || "";
+    function normalizeChatId(input: string) {
+      const v0 = (input || "").trim().toLowerCase().replace("@gus", "@g.us");
+      if (!v0) return null;
 
-      const looksGroup = v.endsWith("@g.us") || left.includes("-");
+      // ✅ Preserve @lid (não tenta “virar” telefone)
+      if (v0.endsWith("@lid")) return v0;
+
+      const left = v0.split("@")[0] || "";
+      const hasAt = v0.includes("@");
+      const looksGroup = v0.endsWith("@g.us") || left.includes("-");
 
       if (looksGroup) {
-        return v.endsWith("@g.us") ? v : `${left}@g.us`;
+        // grupo pode vir sem sufixo
+        const base = hasAt ? v0 : left;
+        return base.endsWith("@g.us") ? base : `${base}@g.us`;
       }
 
+      // usuário: só dígitos
       const digits = left.replace(/\D/g, "");
       if (!digits) return null;
 
@@ -127,16 +144,26 @@ serve(async (req: Request): Promise<Response> => {
         direction === 'inbound' ? false :
           (fromMeRaw === true || fromMeRaw === 1 || fromMeRaw === "true" || fromMeRaw === "1");
 
-    // ✅ IDENTIFICAÇÃO DO INTERLOCUTOR (PATCH DEFINITIVO)
-    const rawFrom = payload?.from || payload?.message?.from || payload?.senderPhone || payload?.phone;
-    const rawTo = payload?.to || payload?.message?.to || payload?.recipient || payload?.chatId;
+    // candidates common...
+    const rawChatId = pickFirst(payload.chatId, payload.chat_id, payload?.data?.chatId);
+    const rawLid = pickFirst(payload.chatLid, payload.chat_lid, payload?.data?.chatLid);
+    const rawPhone = pickFirst(payload.phone, payload?.data?.phone, payload.to, payload.number, payload.recipient);
 
-    // Se fui eu que mandei (outbound), o interlocutor é o 'to'. Se recebi (inbound), é o 'from'.
-    const rawRecipient = fromMe ? rawTo : rawFrom;
-    const canonicalChatId = normalizeChatId(rawRecipient);
+    // ✅ regra: outbound (fromMe) precisa achar destinatário → phone primeiro
+    const rawIdentity = fromMe
+      ? pickFirst(rawChatId, rawPhone, rawLid)
+      : pickFirst(rawChatId, rawLid, rawPhone);
 
+    if (!rawIdentity) {
+      console.log(`[Webhook] Ignorado: sem identidade (fromMe=${fromMe})`);
+      // não derruba o webhook (evita retry/duplicadas)
+      return new Response(JSON.stringify({ success: true, ignored: true }), { status: 200, headers: corsHeaders });
+    }
+
+    const canonicalChatId = normalizeChatId(rawIdentity);
     if (!canonicalChatId) {
-      throw new Error(`Invalid chatId or phone: ${rawRecipient} (fromMe: ${fromMe})`);
+      console.log(`[Webhook] Ignorado: identidade inválida raw=${rawIdentity} (fromMe=${fromMe})`);
+      return new Response(JSON.stringify({ success: true, ignored: true }), { status: 200, headers: corsHeaders });
     }
 
     const threadKey = threadKeyFromChatId(canonicalChatId);
@@ -156,12 +183,12 @@ serve(async (req: Request): Promise<Response> => {
 
     // ✅ 1. RESOLVER/ATUALIZAR CONTATO
     const phone = !isGroupChat ? canonicalChatId.split('@')[0] : null;
-    const currentLid = (typeof rawRecipient === 'string' && rawRecipient.endsWith('@lid')) ? rawRecipient : null;
+    const currentLid = (typeof rawIdentity === 'string' && rawIdentity.endsWith('@lid')) ? rawIdentity : null;
 
     let contactId: string;
     const { data: contactFound } = await supabase.from('contacts')
       .select('id, chat_key, chat_lid')
-      .or(`chat_key.eq.${threadKey},chat_key.eq.${threadKey.replace(/^(u:|g:)/, '')},phone.eq.${phone || 'none'},chat_lid.eq.${rawRecipient || 'none'}`)
+      .or(`chat_key.eq.${threadKey},chat_key.eq.${threadKey.replace(/^(u:|g:)/, '')},phone.eq.${phone || 'none'},chat_lid.eq.${rawIdentity || 'none'}`)
       .limit(1)
       .maybeSingle();
 
