@@ -219,31 +219,38 @@ serve(async (req: Request): Promise<Response> => {
     // ✅ 1. RESOLVER/ATUALIZAR CONTATO
     let contactId: string;
     const { data: contactFound } = await supabase.from('contacts')
-      .select('id, name, chat_key, chat_lid, phone')
-      .or(`chat_key.eq.${threadKey},chat_key.eq.${threadKey.replace(/^(u:|g:)/, '')},phone.eq.${phone || 'none'},chat_lid.eq.${currentLid || 'none'}`)
+      .select('id, name, chat_key, chat_lid, lid, phone')
+      .or(`chat_key.eq.${threadKey},chat_key.eq.${threadKey.replace(/^(u:|g:)/, '')},phone.eq.${phone || 'none'},chat_lid.eq.${currentLid || 'none'},lid.eq.${currentLid || 'none'}`)
       .limit(1)
       .maybeSingle();
 
     if (contactFound) {
       contactId = contactFound.id;
       const updates: any = { updated_at: now };
+
+      // ✅ Cross-linking: Ensure both IDs are present
+      if (currentLid && contactFound.chat_lid !== currentLid) updates.chat_lid = currentLid;
+      // We also update 'lid' column if it exists and is different
+      if (currentLid && (contactFound as any).lid !== currentLid) (updates as any).lid = currentLid;
+      if (phone && contactFound.phone !== phone) updates.phone = phone;
+
       if (!contactFound.chat_key.startsWith('u:') && !contactFound.chat_key.startsWith('g:')) {
         updates.chat_key = threadKey;
       }
-      if (currentLid && contactFound.chat_lid !== currentLid) updates.chat_lid = currentLid;
 
-      // ✅ Auto-Correction of Name: If current name acts like an ID, try to update it
+      // ✅ Robust Name Update Logic
       const currentName = contactFound.name || "";
-      const isNameInvalid = !currentName || /^\d+$/.test(currentName.replace(/\D/g, '')) || (currentName.includes('@') && currentName.length > 15);
+      const isNameGeneric = !currentName ||
+        currentName === 'Desconhecido' ||
+        currentName === 'G7 Serv' ||
+        currentName === 'Contact' ||
+        currentName === 'Unknown' ||
+        /^\d+$/.test(currentName.replace(/\D/g, '')) ||
+        (currentName.includes('@') && currentName.length > 15);
 
-      if (isNameInvalid && chatName && chatName !== 'Desconhecido' && !/^\d+$/.test(chatName.replace(/\D/g, ''))) {
+      if (isNameGeneric && chatName && chatName !== 'Desconhecido' && chatName !== 'G7 Serv' && !/^\d+$/.test(chatName.replace(/\D/g, ''))) {
         updates.name = chatName;
         console.log(`[Webhook] 🔄 Updating contact name from '${currentName}' to '${chatName}'`);
-      }
-
-      // ✅ FIX: Ensure phone is updated if missing or different
-      if (phone && contactFound.phone !== phone) {
-        updates.phone = phone;
       }
 
       await supabase.from('contacts').update(updates).eq('id', contactId);
@@ -251,7 +258,8 @@ serve(async (req: Request): Promise<Response> => {
       const { data: newContact, error: insErr } = await supabase.from('contacts').insert({
         chat_key: threadKey,
         chat_id: canonicalChatId,
-        chat_lid: currentLid || canonicalChatId,
+        chat_lid: currentLid,
+        lid: currentLid,
         name: chatName,
         is_group: isGroupChat,
         phone,

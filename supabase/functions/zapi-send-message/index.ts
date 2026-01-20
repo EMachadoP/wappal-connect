@@ -415,20 +415,24 @@ serve(async (req: Request) => {
 
     const chatKey = getChatKey(formattedRecipient, finalIsGroup);
 
-    // Resolve conversation_id by chatKey if needed
+    // Resolve conversation_id by chatKey, Phone or LID
     let finalConvId = conversation_id;
     if (!finalConvId && chatKey) {
       const cleanKey = chatKey.replace(/^(u:|g:)/i, '');
-      const candidateKeys = isGroupInput ? [`g:${cleanKey}`, cleanKey] : [`u:${cleanKey}`, cleanKey];
+      // candidate digits for phone/lid lookup
+      const digits = cleanKey.replace(/\D/g, '');
 
       const { data: contact } = await supabaseAdmin
         .from("contacts")
         .select("id, conversations(id)")
-        .in("chat_key", candidateKeys)
+        .or(`chat_key.eq.${chatKey},chat_key.eq.${cleanKey},phone.eq.${digits},chat_lid.eq.${cleanKey}@lid,lid.eq.${cleanKey}@lid,chat_lid.eq.${cleanKey},lid.eq.${cleanKey}`)
         .limit(1)
         .maybeSingle();
 
-      if (contact?.conversations?.length) finalConvId = contact.conversations[0].id;
+      if (contact?.conversations?.length) {
+        finalConvId = contact.conversations[0].id;
+        console.log(`[zapi-send-message] 🔍 Resolved conversation ${finalConvId} via robust lookup for ${chatKey}`);
+      }
     }
 
     // Build Z-API request parameters
