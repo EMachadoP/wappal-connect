@@ -69,6 +69,47 @@ serve(async (req: Request): Promise<Response> => {
       created_at: now
     });
 
+    // ✅ HANDLE MESSAGE STATUS UPDATES (delivered, read, etc)
+    const isStatusUpdate = payload.event === 'message-status-update' ||
+      payload.type === 'message-status-update' ||
+      (payload.status && payload.messageId);
+
+    if (isStatusUpdate) {
+      const messageId = payload.messageId || payload.whatsapp_message_id || payload.id?.id;
+      const status = payload.status?.toLowerCase();
+      const timestamp = payload.timestamp || payload.timestampStatus || new Date().toISOString();
+
+      console.log('[Webhook] Status update:', { messageId, status, timestamp });
+
+      if (messageId && status) {
+        const updates: any = {};
+
+        if (status === 'delivered' || status === 'sent') {
+          updates.delivered_at = timestamp;
+          updates.status = 'delivered';
+        } else if (status === 'read' || status === 'viewed') {
+          updates.delivered_at = updates.delivered_at || timestamp;
+          updates.read_at = timestamp;
+          updates.status = 'read';
+        }
+
+        if (Object.keys(updates).length > 0) {
+          const { error } = await supabase
+            .from('messages')
+            .update(updates)
+            .eq('whatsapp_message_id', messageId);
+
+          if (error) {
+            console.error('[Webhook] Error updating message status:', error);
+          } else {
+            console.log(`[Webhook] Updated message ${messageId} to status: ${status}`);
+          }
+        }
+      }
+
+      return new Response('OK - Status processed', { status: 200, headers: corsHeaders });
+    }
+
     // 1. Obter configurações
     const { data: settings } = await supabase.from('zapi_settings')
       .select('forward_webhook_url')
