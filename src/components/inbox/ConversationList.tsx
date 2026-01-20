@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Search, Plus } from 'lucide-react';
+import { Search, Plus, RefreshCw } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ConversationItem } from './ConversationItem';
@@ -38,6 +38,7 @@ interface ConversationListProps {
   isMobile?: boolean;
   activeTab: TabValue;
   onTabChange: (tab: TabValue) => void;
+  onRefresh?: () => void;
 }
 
 export function ConversationList({
@@ -48,6 +49,7 @@ export function ConversationList({
   isMobile = false,
   activeTab,
   onTabChange,
+  onRefresh,
 }: ConversationListProps) {
   const [search, setSearch] = useState('');
   const [newMessageModalOpen, setNewMessageModalOpen] = useState(false);
@@ -67,17 +69,30 @@ export function ConversationList({
   return (
     <div className={`w-full border-r border-border flex flex-col bg-card h-full overflow-hidden`}>
       <div className="shrink-0 p-4 border-b border-border space-y-4 bg-muted/5">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <h2 className="font-semibold text-lg px-1">Mensagens</h2>
-          <Button
-            variant="default"
-            size="sm"
-            onClick={() => setNewMessageModalOpen(true)}
-            className="gap-2 h-8 px-3"
-          >
-            <Plus className="w-4 h-4" />
-            Nova Conversa
-          </Button>
+          <div className="flex items-center gap-2">
+            {isMobile && onRefresh && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onRefresh}
+                className="gap-2 h-8 px-3"
+                title="Atualizar conversas"
+              >
+                <RefreshCw className="w-4 h-4" />
+              </Button>
+            )}
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => setNewMessageModalOpen(true)}
+              className="gap-2 h-8 px-3"
+            >
+              <Plus className="w-4 h-4" />
+              Nova Conversa
+            </Button>
+          </div>
         </div>
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />

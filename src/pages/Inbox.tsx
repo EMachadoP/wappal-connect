@@ -385,6 +385,7 @@ export default function InboxPage() {
               isMobile={isMobile}
               activeTab={activeTab}
               onTabChange={setActiveTab}
+              onRefresh={refetchConversations}
             />
           )
         ) : (
@@ -398,6 +399,7 @@ export default function InboxPage() {
                 isMobile={isMobile}
                 activeTab={activeTab}
                 onTabChange={setActiveTab}
+                onRefresh={refetchConversations}
               />
             </Panel>
 
