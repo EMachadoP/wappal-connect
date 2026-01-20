@@ -442,6 +442,7 @@ serve(async (req: Request) => {
     let endpoint = "/send-text";
     const bodyOut: any = { phone: formattedRecipient };
 
+
     if (!message_type || message_type === "text") {
       if (userId !== "system") finalContent = `*${senderName}:*\n${content}`;
       bodyOut.message = finalContent;
@@ -575,6 +576,8 @@ serve(async (req: Request) => {
     const zapiBaseUrl = `https://api.z-api.io/instances/${instanceId}/token/${token}`;
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (clientToken) headers["Client-Token"] = clientToken;
+
+
 
     let result: any;
     let response: Response;
