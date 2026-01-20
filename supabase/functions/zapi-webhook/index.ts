@@ -317,9 +317,13 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (!contactFound && chatKey) {
+      const cleanChatKey = chatKey.replace(/^(u:|g:)/i, '');
+      const candidateChatKeys = isGroupChat ? [`g:${cleanChatKey}`, cleanChatKey] : [`u:${cleanChatKey}`, cleanChatKey];
+
       const { data: byKey } = await supabase.from('contacts')
         .select('id, chat_lid, phone, name, chat_key')
-        .eq('chat_key', chatKey)
+        .in('chat_key', candidateChatKeys)
+        .limit(1)
         .maybeSingle();
       contactFound = byKey;
     }
@@ -443,10 +447,17 @@ serve(async (req: Request): Promise<Response> => {
 
     // ✅ FIX: Upsert por thread_key (não chat_id) - thread_key é o UNIQUE canônico
     // Primeiro tentamos buscar para ver se já existe (importante para lógica de assigned_to)
+    // ✅ ROBUST CONVERSATION LOOKUP (aligned with zapi-send-message)
+    const cleanThreadKey = threadKey.replace(/^(u:|g:)/i, '');
+    const candidateKeys = isGroupChat
+      ? [`g:${cleanThreadKey}`, cleanThreadKey]
+      : [`u:${cleanThreadKey}`, cleanThreadKey];
+
     const { data: existingConv } = await supabase
       .from('conversations')
       .select('id, assigned_to')
-      .eq('thread_key', threadKey)
+      .in('thread_key', candidateKeys)
+      .limit(1)
       .maybeSingle();
 
     if (existingConv) {
@@ -480,8 +491,15 @@ serve(async (req: Request): Promise<Response> => {
       if (insertError) {
         // Fallback final se der race condition
         console.error(`[Webhook] Upsert race condition: ${insertError.message}`);
-        const { data: retryConv } = await supabase.from('conversations').select('id').eq('thread_key', threadKey).maybeSingle();
-        if (!retryConv) throw insertError;
+        const { data: retryConv } = await supabase.from('conversations')
+          .select('id, assigned_to')
+          .in('thread_key', candidateKeys)
+          .limit(1)
+          .maybeSingle();
+
+        if (!retryConv) {
+          throw new Error(`Falha ao recuperar conversa após erro de inserção: ${insertError.message}`);
+        }
         conv = retryConv;
       } else {
         conv = newConv;

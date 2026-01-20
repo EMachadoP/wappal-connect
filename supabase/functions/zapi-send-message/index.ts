@@ -348,10 +348,14 @@ serve(async (req: Request) => {
     // Resolve conversation_id by chatKey if needed
     let finalConvId = conversation_id;
     if (!finalConvId && chatKey) {
+      const cleanKey = chatKey.replace(/^(u:|g:)/i, '');
+      const candidateKeys = isGroupInput ? [`g:${cleanKey}`, cleanKey] : [`u:${cleanKey}`, cleanKey];
+
       const { data: contact } = await supabaseAdmin
         .from("contacts")
         .select("id, conversations(id)")
-        .eq("chat_key", chatKey)
+        .in("chat_key", candidateKeys)
+        .limit(1)
         .maybeSingle();
 
       if (contact?.conversations?.length) finalConvId = contact.conversations[0].id;
