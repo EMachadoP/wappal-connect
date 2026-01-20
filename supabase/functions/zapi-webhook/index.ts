@@ -177,14 +177,12 @@ serve(async (req: Request): Promise<Response> => {
       const digits = left.replace(/\D/g, "");
       if (!digits) return null;
 
-      // ✅ PATCH 3: Prevent transforming LID-like digits into fake phone JID
-      // If digits >= 14 and NOT starting with 55 (BR), treat as LID-like but invalid for @s.whatsapp.net
-      // If specific foreign countries have 14+ digits, this might need adjustment, but for BR context it's safe.
+      // ✅ PATCH 3: Handle LID-like digits by adding @lid suffix (don't reject!)
+      // If digits >= 14 and NOT starting with 55 (BR), treat as LID and add suffix
       const isLidLike = digits.length >= 14 && !digits.startsWith('55');
       if (isLidLike) {
-        // Return null implies it's not a valid phone-based JID. 
-        // If it really was a LID, it should have @lid suffix (handled above).
-        return null;
+        // Return as LID with proper suffix instead of null
+        return `${digits}@lid`;
       }
 
       const br = (digits.length === 10 || digits.length === 11) ? `55${digits}` : digits;
