@@ -114,7 +114,7 @@ foreach ($func in $functions) {
     $completed = Wait-Job $job -Timeout $timeoutSeconds
 
     if ($completed) {
-        $output = Receive-Job $job
+        $null = Receive-Job $job
         Remove-Job $job -Force
         Write-Host " OK" -ForegroundColor Green
         $success++
