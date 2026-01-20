@@ -332,16 +332,20 @@ serve(async (req: Request) => {
 
     // ✅ VALIDAÇÃO: recipient DEVE ser JID enviável (não aceitar LID interno)
     const isSendableJID = formattedRecipient.includes('@s.whatsapp.net') || formattedRecipient.includes('@g.us');
-    const looksLikeBRPhone = /^55\d{10,11}$/.test(formattedRecipient.replace(/\D/g, ''));
 
-    if (!isSendableJID && !looksLikeBRPhone) {
+    // Aceitar BR (55...) OU LID (~15 digitos)
+    const cleanDigits = formattedRecipient.replace(/\D/g, '');
+    const looksLikeBRPhone = /^55\d{10,11}$/.test(cleanDigits);
+    const looksLikeLID = cleanDigits.length >= 14 && cleanDigits.length <= 16;
+
+    if (!isSendableJID && !looksLikeBRPhone && !looksLikeLID) {
       return new Response(
         JSON.stringify({
           error: "Destinatário inválido: não é um JID enviável",
           code: "INVALID_RECIPIENT_JID",
           details: {
             recipient: formattedRecipient,
-            hint: "Recipient deve conter @s.whatsapp.net (pessoa) ou @g.us (grupo), ou ser telefone BR válido (55...)"
+            hint: "Recipient deve conter @s.whatsapp.net (pessoa) ou @g.us (grupo), ou ser telefone BR válido (55...) ou LID (~15 digitos)"
           },
         }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
