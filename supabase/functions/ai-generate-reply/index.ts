@@ -449,23 +449,37 @@ async function setPending(conversationId: string, field: string, supabase: any, 
 
 // --- LOCK HELPERS ---
 async function acquireLock(supabase: any, conversationId: string) {
-  const staleBefore = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+  try {
+    const staleBefore = new Date(Date.now() - 2 * 60 * 1000).toISOString();
 
-  // Limpa locks travados (stale > 2min)
-  await supabase
-    .from('ai_conversation_locks')
-    .delete()
-    .eq('conversation_id', conversationId)
-    .lt('locked_at', staleBefore);
+    // Limpa locks travados (stale > 2min)
+    const { error: delError } = await supabase
+      .from('ai_conversation_locks')
+      .delete()
+      .eq('conversation_id', conversationId)
+      .lt('locked_at', staleBefore);
 
-  // Tenta inserir novo lock
-  const { error } = await supabase
-    .from('ai_conversation_locks')
-    .insert({ conversation_id: conversationId });
+    // Se a tabela não existe, ignoramos o lock e seguimos
+    if (delError?.message?.includes('ai_conversation_locks')) {
+      console.warn('[AI] ⚠️ Lock table missing (ai_conversation_locks). Skipping lock acquisition.');
+      return true;
+    }
 
-  if (error?.code === '23505') return false; // Já existe lock ativo
-  if (error) throw error;
-  return true;
+    // Tenta inserir novo lock
+    const { error } = await supabase
+      .from('ai_conversation_locks')
+      .insert({ conversation_id: conversationId });
+
+    if (error?.code === '23505') return false; // Já existe lock ativo
+    if (error) {
+      if (error.message?.includes('ai_conversation_locks')) return true;
+      throw error;
+    }
+    return true;
+  } catch (e: any) {
+    console.warn('[AI] ⚠️ Error in acquireLock safety check:', e.message);
+    return true; // Fallback: segue processamento se infra de lock falhar
+  }
 }
 
 // --- SERVE ---
@@ -1291,10 +1305,17 @@ REGRAS DE EXECUÇÃO:
         const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
         const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
         const supabase = createClient(supabaseUrl, supabaseServiceKey);
-        await supabase.from('ai_conversation_locks').delete().eq('conversation_id', cid);
-        console.log('[AI] 🔓 Lock released:', cid);
-      } catch (e) {
-        console.error('[AI] ❌ Error releasing lock:', e);
+        const { error: delError } = await supabase.from('ai_conversation_locks').delete().eq('conversation_id', cid);
+
+        if (delError && !delError.message?.includes('ai_conversation_locks')) {
+          console.error('[AI] ❌ Error releasing lock:', delError.message);
+        } else {
+          console.log('[AI] 🔓 Lock released:', cid);
+        }
+      } catch (e: any) {
+        if (!e.message?.includes('ai_conversation_locks')) {
+          console.error('[AI] ❌ Unexpected error in lock release:', e.message);
+        }
       }
     }
   }
