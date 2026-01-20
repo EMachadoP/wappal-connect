@@ -54,7 +54,24 @@ serve(async (req) => {
     }
 
     const contact = (conversation as any).contacts;
-    const recipientPhone = contact.phone || contact.lid || contact.chat_lid;
+
+    // ✅ Extract phone and LID properly
+    let recipientPhone = contact.phone;
+    const lid = contact.lid || contact.chat_lid;
+
+    // ✅ Priority: Use phone if available, otherwise LID with @lid suffix
+    if (!recipientPhone && lid) {
+      // Check if lid already has @lid suffix
+      if (lid.endsWith('@lid')) {
+        recipientPhone = lid;
+      } else if (lid.length >= 14 && !lid.startsWith('55')) {
+        // It's a LID - add @lid suffix for Z-API
+        recipientPhone = `${lid}@lid`;
+      } else {
+        // Try to use as phone
+        recipientPhone = lid;
+      }
+    }
 
     if (!recipientPhone) {
       return new Response(JSON.stringify({ error: 'No valid recipient identifier' }), {
@@ -62,6 +79,8 @@ serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
+
+    console.log('[zapi-send-file] Sending to:', recipientPhone);
 
     // Get Z-API credentials
     const instanceId = Deno.env.get('ZAPI_INSTANCE_ID');
@@ -94,7 +113,7 @@ serve(async (req) => {
     const zapiUrl = `https://api.z-api.io/instances/${instanceId}/token/${token}/${endpoint}`;
 
     const zapiPayload: Record<string, string> = {
-      phone: recipientPhone,
+      phone: recipientPhone,  // Now properly handles phone or LID@lid
     };
 
     // Different payload structure for different file types
