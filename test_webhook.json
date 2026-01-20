@@ -1,0 +1,32 @@
+{
+    "isStatusReply": false,
+    "chatLid": "144723385778292@lid",
+    "connectedPhone": "558130195654",
+    "waitingMessage": false,
+    "isEdit": false,
+    "isGroup": false,
+    "isNewsletter": false,
+    "instanceId": "3DE2F780008FF0A77B4332C54B267657",
+    "messageId": "3EB0062883D1E9363017DB",
+    "phone": "558197438430",
+    "fromMe": false,
+    "momment": 1768882671000,
+    "status": "RECEIVED",
+    "chatName": "Eldon",
+    "senderPhoto": null,
+    "senderName": "Eldon Machado",
+    "photo": "https://pps.whatsapp.net/v/t61.24694-24/459186511_3770450036576636_5307780897039122298_n.jpg?ccb=11-4&oh=01_Q5Aa3gHg9gGRuJGvf9H-PSjx1rmktwDaN-bHw99bDBxS9rrFBA&oe=697C0E0D&_nc_sid=5e03e0&_nc_cat=102",
+    "broadcast": false,
+    "participantLid": null,
+    "messageExpirationSeconds": 0,
+    "forwarded": false,
+    "type": "ReceivedCallback",
+    "fromApi": false,
+    "text": {
+        "message": "Teste Final Fix Identity"
+    },
+    "_traceContext": {
+        "traceId": "6cf360075fbf55ddc4ff87ef94a5801f",
+        "spanId": "b2b6a116dd94015e"
+    }
+}

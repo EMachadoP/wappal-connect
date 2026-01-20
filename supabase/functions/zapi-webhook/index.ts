@@ -111,7 +111,7 @@ serve(async (req: Request): Promise<Response> => {
       const v0 = (input || "").trim().toLowerCase().replace("@gus", "@g.us");
       if (!v0) return null;
 
-      // ✅ Preserve @lid (não tenta “virar” telefone)
+      // ✅ Preserve @lid (never convert to phone JID)
       if (v0.endsWith("@lid")) return v0;
 
       const left = v0.split("@")[0] || "";
@@ -119,18 +119,31 @@ serve(async (req: Request): Promise<Response> => {
       const looksGroup = v0.endsWith("@g.us") || left.includes("-");
 
       if (looksGroup) {
-        // grupo pode vir sem sufixo
+        // group might come without suffix
         const base = hasAt ? v0 : left;
         return base.endsWith("@g.us") ? base : `${base}@g.us`;
       }
 
-      // usuário: só dígitos
+      // user: only digits
       const digits = left.replace(/\D/g, "");
       if (!digits) return null;
+
+      // ✅ PATCH 3: Prevent transforming LID-like digits into fake phone JID
+      // If digits >= 14 and NOT starting with 55 (BR), treat as LID-like but invalid for @s.whatsapp.net
+      // If specific foreign countries have 14+ digits, this might need adjustment, but for BR context it's safe.
+      const isLidLike = digits.length >= 14 && !digits.startsWith('55');
+      if (isLidLike) {
+        // Return null implies it's not a valid phone-based JID. 
+        // If it really was a LID, it should have @lid suffix (handled above).
+        return null;
+      }
 
       const br = (digits.length === 10 || digits.length === 11) ? `55${digits}` : digits;
       return `${br}@s.whatsapp.net`;
     }
+
+    const DEBUG_WEBHOOK = Deno.env.get("DEBUG_WEBHOOK") === "1";
+    const mask = (s: string) => s ? `${s.slice(0, 4)}***${s.slice(-4)}` : s;
 
     function threadKeyFromChatId(chatId: string) {
       return chatId.endsWith("@g.us") ? `g:${chatId}` : `u:${chatId.split("@")[0]}`;
@@ -149,25 +162,47 @@ serve(async (req: Request): Promise<Response> => {
     const rawLid = pickFirst(payload.chatLid, payload.chat_lid, payload?.data?.chatLid);
     const rawPhone = pickFirst(payload.phone, payload?.data?.phone, payload.to, payload.number, payload.recipient);
 
-    // ✅ regra: outbound (fromMe) precisa achar destinatário → phone primeiro
-    const rawIdentity = fromMe
-      ? pickFirst(rawChatId, rawPhone, rawLid)
-      : pickFirst(rawChatId, rawLid, rawPhone);
+    const isGroup = String(rawChatId || "").includes("@g.us") || String(rawChatId || "").includes("-") || payload.isGroup;
 
-    if (!rawIdentity) {
-      console.log(`[Webhook] Ignorado: sem identidade (fromMe=${fromMe})`);
-      // não derruba o webhook (evita retry/duplicadas)
-      return new Response(JSON.stringify({ success: true, ignored: true }), { status: 200, headers: corsHeaders });
+    // ✅ REGRA: para usuário, phone ganha do LID sempre que existir
+    let rawIdentity = isGroup
+      ? pickFirst(rawChatId)
+      : pickFirst(rawPhone, rawChatId, rawLid); // 🔥 PRIORIDADE INVERTIDA AQUI
+
+    // Se no payload original o chatId era o LID, mas existe phone, forçamos o phone à frente
+    if (!isGroup && rawPhone && rawChatId && rawChatId.endsWith('@lid')) {
+      rawIdentity = rawPhone;
     }
 
-    const canonicalChatId = normalizeChatId(rawIdentity);
+    if (!rawIdentity) {
+      console.warn(`[Webhook] Ignored payload: unable to determine chatId. Raw:`, { rawChatId, rawPhone, rawLid });
+      return new Response("Ignored: No Identity", { status: 200 });
+    }
+
+    const canonicalChatId = normalizeChatId(String(rawIdentity));
+    const isGroupChat = canonicalChatId?.endsWith("@g.us") ?? false;
+
+    // Normalize phone and LID for query
+    const currentLid = rawLid ? String(rawLid) : null;
+    let phone = rawPhone ? String(rawPhone) : null;
+
+    // Fallback: extract phone from canonical if missing in raw (and not a group)
+    if (!phone && !isGroupChat && canonicalChatId) {
+      phone = canonicalChatId.split('@')[0];
+    }
+
     if (!canonicalChatId) {
-      console.log(`[Webhook] Ignorado: identidade inválida raw=${rawIdentity} (fromMe=${fromMe})`);
-      return new Response(JSON.stringify({ success: true, ignored: true }), { status: 200, headers: corsHeaders });
+      if (DEBUG_WEBHOOK) console.warn("Ignored: invalid JID", { rawIdentity });
+      return new Response("Ignored: Invalid Identity", { status: 200 });
     }
 
     const threadKey = threadKeyFromChatId(canonicalChatId);
-    const isGroupChat = canonicalChatId.endsWith("@g.us");
+
+    if (DEBUG_WEBHOOK) {
+      console.log(`[Webhook] 📥 Processing ${direction || 'inbound'}:`, { canonicalChatId, threadKey, fromMe, phone, currentLid });
+    } else {
+      console.log(`[Webhook] 📥 HIT ${direction || 'inbound'} Key=${threadKey} ID=${mask(canonicalChatId)}`);
+    }
 
     // ✅ FIX: O chatName agora segue a direção da mensagem
     let chatName: string;
@@ -182,14 +217,10 @@ serve(async (req: Request): Promise<Response> => {
     console.log(`[Webhook] Identity: ${fromMe ? 'OUT' : 'IN'} | Key=${threadKey} | JID=${canonicalChatId}`);
 
     // ✅ 1. RESOLVER/ATUALIZAR CONTATO
-    const phone = !isGroupChat ? canonicalChatId.split('@')[0] : null;
-    const currentLid = (typeof rawIdentity === 'string' && rawIdentity.endsWith('@lid')) ? rawIdentity : null;
-
     let contactId: string;
-    // let contactId: string; // Removed duplicate
     const { data: contactFound } = await supabase.from('contacts')
-      .select('id, name, chat_key, chat_lid')
-      .or(`chat_key.eq.${threadKey},chat_key.eq.${threadKey.replace(/^(u:|g:)/, '')},phone.eq.${phone || 'none'},chat_lid.eq.${rawIdentity || 'none'}`)
+      .select('id, name, chat_key, chat_lid, phone')
+      .or(`chat_key.eq.${threadKey},chat_key.eq.${threadKey.replace(/^(u:|g:)/, '')},phone.eq.${phone || 'none'},chat_lid.eq.${currentLid || 'none'}`)
       .limit(1)
       .maybeSingle();
 
