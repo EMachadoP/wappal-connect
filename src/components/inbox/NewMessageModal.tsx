@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Search, UserPlus } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
+import { getChatDisplayName } from '@/utils/displayUtils';
 import { toast } from 'sonner';
 
 interface Contact {
@@ -43,7 +44,7 @@ export function NewMessageModal({ open, onOpenChange, onSelectConversation }: Ne
     try {
       let supabaseQuery = supabase
         .from('contacts')
-        .select('id, name, phone, profile_picture_url')
+        .select('id, name, phone, profile_picture_url, is_group, group_name, participants(*)')
         .order('name')
         .limit(20);
 
@@ -197,7 +198,7 @@ export function NewMessageModal({ open, onOpenChange, onSelectConversation }: Ne
                     )}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="font-medium truncate">{contact.name}</p>
+                    <p className="font-medium truncate">{getChatDisplayName(contact)}</p>
                     {contact.phone && (
                       <p className="text-xs text-muted-foreground">{contact.phone}</p>
                     )}

@@ -14,6 +14,7 @@ import { CreateTaskModal } from '@/components/tasks/CreateTaskModal';
 import { WaitForClientModal } from '@/components/tasks/WaitForClientModal';
 import { useParticipantInfo } from '@/hooks/useParticipantInfo';
 import { useContactCondominiums } from '@/hooks/useContactCondominiums';
+import { getChatDisplayName } from '@/utils/displayUtils';
 import { toast } from 'sonner';
 
 interface ChatAreaProps {
@@ -81,10 +82,10 @@ export function ChatArea(props: ChatAreaProps) {
 
   const isResolved = props.conversationStatus === 'resolved';
 
-  // Create contact object with participant name prioritized
+  // Create contact object with unified name logic
   const contactWithParticipantName = {
     ...contact,
-    name: participant?.name || contact?.name,
+    name: getChatDisplayName(contact, participant),
   };
 
   return (

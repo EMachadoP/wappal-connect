@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { getChatDisplayName } from '@/utils/displayUtils';
 
 export interface Conversation {
   id: string;
@@ -44,7 +45,7 @@ export function useRealtimeInbox({ onNewInboundMessage, tab = 'inbox', userId }:
 
     let query = supabase
       .from('conversations')
-      .select(`*, contacts (*)`)
+      .select(`*, contacts (*, participants(*))`)
       .order('last_message_at', { ascending: false, nullsFirst: false })
       .order('created_at', { ascending: false });
 
@@ -68,7 +69,10 @@ export function useRealtimeInbox({ onNewInboundMessage, tab = 'inbox', userId }:
       setConversations(
         data.map((conv: any) => ({
           id: conv.id,
-          contact: conv.contacts,
+          contact: {
+            ...conv.contacts,
+            name: getChatDisplayName(conv.contacts)
+          },
           last_message:
             conv.last_message ??
             conv.last_message_content ??
