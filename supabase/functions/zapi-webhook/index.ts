@@ -390,6 +390,40 @@ serve(async (req: Request): Promise<Response> => {
       .limit(1)
       .maybeSingle();
 
+    // ✅ MERGE ANTES DO UPDATE: Se existem duas conversas diferentes, merge PRIMEIRO
+    if (convByContact && convByKey && convByContact.id !== convByKey.id) {
+      console.log(`[Webhook] 🔀 Merge: movendo dados de ${convByKey.id} → ${convByContact.id}`);
+
+      // 1. Mover mensagens
+      await supabase
+        .from('messages')
+        .update({ conversation_id: convByContact.id })
+        .eq('conversation_id', convByKey.id);
+
+      // 2. Mover protocolos (se existir tabela)
+      await supabase
+        .from('protocols')
+        .update({ conversation_id: convByContact.id })
+        .eq('conversation_id', convByKey.id);
+
+      // 3. DELETAR a conversa perdedora (libera chat_id e contact_id para a vencedora)
+      const { error: delErr } = await supabase
+        .from('conversations')
+        .delete()
+        .eq('id', convByKey.id);
+
+      if (delErr) {
+        console.error(`[Webhook] Erro ao deletar conversa perdedora ${convByKey.id}:`, delErr);
+        // Se não conseguir deletar, pelo menos marca como resolved
+        await supabase
+          .from('conversations')
+          .update({ status: 'resolved', updated_at: new Date().toISOString() })
+          .eq('id', convByKey.id);
+      } else {
+        console.log(`[Webhook] ✅ Conversa duplicada ${convByKey.id} deletada`);
+      }
+    }
+
     // ✅ Winner: sempre a conversa do contact_id se existir
     const winner = convByContact ?? convByKey;
 
@@ -397,6 +431,24 @@ serve(async (req: Request): Promise<Response> => {
     if (winner?.contact_id && winner.contact_id !== contactId) {
       delete convPayload.contact_id;
       console.log(`[Webhook] Mantendo contact_id existente ${winner.contact_id} (evita UNIQUE violation)`);
+    }
+
+    // ✅ Se winner já tem chat_id diferente do novo E esse chat_id existe em outra conversa, não force
+    // (Isso evita conflito na constraint chat_id_uq_full)
+    if (winner?.chat_id && winner.chat_id !== canonicalChatIdFinal) {
+      // Verifica se o novo chat_id já existe em outra conversa
+      const { data: existingChatIdConv } = await supabase
+        .from('conversations')
+        .select('id')
+        .eq('chat_id', canonicalChatIdFinal)
+        .neq('id', winner.id)
+        .maybeSingle();
+
+      if (existingChatIdConv) {
+        delete convPayload.chat_id;
+        delete convPayload.thread_key;
+        console.log(`[Webhook] Mantendo chat_id existente ${winner.chat_id} (evita chat_id_uq_full violation)`);
+      }
     }
 
     let conv: any;
@@ -416,21 +468,6 @@ serve(async (req: Request): Promise<Response> => {
       }
       conv = updated;
       console.log(`[Webhook] Conversa atualizada: ${conv.id}`);
-
-      // ✅ PATCH 4: Se convByContact E convByKey são diferentes, relink mensagens
-      if (convByContact && convByKey && convByContact.id !== convByKey.id) {
-        console.log(`[Webhook] Merge: relinkando mensagens de ${convByKey.id} para ${convByContact.id}`);
-        await supabase
-          .from('messages')
-          .update({ conversation_id: convByContact.id })
-          .eq('conversation_id', convByKey.id);
-
-        // Marcar perdedora como resolved
-        await supabase
-          .from('conversations')
-          .update({ status: 'resolved', updated_at: new Date().toISOString() })
-          .eq('id', convByKey.id);
-      }
     } else {
       // INSERT
       const { data: inserted, error: insertErr } = await supabase
@@ -474,31 +511,8 @@ serve(async (req: Request): Promise<Response> => {
     // ✅ PATCH 5: Apenas UM increment_unread_count
     if (!fromMe) await supabase.rpc('increment_unread_count', { conv_id: conv.id });
 
-    // ✅ UPGRADE CONVERSATION: Se a conversa estava em LID mas agora temos Phone, atualiza!
-    if (conv && phone) {
-      // Recupera a conversa atual para checar se é LID
-      const { data: currentConv } = await supabase
-        .from('conversations')
-        .select('chat_id, thread_key')
-        .eq('id', conv.id)
-        .single();
-
-      const isCurrentlyLID = !currentConv?.chat_id || currentConv.chat_id.includes('@lid') || currentConv.thread_key.includes('@lid');
-      const hasPhoneNow = phone && phone.length >= 10;
-
-      if (isCurrentlyLID && hasPhoneNow) {
-        console.log(`[Webhook] 🔄 Upgrading conversation from LID to phone`);
-
-        await supabase
-          .from('conversations')
-          .update({
-            chat_id: `${phone}@s.whatsapp.net`,
-            thread_key: `u:${phone}`,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', conv.id);
-      }
-    }
+    // ✅ UPGRADE CONVERSATION: Desabilitado para evitar conflito chat_id_uq_full
+    // O merge de conversas já trata a consolidação de LID → phone
 
 
 
