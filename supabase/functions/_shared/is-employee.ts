@@ -19,6 +19,18 @@ export async function isEmployeeSender(
     const ids = candidateSenderIds(payload);
     if (ids.length === 0) return { isEmployee: false };
 
+    // ✅ Hardcoded check for operator phone
+    const OPERATOR_PHONES = ['558197438430'];
+    const matchedOperator = ids.find(id => OPERATOR_PHONES.includes(id.replace(/\D/g, '')));
+    if (matchedOperator) {
+        return {
+            isEmployee: true,
+            profileName: "Operador (Celular)",
+            roles: ["operator"],
+            matchedId: matchedOperator
+        };
+    }
+
     // LID-first ordering
     const ordered = [
         ...ids.filter((x) => isLid(x)),

@@ -157,21 +157,27 @@ serve(async (req: Request): Promise<Response> => {
         direction === 'inbound' ? false :
           (fromMeRaw === true || fromMeRaw === 1 || fromMeRaw === "true" || fromMeRaw === "1");
 
-    // candidates common...
-    const rawChatId = pickFirst(payload.chatId, payload.chat_id, payload?.data?.chatId);
+    // ✅ AJUSTE: Normalização Robusta (LID > Phone)
     const rawLid = pickFirst(payload.chatLid, payload.chat_lid, payload?.data?.chatLid);
     const rawPhone = pickFirst(payload.phone, payload?.data?.phone, payload.to, payload.number, payload.recipient);
+    const rawChatId = pickFirst(payload.chatId, payload.chat_id, payload?.data?.chatId);
 
     const isGroup = String(rawChatId || "").includes("@g.us") || String(rawChatId || "").includes("-") || payload.isGroup;
 
-    // ✅ REGRA: para usuário, phone ganha do LID sempre que existir
+    // 🔥 NOVA REGRA: LID tem prioridade sobre phone se estiver presente
     let rawIdentity = isGroup
       ? pickFirst(rawChatId)
-      : pickFirst(rawPhone, rawChatId, rawLid); // 🔥 PRIORIDADE INVERTIDA AQUI
+      : pickFirst(rawLid, rawPhone, rawChatId); // LID primeiro!
 
-    // Se no payload original o chatId era o LID, mas existe phone, forçamos o phone à frente
-    if (!isGroup && rawPhone && rawChatId && rawChatId.endsWith('@lid')) {
-      rawIdentity = rawPhone;
+    // Se rawIdentity é phone numérico mas temos LID disponível, usa LID
+    if (!isGroup && rawLid && rawPhone && /^\d+$/.test(String(rawIdentity).replace(/\D/g, ''))) {
+      rawIdentity = rawLid;
+    }
+
+    // Validação adicional: se phone parece LID (14+ dígitos), descarta
+    if (!isGroup && rawPhone && /^\d{14,}$/.test(String(rawPhone).replace(/\D/g, '')) && !String(rawPhone).startsWith('55')) {
+      // É na verdade um LID mascarado vindo no campo phone
+      rawIdentity = rawPhone; // Assume como identidade se for o único, mas trate como LID
     }
 
     if (!rawIdentity) {
