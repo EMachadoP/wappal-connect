@@ -337,9 +337,16 @@ serve(async (req: Request) => {
     if (!finalIsGroup && isLID) {
       // Try to find the phone from the contact loaded earlier (if available)
       // We loaded 'foundConv' earlier which has 'contacts(phone, is_group)'
-      const contactData = (foundConv?.contacts) as any;
+      let contactData = (foundConv?.contacts) as any;
+
+      // ✅ FIX: Handle array or object return from PostgREST
+      if (Array.isArray(contactData)) {
+        contactData = contactData.length > 0 ? contactData[0] : null;
+      }
+
       if (contactData?.phone) {
         const phoneDigits = contactData.phone.replace(/\D/g, '');
+        // BR phone: 55 + DDD (2) + 8/9 digits = 12 or 13 total
         if (phoneDigits.startsWith('55') && (phoneDigits.length === 12 || phoneDigits.length === 13)) {
           console.log(`[zapi-send-message] 🔄 Swapping LID ${effectiveRecipient} -> Phone ${phoneDigits} for delivery`);
           effectiveRecipient = phoneDigits;
