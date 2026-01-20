@@ -210,6 +210,11 @@ serve(async (req: Request): Promise<Response> => {
         console.log(`[Webhook] 🔄 Updating contact name from '${currentName}' to '${chatName}'`);
       }
 
+      // ✅ FIX: Ensure phone is updated if missing or different
+      if (phone && contactFound.phone !== phone) {
+        updates.phone = phone;
+      }
+
       await supabase.from('contacts').update(updates).eq('id', contactId);
     } else {
       const { data: newContact, error: insErr } = await supabase.from('contacts').insert({
