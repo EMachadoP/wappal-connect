@@ -227,6 +227,7 @@ serve(async (req: Request): Promise<Response> => {
     const lastMessagePreview = (content && content.trim()) || `[${msgType}]`;
 
     // ✅ 4. UPSERT CONVERSA (Foco no chat_id canônico)
+    // ✅ 4. UPSERT CONVERSA (MANUAL para evitar conflito de Unique Index em thread_key)
     const convPayload: any = {
       chat_id: canonicalChatId,
       thread_key: threadKey,
@@ -246,15 +247,66 @@ serve(async (req: Request): Promise<Response> => {
       }
     }
 
-    const { data: conv, error: convUpsertErr } = await supabase
+    // 1. Tenta achar existente por thread_key OU chat_id
+    const { data: existingConv } = await supabase
       .from('conversations')
-      .upsert(convPayload, { onConflict: 'chat_id' })
-      .select('id, assigned_to')
-      .single();
+      .select('id, chat_id, thread_key, assigned_to')
+      .or(`thread_key.eq.${threadKey},chat_id.eq.${canonicalChatId}`)
+      .limit(1)
+      .maybeSingle();
 
-    if (convUpsertErr || !conv) {
-      console.error(`[Webhook] Erro no upsert da conversa: ${convUpsertErr?.message}`);
-      throw convUpsertErr || new Error("Falha no upsert da conversa");
+    let conv: any;
+
+    if (existingConv) {
+      // UPDATE
+      const { data: updated, error: updateErr } = await supabase
+        .from('conversations')
+        .update(convPayload)
+        .eq('id', existingConv.id)
+        .select('id, assigned_to')
+        .single();
+
+      if (updateErr) {
+        console.error(`[Webhook] Erro no UPDATE da conversa ${existingConv.id}:`, updateErr);
+        throw updateErr;
+      }
+      conv = updated;
+    } else {
+      // INSERT
+      const { data: inserted, error: insertErr } = await supabase
+        .from('conversations')
+        .insert(convPayload)
+        .select('id, assigned_to')
+        .single();
+
+      if (insertErr) {
+        // Se der erro de duplicação, fazemos uma última tentativa de pegar (race condition)
+        if (JSON.stringify(insertErr).includes("duplicate") || insertErr.code === '23505') {
+          const { data: racedConv } = await supabase
+            .from('conversations')
+            .select('id, assigned_to')
+            .or(`thread_key.eq.${threadKey},chat_id.eq.${canonicalChatId}`)
+            .maybeSingle();
+
+          if (racedConv) {
+            // Atualiza o existente que "ganhou a corrida"
+            const { data: racedUpdated } = await supabase
+              .from('conversations')
+              .update(convPayload)
+              .eq('id', racedConv.id)
+              .select('id, assigned_to')
+              .single();
+            conv = racedUpdated;
+          } else {
+            throw insertErr;
+          }
+        } else {
+          console.error(`[Webhook] Erro no INSERT da conversa:`, insertErr);
+          throw insertErr;
+        }
+      } else {
+        conv = inserted;
+      }
     }
 
     if (!fromMe) await supabase.rpc('increment_unread_count', { conv_id: conv.id });
