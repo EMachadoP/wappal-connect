@@ -309,13 +309,35 @@ serve(async (req: Request): Promise<Response> => {
       }
     }
 
-    // 1. Tenta achar existente por thread_key OU chat_id
-    const { data: existingConv } = await supabase
+    // ✅ 1. Tenta achar existente por contact_id PRIMEIRO (mais confiável)
+    // Depois tenta thread_key e chat_id como fallback
+    let existingConv: any = null;
+
+    // Busca 1: Por contact_id (evita duplicatas do mesmo contato)
+    const { data: convByContact } = await supabase
       .from('conversations')
       .select('id, chat_id, thread_key, assigned_to')
-      .or(`thread_key.eq.${threadKey},chat_id.eq.${canonicalChatId}`)
+      .eq('contact_id', contactId)
       .limit(1)
       .maybeSingle();
+
+    if (convByContact) {
+      existingConv = convByContact;
+      console.log(`[Webhook] Conversa encontrada por contact_id: ${existingConv.id}`);
+    } else {
+      // Busca 2: Por thread_key ou chat_id (fallback)
+      const { data: convByKey } = await supabase
+        .from('conversations')
+        .select('id, chat_id, thread_key, assigned_to')
+        .or(`thread_key.eq.${threadKey},chat_id.eq.${canonicalChatId}`)
+        .limit(1)
+        .maybeSingle();
+
+      if (convByKey) {
+        existingConv = convByKey;
+        console.log(`[Webhook] Conversa encontrada por thread_key/chat_id: ${existingConv.id}`);
+      }
+    }
 
     let conv: any;
 
