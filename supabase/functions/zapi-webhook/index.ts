@@ -157,40 +157,41 @@ serve(async (req: Request): Promise<Response> => {
         direction === 'inbound' ? false :
           (fromMeRaw === true || fromMeRaw === 1 || fromMeRaw === "true" || fromMeRaw === "1");
 
-    // ✅ AJUSTE: Normalização Robusta (LID > Phone)
+    // ✅ AJUSTE: Normalização Robusta - USA CAMPOS NORMALIZADOS DO Z-API
+    // Z-API sempre entrega contact.lid e contact.phone normalizados, mesmo quando os raw fields variam
     const rawLid = pickFirst(payload.chatLid, payload.chat_lid, payload?.data?.chatLid);
     const rawPhone = pickFirst(payload.phone, payload?.data?.phone, payload.to, payload.number, payload.recipient);
     const rawChatId = pickFirst(payload.chatId, payload.chat_id, payload?.data?.chatId);
 
+    // ✅ PRIORIDADE: Campos normalizados do Z-API (previne duplicação)
+    const normalizedLid = payload.contact?.lid || rawLid;
+    const normalizedPhone = payload.contact?.phone || rawPhone;
+    const normalizedContactId = payload.contact?.id; // ID único do contato no Z-API
+
     const isGroup = String(rawChatId || "").includes("@g.us") || String(rawChatId || "").includes("-") || payload.isGroup;
 
-    // 🔥 NOVA REGRA: LID tem prioridade sobre phone se estiver presente
+    // 🔥 NOVA REGRA: Usa campos normalizados (lid > phone)
     let rawIdentity = isGroup
       ? pickFirst(rawChatId)
-      : pickFirst(rawLid, rawPhone, rawChatId); // LID primeiro!
-
-    // Se rawIdentity é phone numérico mas temos LID disponível, usa LID
-    if (!isGroup && rawLid && rawPhone && /^\d+$/.test(String(rawIdentity).replace(/\D/g, ''))) {
-      rawIdentity = rawLid;
-    }
+      : pickFirst(normalizedLid, normalizedPhone, rawChatId);
 
     // Validação adicional: se phone parece LID (14+ dígitos), descarta
-    if (!isGroup && rawPhone && /^\d{14,}$/.test(String(rawPhone).replace(/\D/g, '')) && !String(rawPhone).startsWith('55')) {
-      // É na verdade um LID mascarado vindo no campo phone
-      rawIdentity = rawPhone; // Assume como identidade se for o único, mas trate como LID
+    if (!isGroup && normalizedPhone && /^\d{14,}$/.test(String(normalizedPhone).replace(/\D/g, '')) && !String(normalizedPhone).startsWith('55')) {
+      // É na verdade um LID mascarado vindo no campo phone - use o LID
+      rawIdentity = normalizedLid || normalizedPhone;
     }
 
     if (!rawIdentity) {
-      console.warn(`[Webhook] Ignored payload: unable to determine chatId. Raw:`, { rawChatId, rawPhone, rawLid });
+      console.warn(`[Webhook] Ignored payload: unable to determine chatId. Raw:`, { rawChatId, normalizedPhone, normalizedLid });
       return new Response("Ignored: No Identity", { status: 200 });
     }
 
     const canonicalChatId = normalizeChatId(String(rawIdentity));
     const isGroupChat = canonicalChatId?.endsWith("@g.us") ?? false;
 
-    // Normalize phone and LID for query
-    const currentLid = rawLid ? String(rawLid) : null;
-    let phone = rawPhone ? String(rawPhone) : null;
+    // Normalize phone and LID for query (use normalized values!)
+    const currentLid = normalizedLid ? String(normalizedLid) : null;
+    let phone = normalizedPhone ? String(normalizedPhone) : null;
 
     // Fallback: extract phone from canonical if missing in raw (and not a group)
     if (!phone && !isGroupChat && canonicalChatId) {
