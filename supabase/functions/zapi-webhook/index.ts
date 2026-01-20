@@ -129,9 +129,16 @@ serve(async (req: Request): Promise<Response> => {
       }).catch(err => console.error('[Forward Error]', err));
     }
 
-    // 3. Ignorar status updates puros
-    const isIgnoredEvent = Boolean(payload.ack || payload.type === 'chatState' || (payload.status && !payload.text && !payload.message && !payload.image && !payload.video && !payload.audio && !payload.document));
-    if (isIgnoredEvent) return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
+    // 3. Ignorar apenas chatState e status updates sem conteúdo
+    // ❌ NÃO ignorar payload.ack - mensagens inbound podem ter ack!
+    const isIgnoredEvent = Boolean(
+      payload.type === 'chatState' ||
+      (payload.status && !payload.text && !payload.message && !payload.image && !payload.video && !payload.audio && !payload.document)
+    );
+    if (isIgnoredEvent) {
+      console.log('[Webhook] Ignoring event:', payload.type || 'status-only');
+      return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
+    }
 
     // --- HELPERS E NORMALIZAÇÃO BLINDADA ---
     const stripPrefix = (s: string) => s.replace(/^(u:|g:)/, '');
