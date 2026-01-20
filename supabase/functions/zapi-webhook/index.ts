@@ -98,7 +98,8 @@ serve(async (req: Request): Promise<Response> => {
           const { error } = await supabase
             .from('messages')
             .update(updates)
-            .eq('whatsapp_message_id', messageId);
+            .eq('provider', 'zapi')
+            .eq('provider_message_id', messageId);
 
           if (error) {
             console.error('[Webhook] Error updating message status:', error);
@@ -193,7 +194,12 @@ serve(async (req: Request): Promise<Response> => {
     const mask = (s: string) => s ? `${s.slice(0, 4)}***${s.slice(-4)}` : s;
 
     function threadKeyFromChatId(chatId: string) {
-      return chatId.endsWith("@g.us") ? `g:${chatId}` : `u:${chatId.split("@")[0]}`;
+      const cid = (chatId || "").trim().toLowerCase();
+
+      if (cid.endsWith("@g.us")) return `g:${cid}`;
+      if (cid.endsWith("@lid")) return `u:${cid}`; // ✅ mantém o @lid inteiro
+
+      return `u:${cid.split("@")[0]}`;
     }
 
     const fromMeRaw = payload.fromMe;
@@ -217,10 +223,12 @@ serve(async (req: Request): Promise<Response> => {
 
     const isGroup = String(rawChatId || "").includes("@g.us") || String(rawChatId || "").includes("-") || payload.isGroup;
 
-    // 🔥 NOVA REGRA: Usa campos normalizados (lid > phone)
+    // ✅ PATCH 3: phone primeiro quando existir (evita 2 conversas)
     let rawIdentity = isGroup
       ? pickFirst(rawChatId)
-      : pickFirst(normalizedLid, normalizedPhone, rawChatId);
+      : (fromMe
+        ? pickFirst(normalizedPhone, rawChatId, normalizedLid)   // OUT: phone primeiro
+        : pickFirst(rawChatId, normalizedPhone, normalizedLid)); // IN: chatId/phone antes de LID
 
     // Validação adicional: se phone parece LID (14+ dígitos), descarta
     if (!isGroup && normalizedPhone && /^\d{14,}$/.test(String(normalizedPhone).replace(/\D/g, '')) && !String(normalizedPhone).startsWith('55')) {
@@ -250,7 +258,16 @@ serve(async (req: Request): Promise<Response> => {
       return new Response("Ignored: Invalid Identity", { status: 200 });
     }
 
-    const threadKey = threadKeyFromChatId(canonicalChatId);
+    // ✅ PATCH 3: REGRA DE OURO - se existe phone válido, a conversa SEMPRE é ancorada no phone JID
+    const phoneDigits = normalizedPhone ? String(normalizedPhone).replace(/\D/g, "") : "";
+    const hasRealPhone = phoneDigits.length >= 10 && !phoneDigits.endsWith("lid") && !String(normalizedPhone || "").includes("@lid");
+
+    const preferredChatId = hasRealPhone
+      ? normalizeChatId(phoneDigits) // vira 55...@s.whatsapp.net
+      : canonicalChatId;
+
+    const canonicalChatIdFinal = preferredChatId || canonicalChatId;
+    const threadKey = threadKeyFromChatId(canonicalChatIdFinal);
 
     if (DEBUG_WEBHOOK) {
       console.log(`[Webhook] 📥 Processing ${direction || 'inbound'}:`, { canonicalChatId, threadKey, fromMe, phone, currentLid });
@@ -338,7 +355,7 @@ serve(async (req: Request): Promise<Response> => {
     // ✅ 4. UPSERT CONVERSA (Foco no chat_id canônico)
     // ✅ 4. UPSERT CONVERSA (MANUAL para evitar conflito de Unique Index em thread_key)
     const convPayload: any = {
-      chat_id: canonicalChatId,
+      chat_id: canonicalChatIdFinal,
       thread_key: threadKey,
       contact_id: contactId,
       last_message: lastMessagePreview.slice(0, 500),
@@ -356,52 +373,64 @@ serve(async (req: Request): Promise<Response> => {
       }
     }
 
-    // ✅ 1. Tenta achar existente por contact_id PRIMEIRO (mais confiável)
-    // Depois tenta thread_key e chat_id como fallback
-    let existingConv: any = null;
-
-    // Busca 1: Por contact_id (evita duplicatas do mesmo contato)
+    // ✅ PATCH 4: Busca segura de conversa com merge sem violar UNIQUE
+    // Busca 1: Por contact_id (mais confiável)
     const { data: convByContact } = await supabase
       .from('conversations')
-      .select('id, chat_id, thread_key, assigned_to')
+      .select('id, contact_id, chat_id, thread_key, assigned_to')
       .eq('contact_id', contactId)
       .limit(1)
       .maybeSingle();
 
-    if (convByContact) {
-      existingConv = convByContact;
-      console.log(`[Webhook] Conversa encontrada por contact_id: ${existingConv.id}`);
-    } else {
-      // Busca 2: Por thread_key ou chat_id (fallback)
-      const { data: convByKey } = await supabase
-        .from('conversations')
-        .select('id, chat_id, thread_key, assigned_to')
-        .or(`thread_key.eq.${threadKey},chat_id.eq.${canonicalChatId}`)
-        .limit(1)
-        .maybeSingle();
+    // Busca 2: Por thread_key ou chat_id (fallback)
+    const { data: convByKey } = await supabase
+      .from('conversations')
+      .select('id, contact_id, chat_id, thread_key, assigned_to')
+      .or(`thread_key.eq.${threadKey},chat_id.eq.${canonicalChatIdFinal}`)
+      .limit(1)
+      .maybeSingle();
 
-      if (convByKey) {
-        existingConv = convByKey;
-        console.log(`[Webhook] Conversa encontrada por thread_key/chat_id: ${existingConv.id}`);
-      }
+    // ✅ Winner: sempre a conversa do contact_id se existir
+    const winner = convByContact ?? convByKey;
+
+    // ✅ PATCH 4: Se winner já tem contact_id diferente, não force contact_id (evita UNIQUE)
+    if (winner?.contact_id && winner.contact_id !== contactId) {
+      delete convPayload.contact_id;
+      console.log(`[Webhook] Mantendo contact_id existente ${winner.contact_id} (evita UNIQUE violation)`);
     }
 
     let conv: any;
 
-    if (existingConv) {
+    if (winner) {
       // UPDATE
       const { data: updated, error: updateErr } = await supabase
         .from('conversations')
         .update(convPayload)
-        .eq('id', existingConv.id)
+        .eq('id', winner.id)
         .select('id, assigned_to')
         .single();
 
       if (updateErr) {
-        console.error(`[Webhook] Erro no UPDATE da conversa ${existingConv.id}:`, updateErr);
+        console.error(`[Webhook] Erro no UPDATE da conversa ${winner.id}:`, updateErr);
         throw updateErr;
       }
       conv = updated;
+      console.log(`[Webhook] Conversa atualizada: ${conv.id}`);
+
+      // ✅ PATCH 4: Se convByContact E convByKey são diferentes, relink mensagens
+      if (convByContact && convByKey && convByContact.id !== convByKey.id) {
+        console.log(`[Webhook] Merge: relinkando mensagens de ${convByKey.id} para ${convByContact.id}`);
+        await supabase
+          .from('messages')
+          .update({ conversation_id: convByContact.id })
+          .eq('conversation_id', convByKey.id);
+
+        // Marcar perdedora como resolved
+        await supabase
+          .from('conversations')
+          .update({ status: 'resolved', updated_at: new Date().toISOString() })
+          .eq('id', convByKey.id);
+      }
     } else {
       // INSERT
       const { data: inserted, error: insertErr } = await supabase
@@ -416,11 +445,12 @@ serve(async (req: Request): Promise<Response> => {
           const { data: racedConv } = await supabase
             .from('conversations')
             .select('id, assigned_to')
-            .or(`thread_key.eq.${threadKey},chat_id.eq.${canonicalChatId}`)
+            .or(`thread_key.eq.${threadKey},chat_id.eq.${canonicalChatIdFinal}`)
             .maybeSingle();
 
           if (racedConv) {
-            // Atualiza o existente que "ganhou a corrida"
+            // Remove contact_id do payload para evitar UNIQUE
+            delete convPayload.contact_id;
             const { data: racedUpdated } = await supabase
               .from('conversations')
               .update(convPayload)
@@ -437,9 +467,11 @@ serve(async (req: Request): Promise<Response> => {
         }
       } else {
         conv = inserted;
+        console.log(`[Webhook] Nova conversa criada: ${conv.id}`);
       }
     }
 
+    // ✅ PATCH 5: Apenas UM increment_unread_count
     if (!fromMe) await supabase.rpc('increment_unread_count', { conv_id: conv.id });
 
     // ✅ UPGRADE CONVERSATION: Se a conversa estava em LID mas agora temos Phone, atualiza!
@@ -469,7 +501,7 @@ serve(async (req: Request): Promise<Response> => {
     }
 
 
-    if (!fromMe) await supabase.rpc('increment_unread_count', { conv_id: conv.id });
+
 
     // 7. Salvar Mensagem
     if (!content && msgType !== "text") {
@@ -483,7 +515,7 @@ serve(async (req: Request): Promise<Response> => {
     if (fromMe && (!senderName || /^\d+$/.test(senderName.replace(/\D/g, '')))) {
       senderName = "Operador (Celular)";
     } else if (!fromMe) {
-      senderName = senderName || canonicalChatId.split('@')[0];
+      senderName = senderName || canonicalChatIdFinal.split('@')[0];
     }
 
     const senderPhone = (payload.contact?.phone || payload.phone || canonicalChatId).split('@')[0];
@@ -528,7 +560,7 @@ serve(async (req: Request): Promise<Response> => {
           .from("messages")
           .update({
             conversation_id: conv.id,
-            chat_id: canonicalChatId,
+            chat_id: canonicalChatIdFinal,
             raw_payload: payload,
           })
           .eq("id", existingMsg.id);
@@ -558,7 +590,7 @@ serve(async (req: Request): Promise<Response> => {
         content,
         provider: "zapi",
         provider_message_id: providerMsgId,
-        chat_id: canonicalChatId,
+        chat_id: canonicalChatIdFinal,
         direction: fromMe ? "outbound" : "inbound",
         sent_at: payload.timestamp ? new Date(payload.timestamp).toISOString() : now,
         raw_payload: payload,
@@ -707,7 +739,7 @@ serve(async (req: Request): Promise<Response> => {
           message_id: msgResult.id,
           conversation_id: conv.id,
           message_text: content,
-          group_id: threadKey || canonicalChatId,
+          group_id: threadKey || canonicalChatIdFinal,
           sender_phone: senderPhone,
           sender_name: senderName || 'Desconhecido'
         }),
