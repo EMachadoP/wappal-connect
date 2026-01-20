@@ -70,9 +70,10 @@ serve(async (req: Request): Promise<Response> => {
     });
 
     // ✅ HANDLE MESSAGE STATUS UPDATES (delivered, read, etc) - NOT "received"!
+    const statusLower = (payload.status || '').toLowerCase();
     const isStatusUpdate = payload.event === 'message-status-update' ||
       payload.type === 'message-status-update' ||
-      (payload.status && payload.messageId && payload.status !== 'received');
+      (payload.status && payload.messageId && statusLower !== 'received');
 
     if (isStatusUpdate) {
       const messageId = payload.messageId || payload.whatsapp_message_id || payload.id?.id;
