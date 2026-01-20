@@ -365,13 +365,14 @@ serve(async (req: Request): Promise<Response> => {
       status: 'open'
     };
 
-    // Auto-atribuição para outbound de operador
-    if (fromMe) {
-      const employee = await isEmployeeSender(supabase, payload);
-      if (employee.isEmployee && employee.profileId) {
-        convPayload.assigned_to = employee.profileId;
-      }
-    }
+    // ✅ Auto-atribuição DESABILITADA para evitar que conversas saiam de "Entradas"
+    // A atribuição deve ser feita manualmente pelo operador no App
+    // if (fromMe) {
+    //   const employee = await isEmployeeSender(supabase, payload);
+    //   if (employee.isEmployee && employee.profileId) {
+    //     convPayload.assigned_to = employee.profileId;
+    //   }
+    // }
 
     // ✅ PATCH 4: Busca segura de conversa com merge sem violar UNIQUE
     // Busca 1: Por contact_id (mais confiável)
