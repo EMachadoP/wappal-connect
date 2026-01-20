@@ -77,26 +77,26 @@ const formatForZAPI = (id: string, isGrp: boolean): string => {
 
   let clean = stripPrefix(id.trim().toLowerCase());
 
-  // ✅ FIX: Rejeitar LIDs para usuários individuais - Z-API não aceita
-  if (!isGrp && clean.includes('@lid')) {
-    throw new Error(`Tentativa de enviar para LID (${clean}) sem telefone real. Contato precisa ter phone cadastrado.`);
-  }
+  // ✅ FIX: Allow LIDs (Z-API accepts them as raw numbers usually, or we pass them through)
+  // if (!isGrp && clean.includes('@lid')) {
+  //   throw new Error(`Tentativa de enviar para LID (${clean}) sem telefone real. Contato precisa ter phone cadastrado.`);
+  // }
 
   // Remove any existing suffix first
   if (clean.includes('@')) {
     clean = clean.split('@')[0];
   }
 
-  // ✅ Validar se é um número válido (13 dígitos: 55 + DDD + 9 dígitos)
+  // ✅ Validar se é um número válido (11-15 dígitos para incluir LIDs)
   if (!isGrp) {
     const onlyDigits = clean.replace(/\D/g, '');
-    if (onlyDigits.length < 11 || onlyDigits.length > 14) {
-      throw new Error(`Número inválido para Z-API: ${clean} (após sanitização: ${onlyDigits}). Deve ter 11-14 dígitos.`);
+    if (onlyDigits.length < 10 || onlyDigits.length > 15) {
+      throw new Error(`Número inválido para Z-API: ${clean} (após sanitização: ${onlyDigits}). Deve ter 10-15 dígitos.`);
     }
   }
 
-  // Para grupos, adicionar @g.us (Z-API aceita para grupos)
-  // Para usuários individuais, retornar apenas os dígitos (Z-API rejeita @s.whatsapp.net)
+  // Para grupos, adicionar @g.us
+  // Para usuários e LIDs, retornar apenas os dígitos
   return isGrp ? `${clean}@g.us` : clean;
 };
 
@@ -118,20 +118,25 @@ function normalizeRecipient(input: { recipient: string; isGroup?: boolean }): { 
     return { to_chat_id: jid, isGroup: true };
   }
 
-  // Pessoa: bloquear LID
-  if (raw.includes("@lid")) {
-    throw new Error("Contato sem telefone válido. Não é permitido enviar por LID. Cadastre o phone do contato.");
-  }
+  // Pessoa: Permitir LID agora!
+  // if (raw.includes("@lid")) { ... } // REMOVIDO BLOQUEIO
 
   // Remover sufixo legado
-  const withoutSuffix = raw.replace(/@s\.whatsapp\.net$/i, "");
+  let withoutSuffix = raw.replace(/@s\.whatsapp\.net$/i, "").replace(/@lid$/i, "");
 
   // Só dígitos
   const digits = withoutSuffix.replace(/\D/g, "");
 
-  // BR/E.164 (12 ou 13 dígitos com 55)
-  if (!digits.startsWith("55") || (digits.length !== 12 && digits.length !== 13)) {
-    throw new Error(`Telefone inválido para envio: "${raw0}" -> "${digits}" (esperado 55 + DDD + 8/9 dígitos)`);
+  // Aceitar LIDs que não começam com 55 e tem ~15 dígitos
+  // BR/E.164 (12 ou 13 dígitos com 55) OU LID (15 dígitos)
+  const isBR = digits.startsWith("55") && (digits.length === 12 || digits.length === 13);
+  const isLID = digits.length >= 14;
+
+  if (!isBR && !isLID) {
+    // Relaxamos para aceitar tudo entre 10 e 15 digitos se não for estritamente BR
+    if (digits.length < 10 || digits.length > 15) {
+      throw new Error(`Telefone inválido para envio: "${raw0}" -> "${digits}" (esperado 55+DDD+8/9 digitos ou LID 15 digitos)`);
+    }
   }
 
   return { to_chat_id: digits, isGroup: false };
