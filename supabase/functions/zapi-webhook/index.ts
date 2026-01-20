@@ -365,14 +365,13 @@ serve(async (req: Request): Promise<Response> => {
       status: 'open'
     };
 
-    // ✅ Auto-atribuição DESABILITADA para evitar que conversas saiam de "Entradas"
-    // A atribuição deve ser feita manualmente pelo operador no App
-    // if (fromMe) {
-    //   const employee = await isEmployeeSender(supabase, payload);
-    //   if (employee.isEmployee && employee.profileId) {
-    //     convPayload.assigned_to = employee.profileId;
-    //   }
-    // }
+    // ✅ REGRA DE NEGÓCIO: Mensagem INBOUND sempre volta para "Entradas"
+    // Cada nova mensagem do cliente é uma nova oportunidade de atendimento
+    // A atribuição só acontece quando operador assume explicitamente no App
+    if (!fromMe && !isGroupChat) {
+      convPayload.assigned_to = null; // Reset para "Entradas"
+      console.log(`[Webhook] 📥 Mensagem inbound: conversa volta para "Entradas"`);
+    }
 
     // ✅ PATCH 4: Busca segura de conversa com merge sem violar UNIQUE
     // Busca 1: Por contact_id (mais confiável)
