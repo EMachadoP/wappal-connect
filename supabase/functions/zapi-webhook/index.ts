@@ -4,9 +4,40 @@ import { isEmployeeSender } from "../_shared/is-employee.ts";
 import { parseAndExtract } from "../_shared/parse.ts";
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+// --- HELPERS PARA IDEMPOTÊNCIA ---
+async function sha256Hex(input: string) {
+  const data = new TextEncoder().encode(input);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function buildFallbackProviderMsgId(opts: {
+  canonicalChatId: string;
+  fromMe: boolean;
+  msgType: string;
+  content: string | null;
+  mediaUrl: string | null;
+  timestamp: string;
+  provider: string;
+}) {
+  const base = JSON.stringify({
+    p: opts.provider,
+    c: opts.canonicalChatId,
+    fm: opts.fromMe ? 1 : 0,
+    t: opts.msgType,
+    ts: opts.timestamp,
+    ct: (opts.content || "").slice(0, 200),
+    mu: opts.mediaUrl || "",
+  });
+  const hex = await sha256Hex(base);
+  return `fallback:${hex.slice(0, 32)}`;
+}
 
 serve(async (req: Request): Promise<Response> => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
@@ -123,21 +154,7 @@ serve(async (req: Request): Promise<Response> => {
 
     console.log(`[Webhook] Identity: ${fromMe ? 'OUT' : 'IN'} | Key=${threadKey} | JID=${canonicalChatId}`);
 
-    const providerMsgId = payload.messageId || payload.id || crypto.randomUUID();
-
-    // ✅ 1. IDEMPOTENCY CHECK
-    const { data: existingMsg } = await supabase
-      .from('messages')
-      .select('id, sender_type')
-      .eq('provider_message_id', providerMsgId)
-      .maybeSingle();
-
-    if (existingMsg) {
-      console.log(`[Webhook] Mensagem duplicada ignorada: ${providerMsgId}`);
-      return new Response(JSON.stringify({ success: true, duplicated: true }), { headers: corsHeaders });
-    }
-
-    // ✅ 2. RESOLVER/ATUALIZAR CONTATO
+    // ✅ 1. RESOLVER/ATUALIZAR CONTATO
     const phone = !isGroupChat ? canonicalChatId.split('@')[0] : null;
     const currentLid = (typeof rawRecipient === 'string' && rawRecipient.endsWith('@lid')) ? rawRecipient : null;
 
@@ -261,40 +278,105 @@ serve(async (req: Request): Promise<Response> => {
 
     const senderPhone = (payload.contact?.phone || payload.phone || canonicalChatId).split('@')[0];
 
-    let msgResult: any = null;
-    let msgError: any = null;
+    const mediaUrl =
+      payload.imageUrl || payload.audioUrl || payload.videoUrl || payload.documentUrl ||
+      payload.image?.url || payload.audio?.url || payload.video?.url || payload.document?.url ||
+      payload.image?.imageUrl || payload.audio?.audioUrl || payload.video?.videoUrl || payload.document?.documentUrl ||
+      null;
 
-    if (!existingMsg) {
-      // ✅ Insert simples - já checamos duplicado acima por provider_message_id
-      const insertResult = await supabase
-        .from("messages")
-        .insert({
-          conversation_id: conv.id,
-          sender_type: fromMe ? "agent" : "contact",
-          sender_name: senderName,
-          sender_phone: senderPhone,
-          message_type: msgType,
-          content,
-          provider: "zapi",
-          provider_message_id: providerMsgId,
-          chat_id: canonicalChatId,
-          direction: fromMe ? "outbound" : "inbound",
-          sent_at: payload.timestamp ? new Date(payload.timestamp).toISOString() : now,
-          raw_payload: payload,
-          media_url:
-            payload.imageUrl || payload.audioUrl || payload.videoUrl || payload.documentUrl ||
-            payload.image?.url || payload.audio?.url || payload.video?.url || payload.document?.url ||
-            payload.image?.imageUrl || payload.audio?.audioUrl || payload.video?.videoUrl || payload.document?.documentUrl ||
-            null,
-        })
-        .select("id")
-        .single();
+    // --- IDEMPOTÊNCIA COM RELINK E FALLBACK SEGURO ---
+    let providerMsgId = payload.messageId || payload.id;
 
-      msgResult = insertResult.data;
-      msgError = insertResult.error;
+    if (!providerMsgId) {
+      const tsIso = payload.timestamp ? new Date(payload.timestamp).toISOString() : now;
+      providerMsgId = await buildFallbackProviderMsgId({
+        canonicalChatId,
+        fromMe: !!fromMe,
+        msgType,
+        content: content ?? null,
+        mediaUrl: mediaUrl,
+        timestamp: tsIso,
+        provider: "zapi",
+      });
     }
 
-    if (msgError) throw new Error(`Falha ao salvar mensagem: ${msgError.message}`);
+    const { data: existingMsg, error: existingErr } = await supabase
+      .from("messages")
+      .select("id, conversation_id")
+      .eq("provider", "zapi")
+      .eq("provider_message_id", providerMsgId)
+      .maybeSingle();
+
+    if (existingErr) {
+      console.error("[Webhook] Erro ao checar duplicidade:", existingErr);
+      throw existingErr;
+    }
+
+    if (existingMsg) {
+      if (existingMsg.conversation_id !== conv.id) {
+        const { error: relinkErr } = await supabase
+          .from("messages")
+          .update({
+            conversation_id: conv.id,
+            chat_id: canonicalChatId,
+            raw_payload: payload,
+          })
+          .eq("id", existingMsg.id);
+
+        if (relinkErr) {
+          console.error("[Webhook] Erro ao RELINK mensagem duplicada:", relinkErr);
+          throw relinkErr;
+        }
+
+        console.log(`[Webhook] Duplicada ${providerMsgId} -> RELINK para conv_id=${conv.id}`);
+        return new Response(JSON.stringify({ success: true, duplicated: true, relinked: true }), { status: 200, headers: corsHeaders });
+      }
+
+      console.log(`[Webhook] Mensagem duplicada ignorada: ${providerMsgId}`);
+      return new Response(JSON.stringify({ success: true, duplicated: true, relinked: false }), { status: 200, headers: corsHeaders });
+    }
+
+    // --- INSERT DA MENSAGEM COM TRATAMENTO DE CORRIDA ---
+    const { data: msgResult, error: msgError } = await supabase
+      .from("messages")
+      .insert({
+        conversation_id: conv.id,
+        sender_type: fromMe ? "agent" : "contact",
+        sender_name: senderName,
+        sender_phone: senderPhone,
+        message_type: msgType,
+        content,
+        provider: "zapi",
+        provider_message_id: providerMsgId,
+        chat_id: canonicalChatId,
+        direction: fromMe ? "outbound" : "inbound",
+        sent_at: payload.timestamp ? new Date(payload.timestamp).toISOString() : now,
+        raw_payload: payload,
+        media_url: mediaUrl,
+      })
+      .select("id")
+      .single();
+
+    if (msgError) {
+      const msgErrStr = JSON.stringify(msgError);
+      if (msgErrStr.includes("duplicate key") || msgErrStr.includes("23505")) {
+        const { data: racedMsg } = await supabase
+          .from("messages")
+          .select("id, conversation_id")
+          .eq("provider", "zapi")
+          .eq("provider_message_id", providerMsgId)
+          .maybeSingle();
+
+        if (racedMsg && racedMsg.conversation_id !== conv.id) {
+          await supabase.from("messages").update({ conversation_id: conv.id, chat_id: canonicalChatId, raw_payload: payload }).eq("id", racedMsg.id);
+          console.log(`[Webhook] Race duplicada ${providerMsgId} -> RELINK para conv_id=${conv.id}`);
+          return new Response(JSON.stringify({ success: true, duplicated: true, relinked: true, raced: true }), { status: 200, headers: corsHeaders });
+        }
+        console.log(`[Webhook] Race duplicada ignorada: ${providerMsgId}`);
+        return new Response(JSON.stringify({ success: true, duplicated: true, relinked: false, raced: true }), { status: 200, headers: corsHeaders });
+      }
+      throw msgError;
+    }
 
     // Command Detection & Media Storage follows...
     if (!fromMe && msgResult?.id && msgType === 'text') {
