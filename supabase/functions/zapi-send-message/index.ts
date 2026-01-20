@@ -121,25 +121,28 @@ function normalizeRecipient(input: { recipient: string; isGroup?: boolean }): { 
   // Pessoa: Permitir LID agora!
   // if (raw.includes("@lid")) { ... } // REMOVIDO BLOQUEIO
 
-  // Remover sufixo legado
+  // Remover sufixo legado para normalização
   let withoutSuffix = raw.replace(/@s\.whatsapp\.net$/i, "").replace(/@lid$/i, "");
 
   // Só dígitos
   const digits = withoutSuffix.replace(/\D/g, "");
 
-  // Aceitar LIDs que não começam com 55 e tem ~15 dígitos
-  // BR/E.164 (12 ou 13 dígitos com 55) OU LID (15 dígitos)
+  // Aceitar LIDs que não começam com 55 e tem 14+ dígitos
+  // BR/E.164 (12 ou 13 dígitos com 55) OU LID (14-16 dígitos)
   const isBR = digits.startsWith("55") && (digits.length === 12 || digits.length === 13);
-  const isLID = digits.length >= 14;
+  const isLID = digits.length >= 14 && !digits.startsWith("55");
 
   if (!isBR && !isLID) {
     // Relaxamos para aceitar tudo entre 10 e 15 digitos se não for estritamente BR
-    if (digits.length < 10 || digits.length > 15) {
-      throw new Error(`Telefone inválido para envio: "${raw0}" -> "${digits}" (esperado 55+DDD+8/9 digitos ou LID 15 digitos)`);
+    if (digits.length < 10 || digits.length > 16) {
+      throw new Error(`Telefone inválido para envio: "${raw0}" -> "${digits}" (esperado 55+DDD+8/9 digitos ou LID 14-16 digitos)`);
     }
   }
 
-  return { to_chat_id: digits, isGroup: false };
+  // ✅ FIX: Se é LID, adiciona o sufixo @lid para Z-API
+  const to_chat_id = isLID ? `${digits}@lid` : digits;
+
+  return { to_chat_id, isGroup: false };
 }
 
 // idempotency_key determinístico (fallback) — evita duplicar em chamadas iguais
@@ -370,24 +373,23 @@ serve(async (req: Request) => {
       }
     }
 
-    // ✅ FIX: dbChatId = JID canônico para o banco (sempre com sufixo @s.whatsapp.net ou @g.us)
+    // ✅ FIX: dbChatId = JID canônico para o banco (sempre com sufixo @s.whatsapp.net, @g.us ou @lid)
     let dbChatId = "";
     if (finalIsGroup) {
       dbChatId = effectiveRecipient;
     } else {
       if (effectiveRecipient.includes('@')) {
+        // Já tem sufixo (@s.whatsapp.net, @lid, etc)
         dbChatId = effectiveRecipient;
       } else {
         // Only append @s.whatsapp.net if it looks like a phone (starts with 55 for BR or < 14 digits)
-        // If it looks like a LID (>= 14 digits, no 55), DO NOT append fake suffix.
+        // If it looks like a LID (>= 14 digits, no 55), append @lid
         const isLidLike = effectiveRecipient.length >= 14 && !effectiveRecipient.startsWith('55');
         if (isLidLike) {
-          // Cannot send to raw LID digits without @lid. And we don't want to synthesize fake phone JID.
-          // But wait, if effectiveRecipient IS the result of an override (which means it IS a phone), it shouldn't be LID-like.
-          // If we are here, it means NO override happened.
-          throw new Error("Identificador inválido: dígitos de LID sem sufixo @lid e sem telefone associado.");
+          dbChatId = `${effectiveRecipient}@lid`;
+        } else {
+          dbChatId = `${effectiveRecipient}@s.whatsapp.net`;
         }
-        dbChatId = `${effectiveRecipient}@s.whatsapp.net`;
       }
     }
 
