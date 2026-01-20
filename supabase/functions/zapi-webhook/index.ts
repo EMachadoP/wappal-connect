@@ -130,8 +130,8 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     // 3. Ignorar status updates puros
-    const isStatusUpdate = Boolean(payload.ack || payload.type === 'chatState' || (payload.status && !payload.text && !payload.message && !payload.image && !payload.video && !payload.audio && !payload.document));
-    if (isStatusUpdate) return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
+    const isIgnoredEvent = Boolean(payload.ack || payload.type === 'chatState' || (payload.status && !payload.text && !payload.message && !payload.image && !payload.video && !payload.audio && !payload.document));
+    if (isIgnoredEvent) return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
 
     // --- HELPERS E NORMALIZAÇÃO BLINDADA ---
     const stripPrefix = (s: string) => s.replace(/^(u:|g:)/, '');
