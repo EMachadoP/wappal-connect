@@ -56,24 +56,32 @@ serve(async (req) => {
     const contact = (conversation as any).contacts;
 
     // ✅ Extract phone and LID properly
-    let recipientPhone = contact.phone;
+    let rawPhone = contact.phone;
     const lid = contact.lid || contact.chat_lid;
 
-    // ✅ Priority: Use phone if available, otherwise LID with @lid suffix
-    if (!recipientPhone && lid) {
-      // Check if lid already has @lid suffix
+    // ✅ Detect if "phone" is actually a LID (14+ digits, no 55 prefix, no @ symbol)
+    const phoneIsLid = rawPhone && rawPhone.length >= 14 && !rawPhone.startsWith('55') && !rawPhone.includes('@');
+
+    let recipientPhone: string;
+
+    if (phoneIsLid) {
+      // Phone field contains a LID - add @lid suffix
+      recipientPhone = `${rawPhone}@lid`;
+      console.log('[zapi-send-file] Phone field contains LID, adding @lid suffix:', recipientPhone);
+    } else if (rawPhone && !phoneIsLid) {
+      // Normal phone number  
+      recipientPhone = rawPhone;
+    } else if (lid) {
+      // No phone, use LID field with @lid suffix if needed
       if (lid.endsWith('@lid')) {
         recipientPhone = lid;
       } else if (lid.length >= 14 && !lid.startsWith('55')) {
-        // It's a LID - add @lid suffix for Z-API
         recipientPhone = `${lid}@lid`;
       } else {
-        // Try to use as phone
         recipientPhone = lid;
       }
-    }
-
-    if (!recipientPhone) {
+    } else {
+      // No valid identifier found
       return new Response(JSON.stringify({ error: 'No valid recipient identifier' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -108,6 +116,10 @@ serve(async (req) => {
     } else if (file_type?.startsWith('audio/')) {
       endpoint = 'send-audio';
       messageType = 'audio';
+    } else {
+      // ✅ For documents, Z-API requires file extension in URL
+      const fileExt = file_name?.split('.').pop() || file_type?.split('/').pop() || 'pdf';
+      endpoint = `send-document/${fileExt}`;
     }
 
     const zapiUrl = `https://api.z-api.io/instances/${instanceId}/token/${token}/${endpoint}`;
