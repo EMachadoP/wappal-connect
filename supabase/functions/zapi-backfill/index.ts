@@ -105,8 +105,9 @@ serve(async (req: Request): Promise<Response> => {
     for (const chat of chatsToProcess) {
       try {
         // Buscar histórico de mensagens do chat
-        // Z-API endpoint: GET /load-messages/{phone}?amount=N
-        const messagesUrl = `${zapiBaseUrl}/load-messages/${chat.phone}?amount=${limit}`;
+        // Z-API endpoint: POST /read-messages/{phone} com body { messageId: null }
+        // Referência: alguns endpoints da Z-API precisam de POST
+        const messagesUrl = `${zapiBaseUrl}/read-messages/${chat.phone}`;
         console.log(`[Backfill] Buscando mensagens de ${chat.phone}...`);
 
         const messagesResponse = await fetch(messagesUrl, { 
