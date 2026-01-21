@@ -272,11 +272,14 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     // ✅ PATCH 3: REGRA DE OURO - se existe phone válido, a conversa SEMPRE é ancorada no phone JID
-    const phoneDigits = normalizedPhone ? String(normalizedPhone).replace(/\D/g, "") : "";
-    const hasRealPhone = phoneDigits.length >= 10 && !phoneDigits.endsWith("lid") && !String(normalizedPhone || "").includes("@lid");
+    const normalizedPhoneDigits = normalizedPhone ? String(normalizedPhone).replace(/\D/g, "") : "";
+    const hasRealPhone =
+      normalizedPhoneDigits.length >= 10 &&
+      !normalizedPhoneDigits.endsWith("lid") &&
+      !String(normalizedPhone || "").includes("@lid");
 
     const preferredChatId = hasRealPhone
-      ? normalizeChatId(phoneDigits) // vira 55...@s.whatsapp.net
+      ? normalizeChatId(normalizedPhoneDigits) // vira 55...@s.whatsapp.net
       : canonicalChatId;
 
     const canonicalChatIdFinal = preferredChatId || canonicalChatId;
