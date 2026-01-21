@@ -105,24 +105,46 @@ serve(async (req: Request): Promise<Response> => {
     for (const chat of chatsToProcess) {
       try {
         // Buscar histórico de mensagens do chat
-        // Z-API endpoint: POST /read-messages/{phone} com body { messageId: null }
-        // Referência: alguns endpoints da Z-API precisam de POST
-        const messagesUrl = `${zapiBaseUrl}/read-messages/${chat.phone}`;
-        console.log(`[Backfill] Buscando mensagens de ${chat.phone}...`);
+        // Z-API: Tentar múltiplos endpoints conhecidos
+        const endpoints = [
+          { url: `${zapiBaseUrl}/queue`, method: "GET" },
+          { url: `${zapiBaseUrl}/messages/${chat.phone}`, method: "GET" },
+          { url: `${zapiBaseUrl}/chat/${chat.phone}/messages`, method: "GET" },
+        ];
 
-        const messagesResponse = await fetch(messagesUrl, { 
-          method: "GET",
-          headers
-        });
-        
-        if (!messagesResponse.ok) {
-          const errText = await messagesResponse.text();
-          console.error(`[Backfill] Erro ao buscar mensagens de ${chat.phone}: ${messagesResponse.status} - ${errText}`);
+        let messagesResponse: Response | null = null;
+        let usedEndpoint = "";
+
+        for (const ep of endpoints) {
+          console.log(`[Backfill] Tentando ${ep.method} ${ep.url}...`);
+          const resp = await fetch(ep.url, { method: ep.method, headers });
+          const respText = await resp.text();
+          
+          // Se não for NOT_FOUND, usar este endpoint
+          if (!respText.includes("NOT_FOUND") && !respText.includes("Unable to find")) {
+            messagesResponse = new Response(respText, { status: resp.status });
+            usedEndpoint = ep.url;
+            break;
+          }
+        }
+
+        if (!messagesResponse) {
+          console.log(`[Backfill] Nenhum endpoint funcionou para ${chat.phone}`);
           errors++;
           continue;
         }
 
-        const result = await messagesResponse.json();
+        console.log(`[Backfill] Usando endpoint: ${usedEndpoint}`);
+        
+        const responseText = await messagesResponse.text();
+        let result: any;
+        try {
+          result = JSON.parse(responseText);
+        } catch {
+          console.error(`[Backfill] Resposta não é JSON válido de ${chat.phone}`);
+          errors++;
+          continue;
+        }
         
         // DEBUG: Guardar resposta raw para análise
         debugInfo.push({
