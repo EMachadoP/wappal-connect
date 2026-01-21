@@ -104,21 +104,33 @@ serve(async (req: Request): Promise<Response> => {
     for (const chat of chatsToProcess) {
       try {
         // Buscar histórico de mensagens do chat
-        const messagesUrl = `${zapiBaseUrl}/chat-messages/${chat.phone}?amount=${limit}`;
+        // Z-API endpoint: POST /get-messages/{phone}
+        const messagesUrl = `${zapiBaseUrl}/get-messages/${chat.phone}`;
         console.log(`[Backfill] Buscando mensagens de ${chat.phone}...`);
 
-        const messagesResponse = await fetch(messagesUrl, { headers });
+        const messagesResponse = await fetch(messagesUrl, { 
+          method: "POST",
+          headers,
+          body: JSON.stringify({ amount: limit })
+        });
+        
         if (!messagesResponse.ok) {
-          console.error(`[Backfill] Erro ao buscar mensagens de ${chat.phone}: ${messagesResponse.status}`);
+          const errText = await messagesResponse.text();
+          console.error(`[Backfill] Erro ao buscar mensagens de ${chat.phone}: ${messagesResponse.status} - ${errText}`);
           errors++;
           continue;
         }
 
-        const messages = await messagesResponse.json();
-        if (!Array.isArray(messages)) {
+        const result = await messagesResponse.json();
+        // Z-API retorna { messages: [...] } ou array direto
+        const messages = Array.isArray(result) ? result : (result.messages || result.data || []);
+        
+        if (!Array.isArray(messages) || messages.length === 0) {
           console.log(`[Backfill] Nenhuma mensagem retornada para ${chat.phone}`);
           continue;
         }
+        
+        console.log(`[Backfill] ${messages.length} mensagens encontradas para ${chat.phone}`);
 
         // Filtrar mensagens pelo timestamp
         const filteredMessages = messages.filter((msg: any) => {
