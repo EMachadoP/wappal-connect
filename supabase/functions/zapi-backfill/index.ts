@@ -122,11 +122,15 @@ serve(async (req: Request): Promise<Response> => {
         }
 
         const result = await messagesResponse.json();
+        
+        // DEBUG: Log da resposta raw da Z-API
+        console.log(`[Backfill] Resposta raw de ${chat.phone}:`, JSON.stringify(result).slice(0, 500));
+        
         // Z-API retorna { messages: [...] } ou array direto
         const messages = Array.isArray(result) ? result : (result.messages || result.data || []);
         
         if (!Array.isArray(messages) || messages.length === 0) {
-          console.log(`[Backfill] Nenhuma mensagem retornada para ${chat.phone}`);
+          console.log(`[Backfill] Nenhuma mensagem extraída para ${chat.phone}. Keys disponíveis:`, Object.keys(result || {}));
           continue;
         }
         
