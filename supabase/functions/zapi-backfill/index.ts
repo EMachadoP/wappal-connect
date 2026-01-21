@@ -105,43 +105,55 @@ serve(async (req: Request): Promise<Response> => {
     for (const chat of chatsToProcess) {
       try {
         // Buscar histórico de mensagens do chat
-        // Z-API: Tentar múltiplos endpoints conhecidos
-        const endpoints = [
-          { url: `${zapiBaseUrl}/queue`, method: "GET" },
-          { url: `${zapiBaseUrl}/messages/${chat.phone}`, method: "GET" },
-          { url: `${zapiBaseUrl}/chat/${chat.phone}/messages`, method: "GET" },
-        ];
+        // Z-API endpoint: GET /chat-messages/{phone}?amount=N&lastMessageId=X
+        // NOTA: Este endpoint NÃO funciona no modo Multi Device!
+        const messagesUrl = `${zapiBaseUrl}/chat-messages/${chat.phone}?amount=${limit}`;
+        console.log(`[Backfill] Buscando mensagens de ${chat.phone} via /chat-messages...`);
 
-        let messagesResponse: Response | null = null;
-        let usedEndpoint = "";
-
-        for (const ep of endpoints) {
-          console.log(`[Backfill] Tentando ${ep.method} ${ep.url}...`);
-          const resp = await fetch(ep.url, { method: ep.method, headers });
-          const respText = await resp.text();
-          
-          // Se não for NOT_FOUND, usar este endpoint
-          if (!respText.includes("NOT_FOUND") && !respText.includes("Unable to find")) {
-            messagesResponse = new Response(respText, { status: resp.status });
-            usedEndpoint = ep.url;
-            break;
-          }
-        }
-
-        if (!messagesResponse) {
-          console.log(`[Backfill] Nenhum endpoint funcionou para ${chat.phone}`);
+        const messagesResponse = await fetch(messagesUrl, { 
+          method: "GET",
+          headers
+        });
+        
+        const responseText = await messagesResponse.text();
+        
+        // Verificar se é erro de Multi Device
+        if (responseText.includes("Multi Device") || responseText.includes("multi-device")) {
+          console.error(`[Backfill] ⚠️ ERRO: Endpoint não disponível no modo Multi Device`);
+          debugInfo.push({
+            phone: chat.phone,
+            status: messagesResponse.status,
+            error: "MULTI_DEVICE_NOT_SUPPORTED",
+            message: "O endpoint /chat-messages não está disponível no modo Multi Device. Use o webhook para capturar mensagens em tempo real."
+          });
           errors++;
           continue;
         }
-
-        console.log(`[Backfill] Usando endpoint: ${usedEndpoint}`);
         
-        const responseText = await messagesResponse.text();
         let result: any;
         try {
           result = JSON.parse(responseText);
         } catch {
-          console.error(`[Backfill] Resposta não é JSON válido de ${chat.phone}`);
+          console.error(`[Backfill] Resposta não é JSON válido de ${chat.phone}: ${responseText.slice(0, 200)}`);
+          debugInfo.push({
+            phone: chat.phone,
+            status: messagesResponse.status,
+            error: "INVALID_JSON",
+            rawPreview: responseText.slice(0, 300)
+          });
+          errors++;
+          continue;
+        }
+        
+        // Verificar se é erro da API
+        if (result.error) {
+          console.error(`[Backfill] Erro da Z-API para ${chat.phone}: ${result.error} - ${result.message}`);
+          debugInfo.push({
+            phone: chat.phone,
+            status: messagesResponse.status,
+            error: result.error,
+            message: result.message
+          });
           errors++;
           continue;
         }
