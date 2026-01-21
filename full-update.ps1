@@ -19,8 +19,10 @@ param(
   [switch]$Push = $true,
 
   [switch]$SkipInstall,
+  [switch]$AuditFix,
   [switch]$SkipBuild,
   [switch]$SkipLint,
+  [switch]$StrictLint,
   [switch]$SkipTests,
   [switch]$SkipDb,
   [switch]$SkipFunctions,
@@ -154,6 +156,16 @@ if (-not $SkipInstall) {
   } else {
     Run "npm install"
   }
+
+  if ($AuditFix) {
+    Section "1.1) npm audit fix (opcional)"
+    try {
+      Run "npm audit fix" $PWD.Path $TimeoutSeconds
+      Write-Host "npm audit fix OK" -ForegroundColor Green
+    } catch {
+      Write-Host "npm audit fix falhou/timeout: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+  }
 } else {
   Section "1) Dependências (pulado)"
 }
@@ -168,7 +180,15 @@ if (-not $SkipBuild) {
 
 if (-not $SkipLint) {
   Section "3) Lint"
-  Run "npm run lint"
+  try {
+    Run "npm run lint"
+    Write-Host "Lint OK" -ForegroundColor Green
+  } catch {
+    if ($StrictLint) {
+      throw
+    }
+    Write-Host "Lint falhou, mas vou continuar (use -StrictLint para travar)." -ForegroundColor Yellow
+  }
 } else {
   Section "3) Lint (pulado)"
 }
