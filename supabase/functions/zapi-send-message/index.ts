@@ -584,6 +584,15 @@ serve(async (req: Request) => {
     let result: any;
     let response: Response;
 
+    // ✅ DEBUG: Log exact payload being sent to Z-API
+    console.log(`[zapi-send-message] 📤 SENDING TO Z-API:`);
+    console.log(`  endpoint: ${endpoint}`);
+    console.log(`  bodyOut.phone: ${bodyOut.phone}`);
+    console.log(`  effectiveRecipient: ${effectiveRecipient}`);
+    console.log(`  formattedRecipient: ${formattedRecipient}`);
+    console.log(`  dbChatId: ${dbChatId}`);
+    console.log(`  content preview: ${(bodyOut.message || '').slice(0, 50)}...`);
+
     try {
       response = await fetch(`${zapiBaseUrl}${endpoint}`, {
         method: "POST",
@@ -591,6 +600,9 @@ serve(async (req: Request) => {
         body: JSON.stringify(bodyOut),
       });
       result = await response.json().catch(() => ({}));
+      
+      // ✅ DEBUG: Log Z-API response
+      console.log(`[zapi-send-message] 📥 Z-API RESPONSE: status=${response.status} messageId=${result.messageId || result.zaapId || 'null'}`);
 
       if (!response.ok) {
         const errorText = `ZAPI ${response.status}: ${JSON.stringify(result).slice(0, 1000)}`;
