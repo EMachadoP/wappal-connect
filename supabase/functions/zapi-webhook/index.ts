@@ -294,11 +294,32 @@ serve(async (req: Request): Promise<Response> => {
 
     console.log(`[Webhook] Identity: ${fromMe ? 'OUT' : 'IN'} | Key=${threadKey} | JID=${canonicalChatId}`);
 
-    // ✅ 1. RESOLVER/ATUALIZAR CONTATO
+    // ✅ 1. RESOLVER/ATUALIZAR CONTATO - Busca robusta por múltiplos identificadores
     let contactId: string;
+    
+    // Extrair dígitos do phone e LID para busca mais ampla
+    const phoneDigits = phone ? phone.replace(/\D/g, '') : '';
+    const lidDigits = currentLid ? currentLid.replace(/@lid$/i, '').replace(/\D/g, '') : '';
+    const chatIdDigits = canonicalChatIdFinal ? canonicalChatIdFinal.split('@')[0].replace(/\D/g, '') : '';
+    
+    // Construir query de busca que encontra contato por QUALQUER identificador conhecido
+    const searchConditions: string[] = [];
+    if (threadKey) searchConditions.push(`chat_key.eq.${threadKey}`);
+    if (threadKey) searchConditions.push(`chat_key.eq.${threadKey.replace(/^(u:|g:)/, '')}`);
+    if (phoneDigits && phoneDigits.length >= 10) searchConditions.push(`phone.ilike.%${phoneDigits.slice(-8)}%`);
+    if (currentLid) searchConditions.push(`chat_lid.eq.${currentLid}`);
+    if (currentLid) searchConditions.push(`lid.eq.${currentLid}`);
+    if (lidDigits && lidDigits.length >= 10) searchConditions.push(`chat_lid.ilike.%${lidDigits}%`);
+    if (chatIdDigits && chatIdDigits.length >= 10 && chatIdDigits !== phoneDigits) {
+      searchConditions.push(`phone.ilike.%${chatIdDigits.slice(-8)}%`);
+    }
+    
+    console.log(`[Webhook] 🔍 Buscando contato com condições: ${searchConditions.length} variações`);
+    
     const { data: contactFound } = await supabase.from('contacts')
       .select('id, name, chat_key, chat_lid, lid, phone')
-      .or(`chat_key.eq.${threadKey},chat_key.eq.${threadKey.replace(/^(u:|g:)/, '')},phone.eq.${phone || 'none'},chat_lid.eq.${currentLid || 'none'},lid.eq.${currentLid || 'none'}`)
+      .or(searchConditions.join(','))
+      .eq('is_group', isGroupChat)
       .limit(1)
       .maybeSingle();
 
@@ -306,13 +327,27 @@ serve(async (req: Request): Promise<Response> => {
       contactId = contactFound.id;
       const updates: any = { updated_at: now };
 
-      // ✅ Cross-linking: Ensure both IDs are present
-      if (currentLid && contactFound.chat_lid !== currentLid) updates.chat_lid = currentLid;
-      // We also update 'lid' column if it exists and is different
-      if (currentLid && (contactFound as any).lid !== currentLid) (updates as any).lid = currentLid;
-      if (phone && contactFound.phone !== phone) updates.phone = phone;
+      // ✅ Cross-linking ROBUSTO: Garantir que TODOS os identificadores estejam presentes
+      // Isso evita duplicação quando mensagem chega com LID e depois com phone
+      if (currentLid && contactFound.chat_lid !== currentLid) {
+        updates.chat_lid = currentLid;
+        console.log(`[Webhook] 🔗 Cross-link: adicionando chat_lid ${currentLid} ao contato ${contactFound.id}`);
+      }
+      if (currentLid && (contactFound as any).lid !== currentLid) {
+        (updates as any).lid = currentLid;
+      }
+      if (phone && contactFound.phone !== phone) {
+        // Só atualizar phone se o atual for vazio ou for um LID
+        const currentPhone = contactFound.phone || '';
+        const currentPhoneIsLid = currentPhone.includes('@lid') || (currentPhone.length >= 14 && !currentPhone.startsWith('55'));
+        if (!currentPhone || currentPhoneIsLid) {
+          updates.phone = phone;
+          console.log(`[Webhook] 🔗 Cross-link: adicionando phone ${phone} ao contato ${contactFound.id} (era: ${currentPhone || 'vazio'})`);
+        }
+      }
 
-      if (!contactFound.chat_key.startsWith('u:') && !contactFound.chat_key.startsWith('g:')) {
+      // Atualizar chat_key para formato consistente
+      if (!contactFound.chat_key || !contactFound.chat_key.startsWith('u:') && !contactFound.chat_key.startsWith('g:')) {
         updates.chat_key = threadKey;
       }
 
@@ -382,7 +417,7 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     // ✅ PATCH 4: Busca segura de conversa com merge sem violar UNIQUE
-    // Busca 1: Por contact_id (mais confiável)
+    // Busca 1: Por contact_id (mais confiável - garante unicidade)
     const { data: convByContact } = await supabase
       .from('conversations')
       .select('id, contact_id, chat_id, thread_key, assigned_to')
@@ -390,11 +425,27 @@ serve(async (req: Request): Promise<Response> => {
       .limit(1)
       .maybeSingle();
 
-    // Busca 2: Por thread_key ou chat_id (fallback)
+    // Busca 2: Por thread_key ou chat_id (múltiplas variações para evitar duplicação)
+    const keySearchConditions: string[] = [];
+    if (threadKey) keySearchConditions.push(`thread_key.eq.${threadKey}`);
+    if (canonicalChatIdFinal) keySearchConditions.push(`chat_id.eq.${canonicalChatIdFinal}`);
+    // Também buscar por variações do LID e phone
+    if (currentLid) {
+      keySearchConditions.push(`chat_id.eq.${currentLid}`);
+      keySearchConditions.push(`thread_key.eq.u:${currentLid}`);
+    }
+    if (phone && !phone.includes('@lid')) {
+      const phoneJid = phone.includes('@') ? phone : `${phone}@s.whatsapp.net`;
+      keySearchConditions.push(`chat_id.eq.${phoneJid}`);
+      keySearchConditions.push(`thread_key.eq.u:${phone}`);
+    }
+    
+    console.log(`[Webhook] 🔍 Buscando conversa com ${keySearchConditions.length} condições`);
+    
     const { data: convByKey } = await supabase
       .from('conversations')
       .select('id, contact_id, chat_id, thread_key, assigned_to')
-      .or(`thread_key.eq.${threadKey},chat_id.eq.${canonicalChatIdFinal}`)
+      .or(keySearchConditions.join(','))
       .limit(1)
       .maybeSingle();
 
