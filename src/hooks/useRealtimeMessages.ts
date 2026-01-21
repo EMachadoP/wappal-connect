@@ -7,10 +7,14 @@ type Message = Database['public']['Tables']['messages']['Row'];
 export function useRealtimeMessages(conversationId: string | null) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const channelRef = useRef<any>(null);
 
+  const PAGE_SIZE = 50;
   const fetchSeq = useRef(0);
   const activeIdRef = useRef<string | null>(null);
+  const oldestSentAtRef = useRef<string | null>(null);
 
   const fetchMessages = useCallback(async (id: string) => {
     const seq = ++fetchSeq.current;
@@ -25,7 +29,7 @@ export function useRealtimeMessages(conversationId: string | null) {
         .select('*')
         .eq('conversation_id', id)
         .order('sent_at', { ascending: false })
-        .limit(50);
+        .limit(PAGE_SIZE);
 
       if (error) throw error;
 
@@ -33,7 +37,12 @@ export function useRealtimeMessages(conversationId: string | null) {
       if (seq !== fetchSeq.current) return;
       if (activeIdRef.current !== id) return;
 
-      setMessages((data ?? []).reverse());
+      const ordered = (data ?? []).reverse();
+      setMessages(ordered);
+
+      // paginação
+      oldestSentAtRef.current = ordered.length ? ordered[0].sent_at : null;
+      setHasMore((data ?? []).length === PAGE_SIZE);
     } catch (err) {
       console.error('[RealtimeMessages] Error fetching:', err);
     } finally {
@@ -41,8 +50,63 @@ export function useRealtimeMessages(conversationId: string | null) {
     }
   }, []);
 
+  const loadMoreMessages = useCallback(async () => {
+    const id = activeIdRef.current;
+    if (!id) return;
+    if (loadingMore) return;
+    if (!hasMore) return;
+
+    const before = oldestSentAtRef.current;
+    if (!before) {
+      setHasMore(false);
+      return;
+    }
+
+    setLoadingMore(true);
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('conversation_id', id)
+        .lt('sent_at', before)
+        .order('sent_at', { ascending: false })
+        .limit(PAGE_SIZE);
+
+      if (error) throw error;
+
+      const older = (data ?? []).reverse();
+      if (!older.length) {
+        setHasMore(false);
+        return;
+      }
+
+      setMessages((prev) => {
+        // prepend mantendo unicidade
+        const prevIds = new Set(prev.map((m) => m.id));
+        const merged = [...older.filter((m) => !prevIds.has(m.id)), ...prev];
+        merged.sort((a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime());
+        return merged;
+      });
+
+      oldestSentAtRef.current = older[0].sent_at;
+      setHasMore((data ?? []).length === PAGE_SIZE);
+    } catch (err) {
+      console.error('[RealtimeMessages] Error loading more:', err);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [hasMore, loadingMore]);
+
+  const refetchMessages = useCallback(async () => {
+    if (!conversationId) return;
+    await fetchMessages(conversationId);
+  }, [conversationId, fetchMessages]);
+
   useEffect(() => {
     setMessages([]);
+    setHasMore(false);
+    setLoadingMore(false);
+    oldestSentAtRef.current = null;
 
     if (!conversationId) {
       setLoading(false);
@@ -78,9 +142,14 @@ export function useRealtimeMessages(conversationId: string | null) {
               if (newMessage.conversation_id !== conversationId) return prev;
               if (prev.some((m) => m.id === newMessage.id)) return prev;
 
-              return [...prev, newMessage].sort(
+              const merged = [...prev, newMessage].sort(
                 (a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime()
               );
+              // se recebemos algo mais antigo que o "oldest", atualiza referência
+              if (!oldestSentAtRef.current || new Date(newMessage.sent_at) < new Date(oldestSentAtRef.current)) {
+                oldestSentAtRef.current = newMessage.sent_at;
+              }
+              return merged;
             });
           } else if (payload.eventType === 'UPDATE') {
             const updated = payload.new as Message;
@@ -106,5 +175,13 @@ export function useRealtimeMessages(conversationId: string | null) {
     };
   }, [conversationId, fetchMessages]);
 
-  return { messages, loading, setMessages };
+  return {
+    messages,
+    loading,
+    loadingMore,
+    hasMore,
+    loadMoreMessages,
+    refetchMessages,
+    setMessages,
+  };
 }

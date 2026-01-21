@@ -438,9 +438,11 @@ serve(async (req: Request) => {
     }
 
     // Build Z-API request parameters
+    // ✅ IMPORTANTE: enviar para effectiveRecipient (pode ter swap LID -> phone)
+    // formattedRecipient é a forma normalizada inicial; effectiveRecipient é o destino final para entrega.
     let finalContent = content;
     let endpoint = "/send-text";
-    const bodyOut: any = { phone: formattedRecipient };
+    const bodyOut: any = { phone: effectiveRecipient };
 
 
     if (!message_type || message_type === "text") {

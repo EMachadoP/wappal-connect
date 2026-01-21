@@ -41,7 +41,9 @@ export default function InboxPage() {
     loading: loadingMessages,
     loadingMore,
     hasMore,
-    loadMoreMessages
+    loadMoreMessages,
+    refetchMessages,
+    setMessages
   } = useRealtimeMessages(activeConversationId);
 
   const fetchActiveConversationDetails = useCallback(async (id: string) => {
@@ -124,6 +126,36 @@ export default function InboxPage() {
     if (!activeConversationId) { alert('Erro: Nenhuma conversa selecionada (ID nulo)'); return; }
 
     try {
+      // ✅ Optimistic UI: mostra a mensagem imediatamente na tela
+      const nowIso = new Date().toISOString();
+      const optimisticId = (globalThis.crypto?.randomUUID?.() ?? `tmp_${Date.now()}_${Math.random().toString(16).slice(2)}`);
+      setMessages((prev: any[]) => {
+        const next = [
+          ...prev,
+          {
+            id: optimisticId,
+            conversation_id: activeConversationId,
+            sender_type: 'agent',
+            sender_id: user.id,
+            agent_id: user.id,
+            agent_name: 'Atendente G7',
+            sender_name: 'Atendente G7',
+            content,
+            message_type: 'text',
+            media_url: null,
+            provider: 'zapi',
+            provider_message_id: null,
+            direction: 'outbound',
+            status: 'sent',
+            chat_id: null,
+            sent_at: nowIso,
+            delivered_at: null,
+            read_at: null,
+          }
+        ].sort((a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime());
+        return next;
+      });
+
       // Obter sessão para Authorization Header
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
@@ -149,11 +181,20 @@ export default function InboxPage() {
         throw new Error(`Erro HTTP ${response.status}: ${errorText}`);
       }
 
+      // ✅ Garantia: refetch depois do send (cobre realtime atrasado)
+      setTimeout(() => {
+        if (activeConversationId) refetchMessages();
+      }, 800);
+
       // Sucesso
       // alert('Mensagem enviada!'); // Opcional, remover em produção
     } catch (error: any) {
       console.error('Erro ao enviar:', error);
       toast.error(`Erro ao enviar: ${error.message || 'Erro desconhecido'}`);
+      // Em caso de erro, força refetch para remover optimistic "fantasma"
+      try {
+        await refetchMessages();
+      } catch { }
     }
   };
 
