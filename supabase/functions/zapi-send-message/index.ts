@@ -263,6 +263,10 @@ serve(async (req: Request) => {
       senderName = isSystem ? (overrideSenderName || "Ana Mônica") : "Atendente G7";
     }
 
+    // ✅ FIX: Adiciona timestamp para evitar dedup falso entre mensagens diferentes
+    // A idempotência ainda funciona para retries dentro de 60 segundos
+    const timeWindow = Math.floor(Date.now() / 60000); // janela de 1 minuto
+    
     const idempotency_key: string =
       json.idempotency_key ||
       stableKey({
@@ -272,6 +276,7 @@ serve(async (req: Request) => {
         message_type: message_type || "text",
         media_url: media_url || null,
         senderName: senderName,
+        timeWindow: timeWindow, // ✅ Evita colisão com mensagens antigas
       });
 
     if (inputRecipient && !chatId) chatId = inputRecipient;
@@ -479,14 +484,19 @@ serve(async (req: Request) => {
     const resolvedConversationId = convRow?.id || finalConvId || null;
 
     // ✅ SYNCHRONOUS OUTBOX IDEMPOTENCY
+    console.log(`[zapi-send-message] 🔑 Checking idempotency_key=${idempotency_key}`);
+    
     const { data: existingOutbox } = await supabaseAdmin
       .from("message_outbox")
       .select("id, sent_at, provider_message_id, status")
       .eq("idempotency_key", idempotency_key)
       .maybeSingle();
 
+    console.log(`[zapi-send-message] 🔍 existingOutbox=${existingOutbox ? JSON.stringify(existingOutbox) : 'NULL'}`);
+
     if (existingOutbox) {
       if (existingOutbox.status === "sent") {
+        console.log(`[zapi-send-message] ⚠️ DEDUP TRIGGERED - key=${idempotency_key} already sent!`);
         // ✅ RECONCILIATION: Even if deduped, ensure message exists in database
         if (resolvedConversationId && existingOutbox.provider_message_id) {
           const nowIso = new Date().toISOString();
