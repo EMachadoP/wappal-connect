@@ -142,14 +142,38 @@ export function useRealtimeMessages(conversationId: string | null) {
               if (newMessage.conversation_id !== conversationId) return prev;
               if (prev.some((m) => m.id === newMessage.id)) return prev;
 
-              const merged = [...prev, newMessage].sort(
-                (a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime()
-              );
+              // ✅ Detectar e substituir mensagem optimistic (tmp_xxx)
+              // Uma mensagem é considerada optimistic se:
+              // 1. ID começa com "tmp_"
+              // 2. Mesmo content
+              // 3. Mesmo direction (outbound)
+              // 4. sent_at dentro de 30 segundos
+              const newTime = new Date(newMessage.sent_at).getTime();
+              const optimisticIdx = prev.findIndex((m) => {
+                if (!String(m.id).startsWith('tmp_')) return false;
+                if (m.content !== newMessage.content) return false;
+                if (m.direction !== newMessage.direction) return false;
+                const prevTime = new Date(m.sent_at).getTime();
+                return Math.abs(newTime - prevTime) < 30000; // 30s tolerance
+              });
+
+              let updated: Message[];
+              if (optimisticIdx >= 0) {
+                // Substituir optimistic pela mensagem real
+                updated = [...prev];
+                updated[optimisticIdx] = newMessage;
+              } else {
+                // Adicionar nova mensagem
+                updated = [...prev, newMessage];
+              }
+
+              updated.sort((a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime());
+
               // se recebemos algo mais antigo que o "oldest", atualiza referência
               if (!oldestSentAtRef.current || new Date(newMessage.sent_at) < new Date(oldestSentAtRef.current)) {
                 oldestSentAtRef.current = newMessage.sent_at;
               }
-              return merged;
+              return updated;
             });
           } else if (payload.eventType === 'UPDATE') {
             const updated = payload.new as Message;

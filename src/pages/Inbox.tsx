@@ -24,6 +24,7 @@ export default function InboxPage() {
   const [activeContact, setActiveContact] = useState<any>(null);
   const [activeConvData, setActiveConvData] = useState<any>(null);
   const [agents, setAgents] = useState<{ id: string; name: string }[]>([]);
+  const [currentUserName, setCurrentUserName] = useState<string>('Atendente G7');
 
   const [activeTab, setActiveTab] = useState<TabValue>('inbox');
 
@@ -88,19 +89,24 @@ export default function InboxPage() {
     }
   }, [activeConversationId, fetchActiveConversationDetails]);
 
-  // Fetch agents for assignment
+  // Fetch agents for assignment + current user's display name
   useEffect(() => {
     const fetchAgents = async () => {
       if (!user) return;
 
       const { data } = await supabase
         .from('profiles')
-        .select('id, name')
+        .select('id, name, display_name')
         .eq('is_active', true) // ✅ Only show active agents
         .order('name');
 
       if (data) {
         setAgents(data);
+        // ✅ Set current user's display name for optimistic UI
+        const myProfile = data.find(p => p.id === user.id);
+        if (myProfile) {
+          setCurrentUserName((myProfile as any).display_name || myProfile.name || 'Atendente G7');
+        }
       }
     };
 
@@ -138,8 +144,8 @@ export default function InboxPage() {
             sender_type: 'agent',
             sender_id: user.id,
             agent_id: user.id,
-            agent_name: 'Atendente G7',
-            sender_name: 'Atendente G7',
+            agent_name: currentUserName,
+            sender_name: currentUserName,
             content,
             message_type: 'text',
             media_url: null,
