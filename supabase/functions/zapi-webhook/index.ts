@@ -54,6 +54,13 @@ serve(async (req: Request): Promise<Response> => {
   const now = new Date().toISOString();
   let payload: any;
 
+  // ✅ BACKFILL MODE: Detecta header x-backfill para reimportação de mensagens
+  // Quando x-backfill: 1, não chama IA e não incrementa unread
+  const isBackfill = req.headers.get('x-backfill') === '1';
+  if (isBackfill) {
+    console.log('[Webhook] 🔄 Backfill mode ativado - não chamará IA nem incrementará unread');
+  }
+
   try {
     payload = await req.json();
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -368,7 +375,8 @@ serve(async (req: Request): Promise<Response> => {
     // ✅ REGRA DE NEGÓCIO: Mensagem INBOUND sempre volta para "Entradas"
     // Cada nova mensagem do cliente é uma nova oportunidade de atendimento
     // A atribuição só acontece quando operador assume explicitamente no App
-    if (!fromMe && !isGroupChat) {
+    // NÃO reseta assigned_to durante backfill (para não bagunçar atribuições existentes)
+    if (!fromMe && !isGroupChat && !isBackfill) {
       convPayload.assigned_to = null; // Reset para "Entradas"
       console.log(`[Webhook] 📥 Mensagem inbound: conversa volta para "Entradas"`);
     }
@@ -508,8 +516,8 @@ serve(async (req: Request): Promise<Response> => {
       }
     }
 
-    // ✅ PATCH 5: Apenas UM increment_unread_count
-    if (!fromMe) await supabase.rpc('increment_unread_count', { conv_id: conv.id });
+    // ✅ PATCH 5: Apenas UM increment_unread_count (não incrementa em backfill)
+    if (!fromMe && !isBackfill) await supabase.rpc('increment_unread_count', { conv_id: conv.id });
 
     // ✅ UPGRADE CONVERSATION: Desabilitado para evitar conflito chat_id_uq_full
     // O merge de conversas já trata a consolidação de LID → phone
@@ -692,8 +700,8 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     // AI & Group Resolution...
-    // ✅ PASSO 3: A IA não deve rodar quando a mensagem for duplicada
-    if (!fromMe && !isGroupChat && !msgError && msgResult && (existingMsg === null || existingMsg === undefined)) {
+    // ✅ PASSO 3: A IA não deve rodar quando a mensagem for duplicada ou em backfill
+    if (!fromMe && !isGroupChat && !isBackfill && !msgError && msgResult && (existingMsg === null || existingMsg === undefined)) {
       if (!msgResult?.id) {
         console.log("[Webhook] Skipping AI: No message ID");
         return new Response(JSON.stringify({ success: true, skipped_ai: "no_message_id" }), { headers: corsHeaders });
@@ -741,7 +749,7 @@ serve(async (req: Request): Promise<Response> => {
       }
     }
 
-    if (!fromMe && isGroupChat && !msgError && msgResult && !existingMsg && msgType === 'text') {
+    if (!fromMe && isGroupChat && !isBackfill && !msgError && msgResult && !existingMsg && msgType === 'text') {
       await fetch(`${supabaseUrl}/functions/v1/group-resolution-handler`, {
         method: 'POST',
         headers: {
