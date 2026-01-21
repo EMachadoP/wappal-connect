@@ -100,6 +100,7 @@ serve(async (req: Request): Promise<Response> => {
     let skippedMessages = 0;
     let errors = 0;
     const results: any[] = [];
+    const debugInfo: any[] = []; // Para debug
 
     for (const chat of chatsToProcess) {
       try {
@@ -123,7 +124,14 @@ serve(async (req: Request): Promise<Response> => {
 
         const result = await messagesResponse.json();
         
-        // DEBUG: Log da resposta raw da Z-API
+        // DEBUG: Guardar resposta raw para análise
+        debugInfo.push({
+          phone: chat.phone,
+          status: messagesResponse.status,
+          rawKeys: Object.keys(result || {}),
+          rawPreview: JSON.stringify(result).slice(0, 300),
+        });
+        
         console.log(`[Backfill] Resposta raw de ${chat.phone}:`, JSON.stringify(result).slice(0, 500));
         
         // Z-API retorna { messages: [...] } ou array direto
@@ -245,7 +253,7 @@ serve(async (req: Request): Promise<Response> => {
       processedMessages,
       skippedMessages,
       errors,
-      ...(dryRun ? { preview: results.slice(0, 50) } : {}),
+      ...(dryRun ? { preview: results.slice(0, 50), debug: debugInfo } : {}),
     };
 
     console.log(`[Backfill] Concluído:`, summary);
