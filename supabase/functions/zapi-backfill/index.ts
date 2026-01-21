@@ -105,14 +105,13 @@ serve(async (req: Request): Promise<Response> => {
     for (const chat of chatsToProcess) {
       try {
         // Buscar histórico de mensagens do chat
-        // Z-API endpoint: POST /get-messages/{phone}
-        const messagesUrl = `${zapiBaseUrl}/get-messages/${chat.phone}`;
+        // Z-API endpoint: GET /load-messages/{phone}?amount=N
+        const messagesUrl = `${zapiBaseUrl}/load-messages/${chat.phone}?amount=${limit}`;
         console.log(`[Backfill] Buscando mensagens de ${chat.phone}...`);
 
         const messagesResponse = await fetch(messagesUrl, { 
-          method: "POST",
-          headers,
-          body: JSON.stringify({ amount: limit })
+          method: "GET",
+          headers
         });
         
         if (!messagesResponse.ok) {
