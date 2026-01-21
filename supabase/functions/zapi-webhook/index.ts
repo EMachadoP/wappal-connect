@@ -67,6 +67,16 @@ serve(async (req: Request): Promise<Response> => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+    // ✅ SINAL DE VIDA: atualiza mesmo em status updates
+    // (antes retornava cedo e o monitoramento parecia "parado")
+    const { error: heartbeatErr } = await supabase
+      .from('zapi_settings')
+      .update({ last_webhook_received_at: now })
+      .is('team_id', null);
+    if (heartbeatErr) {
+      console.error('[Webhook] Unable to update last_webhook_received_at:', heartbeatErr);
+    }
+
     // --- LOG DE DEPURAÇÃO (ai_logs) ---
     await supabase.from('ai_logs').insert({
       status: 'webhook_received',
@@ -124,10 +134,6 @@ serve(async (req: Request): Promise<Response> => {
       .select('forward_webhook_url')
       .is('team_id', null)
       .maybeSingle();
-
-    await supabase.from('zapi_settings')
-      .update({ last_webhook_received_at: now })
-      .is('team_id', null);
 
     // 2. ENCAMINHAMENTO
     if (settings?.forward_webhook_url) {

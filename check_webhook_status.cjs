@@ -10,8 +10,6 @@ function parseEnvLine(line) {
   if (eqIdx <= 0) return null;
   const key = withoutExport.slice(0, eqIdx).trim();
   let value = withoutExport.slice(eqIdx + 1).trim();
-
-  // Remove surrounding quotes
   if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
     value = value.slice(1, -1);
   }
@@ -65,7 +63,6 @@ function tryExtractServiceRoleKeyFromRepo() {
   return null;
 }
 
-// Fallback local: destrava diagnóstico mesmo sem env vars.
 if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
   const extracted = tryExtractServiceRoleKeyFromRepo();
   if (extracted && (!supabaseKey || !String(supabaseKey).startsWith('sb_secret_'))) {
@@ -75,44 +72,77 @@ if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
 
 if (!supabaseUrl || !supabaseKey) {
   throw new Error(
-    'Variáveis ausentes: defina SUPABASE_URL (ou VITE_SUPABASE_URL) e uma chave (SUPABASE_SERVICE_ROLE_KEY recomendado; fallback: VITE_SUPABASE_ANON_KEY) em um .env/.env.production ou no ambiente.'
+    'Variáveis ausentes: defina SUPABASE_URL (ou VITE_SUPABASE_URL) e uma chave (SUPABASE_SERVICE_ROLE_KEY recomendado) em um .env/.env.production ou no ambiente.'
   );
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-async function fetchErrorLogs() {
-    const { data, error } = await supabase
-        .from('ai_logs')
-        .select('*')
-        .eq('status', 'error')
-        .order('created_at', { ascending: false })
-        .limit(5);
+async function main() {
+  console.log('--- STATUS DO WEBHOOK (sem expor conteúdo) ---');
 
-    if (error) {
-        console.error('Error fetching logs:', error);
-        return;
-    }
+  const { data: settings, error: settingsErr } = await supabase
+    .from('zapi_settings')
+    .select('last_webhook_received_at, forward_webhook_url')
+    .is('team_id', null)
+    .maybeSingle();
 
-    if (!data || data.length === 0) {
-        console.log('No error logs found');
-        return;
-    }
+  if (settingsErr) {
+    console.error('Erro ao ler zapi_settings:', settingsErr.message);
+  } else {
+    console.log('last_webhook_received_at:', settings?.last_webhook_received_at ?? null);
+    console.log('forward_webhook_url:', settings?.forward_webhook_url ?? null);
+  }
 
-    console.log(`Found ${data.length} error logs:\n`);
+  const { data: allSettings, error: allSettingsErr } = await supabase
+    .from('zapi_settings')
+    .select('team_id, last_webhook_received_at')
+    .order('updated_at', { ascending: false })
+    .limit(10);
 
-    data.forEach((log, i) => {
-        console.log(`\n=== ERROR LOG ${i + 1} ===`);
-        console.log('Time:', log.created_at);
-        console.log('Model:', log.model);
-        console.log('Provider:', log.provider);
-        console.log('Conversation ID:', log.conversation_id || 'N/A');
-        console.log('Error Message:', log.error_message);
-        if (log.input_excerpt) {
-            console.log('Input (first 200 chars):', log.input_excerpt.substring(0, 200));
-        }
-        console.log('='.repeat(50));
-    });
+  if (allSettingsErr) {
+    console.error('Erro ao listar zapi_settings (team_id/last_webhook_received_at):', allSettingsErr.message);
+  } else {
+    console.log('zapi_settings (até 10):', allSettings || []);
+  }
+
+  const { count, error: countErr } = await supabase
+    .from('messages')
+    .select('id', { count: 'exact', head: true });
+
+  if (countErr) {
+    console.error('Erro ao contar messages:', countErr.message);
+  } else {
+    console.log('messages (count):', count ?? 0);
+  }
+
+  const { data: lastMsg, error: lastMsgErr } = await supabase
+    .from('messages')
+    .select('sent_at, direction, provider')
+    .order('sent_at', { ascending: false })
+    .limit(1);
+
+  if (lastMsgErr) {
+    console.error('Erro ao ler última message:', lastMsgErr.message);
+  } else {
+    console.log('última message:', lastMsg?.[0] ?? null);
+  }
+
+  const { data: lastInbound, error: lastInboundErr } = await supabase
+    .from('messages')
+    .select('sent_at, provider')
+    .eq('direction', 'inbound')
+    .order('sent_at', { ascending: false })
+    .limit(1);
+
+  if (lastInboundErr) {
+    console.error('Erro ao ler última inbound:', lastInboundErr.message);
+  } else {
+    console.log('última inbound:', lastInbound?.[0] ?? null);
+  }
 }
 
-fetchErrorLogs();
+main().catch((e) => {
+  console.error('Falha inesperada:', e?.message || e);
+  process.exitCode = 1;
+});

@@ -10,8 +10,6 @@ function parseEnvLine(line) {
   if (eqIdx <= 0) return null;
   const key = withoutExport.slice(0, eqIdx).trim();
   let value = withoutExport.slice(eqIdx + 1).trim();
-
-  // Remove surrounding quotes
   if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
     value = value.slice(1, -1);
   }
@@ -31,24 +29,12 @@ function loadEnvFromFiles(filenames) {
   }
 }
 
-loadEnvFromFiles(['.env', '.env.local', '.env.production', '.env.development']);
-
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-let supabaseKey =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.SUPABASE_SERVICE_KEY ||
-  process.env.SUPABASE_KEY ||
-  process.env.SUPABASE_ANON_KEY ||
-  process.env.VITE_SUPABASE_ANON_KEY ||
-  process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-
 function tryExtractServiceRoleKeyFromRepo() {
   const candidates = [
     path.join(__dirname, 'scripts', 'check_webhook_status.ts'),
     path.join(__dirname, 'scripts', 'print_zapi_settings.ts'),
     path.join(__dirname, 'check_zapi.cjs'),
   ];
-
   for (const file of candidates) {
     try {
       if (!fs.existsSync(file)) continue;
@@ -65,7 +51,17 @@ function tryExtractServiceRoleKeyFromRepo() {
   return null;
 }
 
-// Fallback local: destrava diagnóstico mesmo sem env vars.
+loadEnvFromFiles(['.env', '.env.local', '.env.production', '.env.development']);
+
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+let supabaseKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SERVICE_KEY ||
+  process.env.SUPABASE_KEY ||
+  process.env.SUPABASE_ANON_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
 if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
   const extracted = tryExtractServiceRoleKeyFromRepo();
   if (extracted && (!supabaseKey || !String(supabaseKey).startsWith('sb_secret_'))) {
@@ -74,45 +70,23 @@ if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
 }
 
 if (!supabaseUrl || !supabaseKey) {
-  throw new Error(
-    'Variáveis ausentes: defina SUPABASE_URL (ou VITE_SUPABASE_URL) e uma chave (SUPABASE_SERVICE_ROLE_KEY recomendado; fallback: VITE_SUPABASE_ANON_KEY) em um .env/.env.production ou no ambiente.'
-  );
+  throw new Error('Defina SUPABASE_URL/VITE_SUPABASE_URL e uma key (service role recomendado).');
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-async function fetchErrorLogs() {
-    const { data, error } = await supabase
-        .from('ai_logs')
-        .select('*')
-        .eq('status', 'error')
-        .order('created_at', { ascending: false })
-        .limit(5);
-
-    if (error) {
-        console.error('Error fetching logs:', error);
-        return;
-    }
-
-    if (!data || data.length === 0) {
-        console.log('No error logs found');
-        return;
-    }
-
-    console.log(`Found ${data.length} error logs:\n`);
-
-    data.forEach((log, i) => {
-        console.log(`\n=== ERROR LOG ${i + 1} ===`);
-        console.log('Time:', log.created_at);
-        console.log('Model:', log.model);
-        console.log('Provider:', log.provider);
-        console.log('Conversation ID:', log.conversation_id || 'N/A');
-        console.log('Error Message:', log.error_message);
-        if (log.input_excerpt) {
-            console.log('Input (first 200 chars):', log.input_excerpt.substring(0, 200));
-        }
-        console.log('='.repeat(50));
-    });
+async function main() {
+  const { error } = await supabase.from('protocols').select('id,tags,ai_classified,ai_confidence').limit(1);
+  if (error) {
+    console.log('protocols: colunas SLA/tags NÃO disponíveis.');
+    console.log('Detalhe:', error.message);
+    process.exitCode = 2;
+    return;
+  }
+  console.log('protocols: colunas SLA/tags OK (tags, ai_classified, ai_confidence).');
 }
 
-fetchErrorLogs();
+main().catch((e) => {
+  console.error('Falha:', e?.message || e);
+  process.exitCode = 1;
+});

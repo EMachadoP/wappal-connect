@@ -10,8 +10,6 @@ function parseEnvLine(line) {
   if (eqIdx <= 0) return null;
   const key = withoutExport.slice(0, eqIdx).trim();
   let value = withoutExport.slice(eqIdx + 1).trim();
-
-  // Remove surrounding quotes
   if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
     value = value.slice(1, -1);
   }
@@ -30,17 +28,6 @@ function loadEnvFromFiles(filenames) {
     }
   }
 }
-
-loadEnvFromFiles(['.env', '.env.local', '.env.production', '.env.development']);
-
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-let supabaseKey =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.SUPABASE_SERVICE_KEY ||
-  process.env.SUPABASE_KEY ||
-  process.env.SUPABASE_ANON_KEY ||
-  process.env.VITE_SUPABASE_ANON_KEY ||
-  process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 function tryExtractServiceRoleKeyFromRepo() {
   const candidates = [
@@ -65,7 +52,17 @@ function tryExtractServiceRoleKeyFromRepo() {
   return null;
 }
 
-// Fallback local: destrava diagnóstico mesmo sem env vars.
+loadEnvFromFiles(['.env', '.env.local', '.env.production', '.env.development']);
+
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+let supabaseKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SERVICE_KEY ||
+  process.env.SUPABASE_KEY ||
+  process.env.SUPABASE_ANON_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
 if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
   const extracted = tryExtractServiceRoleKeyFromRepo();
   if (extracted && (!supabaseKey || !String(supabaseKey).startsWith('sb_secret_'))) {
@@ -74,45 +71,38 @@ if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
 }
 
 if (!supabaseUrl || !supabaseKey) {
-  throw new Error(
-    'Variáveis ausentes: defina SUPABASE_URL (ou VITE_SUPABASE_URL) e uma chave (SUPABASE_SERVICE_ROLE_KEY recomendado; fallback: VITE_SUPABASE_ANON_KEY) em um .env/.env.production ou no ambiente.'
-  );
+  throw new Error('Defina SUPABASE_URL/VITE_SUPABASE_URL e uma key (service role recomendado).');
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-async function fetchErrorLogs() {
-    const { data, error } = await supabase
-        .from('ai_logs')
-        .select('*')
-        .eq('status', 'error')
-        .order('created_at', { ascending: false })
-        .limit(5);
+async function main() {
+  const limit = Number(process.argv[2] || 25);
+  const { data, error } = await supabase
+    .from('ai_logs')
+    .select('created_at,status,model,provider,conversation_id,error_message')
+    .order('created_at', { ascending: false })
+    .limit(limit);
 
-    if (error) {
-        console.error('Error fetching logs:', error);
-        return;
-    }
+  if (error) throw error;
 
-    if (!data || data.length === 0) {
-        console.log('No error logs found');
-        return;
-    }
+  if (!data || data.length === 0) {
+    console.log('ai_logs: vazio');
+    return;
+  }
 
-    console.log(`Found ${data.length} error logs:\n`);
-
-    data.forEach((log, i) => {
-        console.log(`\n=== ERROR LOG ${i + 1} ===`);
-        console.log('Time:', log.created_at);
-        console.log('Model:', log.model);
-        console.log('Provider:', log.provider);
-        console.log('Conversation ID:', log.conversation_id || 'N/A');
-        console.log('Error Message:', log.error_message);
-        if (log.input_excerpt) {
-            console.log('Input (first 200 chars):', log.input_excerpt.substring(0, 200));
-        }
-        console.log('='.repeat(50));
-    });
+  for (const row of data) {
+    const ts = row.created_at;
+    const status = row.status;
+    const model = row.model || '—';
+    const provider = row.provider || '—';
+    const cid = row.conversation_id ? String(row.conversation_id).slice(0, 8) : '—';
+    const err = row.error_message ? String(row.error_message).slice(0, 140) : '';
+    console.log(`${ts} | ${status} | ${provider}/${model} | conv=${cid}${err ? ` | ${err}` : ''}`);
+  }
 }
 
-fetchErrorLogs();
+main().catch((e) => {
+  console.error('Falha:', e?.message || e);
+  process.exitCode = 1;
+});
