@@ -1010,7 +1010,28 @@ serve(async (req) => {
       .map((m: any) => (m.role === "user" ? extractApartment(m.content) : (m.role === "system" && m.payload?.apartment ? m.payload.apartment : null)))
       .find(Boolean) || pendingPayload?.apartment || null;
 
-    const needsApartment = /(interfone|tv|controle|apartamento|apto|unidade)/i.test(recentText);
+    // ✅ FIX: Buscar role do contato para não pedir APT de funcionários
+    let contactRole = '';
+    if (convData?.contact_id) {
+      const { data: participantData } = await supabase
+        .from('participants')
+        .select('role_type')
+        .eq('contact_id', convData.contact_id)
+        .eq('is_primary', true)
+        .maybeSingle();
+      contactRole = String(participantData?.role_type || '').toLowerCase();
+    }
+
+    // ✅ FIX: Porteiros e funcionários NÃO precisam informar apartamento
+    const ROLES_WITHOUT_APARTMENT = ['porteiro', 'zelador', 'funcionario', 'gerente_predio', 'administrador'];
+    const roleSkipsApartment = ROLES_WITHOUT_APARTMENT.includes(contactRole);
+    
+    const textNeedsApartment = /(interfone|tv|controle|apartamento|apto|unidade)/i.test(recentText);
+    const needsApartment = textNeedsApartment && !roleSkipsApartment;
+    
+    if (roleSkipsApartment && textNeedsApartment) {
+      console.log(`[AI] Skipping apartment requirement for role: ${contactRole}`);
+    }
 
     // ✅ FIX: Considerar "condomínio identificado" quando tem ID OU nome raw (escape hatch)
     const condoRawName = (pendingPayload?.condo_raw_name || pendingPayload?.condo_raw || pendingPayload?.condominium_raw_name || null);
@@ -1107,7 +1128,13 @@ REGRAS DE EXECUÇÃO:
 - Se existir PENDENTE, faça apenas 1 pergunta curta para resolver. Não faça checklists longos.
 - Não repita perguntas já respondidas no histórico.
 - Só chame create_protocol quando tiver: nome do condomínio + descrição clara + (apartamento quando for unidade) + nome do solicitante.
-- Responda sempre em português natural, sem blocos estruturados, sem tom robótico.`;
+- Responda sempre em português natural, sem blocos estruturados, sem tom robótico.
+
+REGRAS DE FORMATO - MUITO IMPORTANTE:
+- NUNCA exiba JSON, código, ou dados estruturados na sua resposta ao cliente.
+- Se precisar usar a ferramenta create_protocol, apenas CHAME a ferramenta silenciosamente - NÃO mostre os parâmetros na mensagem.
+- Sua resposta ao cliente deve ser sempre texto natural em português, como uma pessoa falando.
+- Varie suas saudações e confirmações - não use sempre as mesmas frases.`;
 
 
     const { data: providerConfig } = await supabase
