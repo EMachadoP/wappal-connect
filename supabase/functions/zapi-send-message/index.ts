@@ -14,6 +14,11 @@ type Json = Record<string, any>;
 
 const toBool = (v: any) => v === true || v === "true" || v === 1 || v === "1";
 
+const isValidUuid = (v: any): boolean => {
+  if (!v || typeof v !== 'string') return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+};
+
 const stripPrefix = (s: string) => (s || '').trim().replace(/^(u:|g:)/i, '');
 
 const isLikelyGroupId = (raw: string) => {
@@ -266,7 +271,7 @@ serve(async (req: Request) => {
     // ✅ FIX: Adiciona timestamp para evitar dedup falso entre mensagens diferentes
     // A idempotência ainda funciona para retries dentro de 60 segundos
     const timeWindow = Math.floor(Date.now() / 60000); // janela de 1 minuto
-    
+
     const idempotency_key: string =
       json.idempotency_key ||
       stableKey({
@@ -485,7 +490,7 @@ serve(async (req: Request) => {
 
     // ✅ SYNCHRONOUS OUTBOX IDEMPOTENCY
     console.log(`[zapi-send-message] 🔑 Checking idempotency_key=${idempotency_key}`);
-    
+
     const { data: existingOutbox } = await supabaseAdmin
       .from("message_outbox")
       .select("id, sent_at, provider_message_id, status")
@@ -507,8 +512,8 @@ serve(async (req: Request) => {
             conversation_id: resolvedConversationId,
             sender_type: isSystem ? "assistant" : "agent",
             sender_name: senderName || (isSystem ? "Ana Mônica" : "Atendente G7"),
-            sender_id: isSystem ? null : (userId || null),
-            agent_id: isSystem ? null : (userId || null),
+            sender_id: isValidUuid(userId) ? userId : null,
+            agent_id: isValidUuid(userId) ? userId : null,
             agent_name: senderName || (isSystem ? "Ana Mônica" : "Atendente G7"),
             content: content || null,
             message_type: message_type || "text",
@@ -610,7 +615,7 @@ serve(async (req: Request) => {
         body: JSON.stringify(bodyOut),
       });
       result = await response.json().catch(() => ({}));
-      
+
       // ✅ DEBUG: Log Z-API response
       console.log(`[zapi-send-message] 📥 Z-API RESPONSE: status=${response.status} messageId=${result.messageId || result.zaapId || 'null'}`);
 
@@ -664,12 +669,12 @@ serve(async (req: Request) => {
 
       const { error: msgErr } = await supabaseAdmin.from("messages").insert({
         conversation_id: resolvedConversationId,
-        // ✅ FIX: Sender fields for UI compatibility
+        // ✅ FIX: Sender fields for UI compatibility - validate UUID
         sender_type: isSystem ? "assistant" : "agent",
-        sender_id: isSystem ? null : (userId || null),
+        sender_id: isValidUuid(userId) ? userId : null,
         sender_name: safeSenderName,
         // Legacy agent fields (mantidos para compatibilidade)
-        agent_id: isSystem ? null : (userId || null),
+        agent_id: isValidUuid(userId) ? userId : null,
         agent_name: safeSenderName,
         content: content || null,
         message_type: message_type || "text",
