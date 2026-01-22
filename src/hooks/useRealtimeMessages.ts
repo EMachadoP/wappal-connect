@@ -186,6 +186,7 @@ export function useRealtimeMessages(conversationId: string | null) {
         }
       )
       .subscribe((status: string) => {
+        console.log(`[RealtimeMessages] Subscription status: ${status}`);
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           console.error(`[RealtimeMessages] Subscription error (${status}), retrying...`);
           setTimeout(() => conversationId && fetchMessages(conversationId), 1500);
@@ -194,7 +195,16 @@ export function useRealtimeMessages(conversationId: string | null) {
 
     channelRef.current = channel;
 
+    // ✅ POLLING FALLBACK: Atualiza a cada 10 segundos caso realtime falhe
+    const pollInterval = setInterval(() => {
+      if (conversationId) {
+        console.log('[RealtimeMessages] Polling fallback tick');
+        fetchMessages(conversationId);
+      }
+    }, 10000);
+
     return () => {
+      clearInterval(pollInterval);
       if (channelRef.current) supabase.removeChannel(channelRef.current);
     };
   }, [conversationId, fetchMessages]);

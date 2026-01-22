@@ -97,6 +97,12 @@ export function useRealtimeInbox({ onNewInboundMessage, tab = 'inbox', userId }:
   useEffect(() => {
     fetchConversations();
 
+    // ✅ POLLING FALLBACK: Atualiza a cada 15 segundos caso realtime falhe
+    const pollInterval = setInterval(() => {
+      console.log('[RealtimeInbox] Polling fallback tick');
+      fetchConversations();
+    }, 15000);
+
     const channel = supabase
       .channel(`global-inbox-updates:${tab}:${userId ?? 'anon'}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, () => {
@@ -120,10 +126,16 @@ export function useRealtimeInbox({ onNewInboundMessage, tab = 'inbox', userId }:
           processedMessageIds.current = new Set([...processedMessageIds.current].slice(-100));
         }
       })
-      .subscribe();
+      .subscribe((status) => {
+        console.log(`[RealtimeInbox] Subscription status: ${status}`);
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.error('[RealtimeInbox] Connection issue, will rely on polling');
+        }
+      });
 
     return () => {
-      console.log('[RealtimeInbox] Cleaning up channel');
+      console.log('[RealtimeInbox] Cleaning up channel and poll');
+      clearInterval(pollInterval);
       supabase.removeChannel(channel);
     };
   }, [fetchConversations, onNewInboundMessage, tab, userId]);
