@@ -370,9 +370,10 @@ serve(async (req: Request): Promise<Response> => {
 
     console.log(`[Webhook] ✅ Contato resolvido: ${contactId} (chat_key: ${resolvedChatKey})`);
 
-    // Atualizar threadKey para usar o chat_key canônico retornado pela RPC
-    const finalThreadKey = isGroupChat ? threadKey : (resolvedChatKey || threadKey);
-
+    // ✅ Thread key CANÔNICA (não depende de phone vs lid)
+    const finalThreadKey = isGroupChat
+      ? `group:${normalizeGroupJid(rawChatId || canonicalChatIdFinal || canonicalChatId)}`
+      : `dm:${contactId}`;
 
     // ✅ 3. RESOLVER MÍDIA/CONTEÚDO
     let content = payload.text?.message || payload.message?.text || payload.body || payload.caption || "";
@@ -386,16 +387,16 @@ serve(async (req: Request): Promise<Response> => {
 
     const lastMessagePreview = (content && content.trim()) || `[${msgType}]`;
 
-    // ✅ 4. UPSERT CONVERSA - ATÔMICO (elimina race condition)
+    // ✅ UPSERT CONVERSATION (atômico)
     const convPayload: any = {
       chat_id: canonicalChatIdFinal,
-      thread_key: finalThreadKey,  // Chave única para UPSERT (usa chat_key canônico)
+      thread_key: finalThreadKey,
       contact_id: contactId,
       last_message: lastMessagePreview.slice(0, 500),
       last_message_type: msgType,
       last_message_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-      status: 'open'
+      status: "open",
     };
 
     // ✅ REGRA DE NEGÓCIO: Mensagem INBOUND sempre volta para "Entradas"
@@ -404,112 +405,49 @@ serve(async (req: Request): Promise<Response> => {
       console.log(`[Webhook] 📥 Mensagem inbound: conversa volta para "Entradas"`);
     }
 
-    // ✅ MERGE PRÉ-UPSERT: Se existem conversas órfãs com mesmo contact_id, merge PRIMEIRO
+    console.log(`[Webhook] 📦 Upsert conversation thread_key=${finalThreadKey}`);
+
+    const { data: conv, error: convErr } = await supabase
+      .from("conversations")
+      .upsert(convPayload, { onConflict: "thread_key" })
+      .select("id, assigned_to")
+      .single();
+
+    if (convErr) {
+      console.error("[Webhook] ❌ Conversation upsert failed:", convErr);
+      throw new Error(`Conversation upsert failed: ${convErr.message}`);
+    }
+
+    const convId: string = conv.id;
+    const convAssignedTo: string | null = conv.assigned_to;
+
+    // ✅ MERGE ÓRFÃS (agora a principal já existe)
     const { data: orphanConvs } = await supabase
-      .from('conversations')
-      .select('id, thread_key')
+      .from("conversations")
+      .select("id, thread_key")
       .eq('contact_id', contactId)
-      .neq('thread_key', finalThreadKey)
-      .limit(5);
+      .neq("id", convId)
+      .limit(10);
 
     if (orphanConvs && orphanConvs.length > 0) {
-      console.log(`[Webhook] 🔀 Encontradas ${orphanConvs.length} conversas órfãs para merge`);
+      console.log(`[Webhook] 🔀 Merge de ${orphanConvs.length} conversas órfãs -> ${convId}`);
 
-      for (const orphan of orphanConvs) {
-        // Mover mensagens para a conversa principal (que será criada/atualizada)
-        const { data: mainConv } = await supabase
-          .from('conversations')
-          .select('id')
-          .eq('thread_key', finalThreadKey)
-          .maybeSingle();
+      const orphanIds = orphanConvs.map(o => o.id);
 
-        if (mainConv) {
-          await supabase.from('messages').update({ conversation_id: mainConv.id }).eq('conversation_id', orphan.id);
-          await supabase.from('protocols').update({ conversation_id: mainConv.id }).eq('conversation_id', orphan.id);
-          await supabase.from('conversations').delete().eq('id', orphan.id);
-          console.log(`[Webhook] ✅ Conversa órfã ${orphan.id} merged para ${mainConv.id}`);
-        }
-      }
+      await supabase.from("messages")
+        .update({ conversation_id: convId })
+        .in("conversation_id", orphanIds);
+
+      await supabase.from("protocols")
+        .update({ conversation_id: convId })
+        .in("conversation_id", orphanIds);
+
+      await supabase.from("conversations")
+        .delete()
+        .in("id", orphanIds);
     }
 
-    console.log(`[Webhook] 📦 Buscando/criando conversation com thread_key: ${threadKey}`);
-
-    // SELECT + INSERT para conversations (índice UNIQUE parcial não suporta ON CONFLICT)
-    let convId: string;
-    let convAssignedTo: string | null = null;
-
-    const { data: existingConv } = await supabase
-      .from('conversations')
-      .select('id, assigned_to')
-      .eq('thread_key', threadKey)
-      .maybeSingle();
-
-    if (existingConv) {
-      convId = existingConv.id;
-      convAssignedTo = existingConv.assigned_to;
-      console.log(`[Webhook] ✅ Conversation encontrada: ${convId}`);
-
-      // Atualizar campos
-      await supabase
-        .from('conversations')
-        .update({
-          last_message: lastMessagePreview.slice(0, 500),
-          last_message_type: msgType,
-          last_message_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          status: 'open',
-          ...((!fromMe && !isGroupChat && !isBackfill) ? { assigned_to: null } : {})
-        })
-        .eq('id', convId);
-    } else {
-      // Criar nova conversation
-      const { data: newConv, error: insertErr } = await supabase
-        .from('conversations')
-        .insert(convPayload)
-        .select('id, assigned_to')
-        .single();
-
-      if (insertErr) {
-        // Race condition: outro request criou a conversa primeiro
-        if (insertErr.code === '23505') {
-          console.log('[Webhook] ⚠️ Race condition em conversation, buscando existente...');
-          const { data: raceConv } = await supabase
-            .from('conversations')
-            .select('id, assigned_to')
-            .eq('thread_key', threadKey)
-            .single();
-
-          if (raceConv) {
-            convId = raceConv.id;
-            convAssignedTo = raceConv.assigned_to;
-
-            // IMPORTANTE: Atualizar campos mesmo após race condition
-            await supabase
-              .from('conversations')
-              .update({
-                last_message: lastMessagePreview.slice(0, 500),
-                last_message_type: msgType,
-                last_message_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-                status: 'open',
-                ...((!fromMe && !isGroupChat && !isBackfill) ? { assigned_to: null } : {})
-              })
-              .eq('id', convId);
-            console.log(`[Webhook] ✅ Conversation atualizada após race condition: ${convId}`);
-          } else {
-            throw new Error(`Erro ao criar conversation: ${insertErr.message}`);
-          }
-        } else {
-          throw new Error(`Erro ao criar conversation: ${insertErr.message}`);
-        }
-      } else {
-        convId = newConv.id;
-        convAssignedTo = newConv.assigned_to;
-        console.log(`[Webhook] ✅ Nova conversation criada: ${convId}`);
-      }
-    }
-
-    console.log(`[Webhook] ✅ Conversation resolvida: ${convId}`);
+    console.log(`[Webhook] ✅ Conversation resolvida: ${convId} (thread_key=${finalThreadKey})`);
 
     // ✅ PATCH 5: Apenas UM increment_unread_count (não incrementa em backfill)
     if (!fromMe && !isBackfill) await supabase.rpc('increment_unread_count', { conv_id: convId });
@@ -756,7 +694,7 @@ serve(async (req: Request): Promise<Response> => {
           message_id: msgResult.id,
           conversation_id: convId,
           message_text: content,
-          group_id: threadKey || canonicalChatIdFinal,
+          group_id: normalizeGroupJid(rawChatId || canonicalChatIdFinal || canonicalChatId),
           sender_phone: senderPhone,
           sender_name: senderName || 'Desconhecido'
         }),
