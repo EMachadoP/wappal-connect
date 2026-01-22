@@ -148,12 +148,18 @@ serve(async (req: Request): Promise<Response> => {
       }).catch(err => console.error('[Forward Error]', err));
     }
 
-    // 3. Ignorar apenas chatState e status updates sem conteúdo
-    // ❌ NÃO ignorar payload.ack - mensagens inbound podem ter ack!
+    // 3. Ignorar apenas chatState e status updates sem NENHUM conteúdo
+    // ✅ IMPORTANTE: Verificar TODOS os campos que são usados na extração (linha 385)
+    const hasAnyContent = Boolean(
+      payload.text?.message || payload.message?.text || payload.body || payload.caption ||
+      payload.image || payload.video || payload.audio || payload.document
+    );
+
     const isIgnoredEvent = Boolean(
       payload.type === 'chatState' ||
-      (payload.status && !payload.text && !payload.message && !payload.image && !payload.video && !payload.audio && !payload.document)
+      (payload.status && !hasAnyContent)
     );
+
     if (isIgnoredEvent) {
       console.log('[Webhook] Ignoring event:', payload.type || 'status-only');
       // ✅ LOG: Registrar evento ignorado para diagnóstico
