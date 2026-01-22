@@ -402,21 +402,55 @@ serve(async (req: Request) => {
       }
     }
 
+    // ✅ MAPEAR E BLINDAR VALORES (Dever cumprido com o Banco de Dados)
+    const mapCategory = (c?: string): string => {
+      const allowed = new Set(['operational', 'financial', 'support', 'admin']);
+      const raw = (c || 'operational').toLowerCase();
+      if (allowed.has(raw)) return raw;
+      // Mapeamento de categorias técnicas para as do banco
+      const technicalMap: Record<string, string> = {
+        cftv: 'support',
+        interfone: 'support',
+        antena_coletiva: 'support',
+        portao_veicular: 'operational',
+        porta_pedestre: 'operational',
+        controle_acesso_pedestre: 'operational',
+        controle_acesso_veicular: 'operational',
+        infraestrutura: 'operational',
+        cerca_eletrica: 'support',
+        alarme: 'support',
+        concertina: 'operational',
+        infra: 'operational',
+        commercial: 'admin'
+      };
+      const result = technicalMap[raw] || 'support';
+      console.log(`[create-protocol] Category mapping: ${raw} -> ${result}`);
+      return result;
+    };
+
+    const mapPriority = (p?: string): string => {
+      const allowed = new Set(['normal', 'critical']);
+      const raw = (p || 'normal').toLowerCase();
+      if (allowed.has(raw)) return raw;
+      if (raw === 'urgent' || raw === 'high' || raw === 'alta') return 'critical';
+      return 'normal';
+    };
+
+    const mapStatus = (s?: string): string => {
+      const allowed = new Set(['open', 'resolved', 'cancelled']);
+      const raw = (s || 'open').toLowerCase();
+      if (allowed.has(raw)) return raw;
+      if (raw === 'closed' || raw === 'fechado') return 'resolved';
+      return 'open';
+    };
+
     const finalCategoryRaw = bestTemplate?.category || category || aiClassification?.category || 'operational';
+    const finalCategory = mapCategory(finalCategoryRaw);
+    const finalPriority = mapPriority(priority);
+    const finalStatus = 'open'; // Sempre abre como open
     const finalTags = aiClassification?.tags || [];
 
-    // ✅ SANITIZE CATEGORY: Garantir que o valor está na lista permitida pelo banco
-    const allowedCategories = [
-      'operational', 'financial', 'support', 'admin', 'commercial',
-      'cftv', 'interfone', 'antena_coletiva', 'portao_veicular',
-      'porta_pedestre', 'controle_acesso_pedestre', 'controle_acesso_veicular',
-      'infraestrutura', 'cerca_eletrica', 'alarme', 'concertina', 'infra'
-    ];
-    const finalCategory = allowedCategories.includes(finalCategoryRaw) ? finalCategoryRaw : 'operational';
-
-    if (finalCategoryRaw !== finalCategory) {
-      log(`[create-protocol] ⚠️ Categoria ignorada por restrição do banco: ${finalCategoryRaw} -> fallback: ${finalCategory}`);
-    }
+    log(`[create-protocol] Resolved Fields: category=${finalCategory} (from ${finalCategoryRaw}), priority=${finalPriority}, status=${finalStatus}`);
 
     // ✅ FIX: Calcular due_date para protocols baseado na criticidade
     const calculateDueDate = (days: number): string => {
@@ -444,14 +478,14 @@ serve(async (req: Request) => {
         protocol_code: protocolCode,
         conversation_id,
         contact_id: isValidUUID(contact_id) ? contact_id : null,
-        condominium_id: isValidUUID(resolvedCondoId) ? resolvedCondoId : null, // ✅ Allow NULL
-        condominium_raw_name: !resolvedCondoId && condominium_name ? condominium_name : null, // ✅ NEW FIELD
+        condominium_id: isValidUUID(resolvedCondoId) ? resolvedCondoId : null,
+        condominium_raw_name: isValidUUID(resolvedCondoId) ? null : (condominium_name || 'Não Identificado'), // ✅ Garantir constraint protocols_condo_present_chk
         participant_id: isValidUUID(participant_id) ? participant_id : null,
         category: finalCategory,
-        priority: priority || 'normal',
+        priority: finalPriority,
         due_date: protocolDueDate, // ✅ FIX: Popular due_date no protocolo
         summary: summary || 'Gerado via sistema',
-        status: 'open',
+        status: finalStatus,
         created_by_agent_id: isValidUUID(created_by_agent_id) ? created_by_agent_id : null,
         created_by_type: created_by_agent_id ? 'agent' : 'ai',
         requester_name: requester_name || contact?.name || 'Não informado',
