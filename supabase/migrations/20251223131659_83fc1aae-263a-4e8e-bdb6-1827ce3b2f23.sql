@@ -91,7 +91,8 @@ WHERE c.contact_id = ct.id
   AND c.chat_id IS NULL;
 
 -- Create unique index on chat_id (only for non-null values)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_chat_id_unique ON conversations(chat_id) WHERE chat_id IS NOT NULL;
+-- ❌ DISABLED: Causa conflito 23505 - thread_key já é suficiente para unicidade
+-- CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_chat_id_unique ON conversations(chat_id) WHERE chat_id IS NOT NULL;
 
 -- Add new fields to messages table
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS provider TEXT DEFAULT 'zapi';

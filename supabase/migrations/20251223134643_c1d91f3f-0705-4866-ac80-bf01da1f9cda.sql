@@ -24,9 +24,10 @@ SET chat_id = normalize_chat_id(chat_id)
 WHERE chat_id IS NOT NULL;
 
 -- Create unique index on normalized chat_id (partial - only where chat_id is not null)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_chat_id_unique
-ON public.conversations (chat_id)
-WHERE chat_id IS NOT NULL;
+-- ❌ DISABLED: Causa conflito 23505 - thread_key já é suficiente para unicidade
+-- CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_chat_id_unique
+-- ON public.conversations (chat_id)
+-- WHERE chat_id IS NOT NULL;
 
 -- Create unique index for message idempotency by provider + provider_message_id
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_provider_message_id_unique
@@ -39,4 +40,4 @@ ON public.conversations (chat_id)
 WHERE chat_id LIKE '%@g.us';
 
 -- Add comment explaining the constraint
-COMMENT ON INDEX idx_conversations_chat_id_unique IS 'Ensures each chat_id (group or private) maps to exactly one conversation';
+-- COMMENT ON INDEX idx_conversations_chat_id_unique IS 'Ensures each chat_id (group or private) maps to exactly one conversation';
