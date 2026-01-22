@@ -393,6 +393,26 @@ serve(async (req: Request) => {
     const finalCategory = bestTemplate?.category || category || aiClassification?.category || 'operational';
     const finalTags = aiClassification?.tags || [];
 
+    // ✅ FIX: Calcular due_date para protocols baseado na criticidade
+    const calculateDueDate = (days: number): string => {
+      let dueDate = new Date();
+      let addedDays = 0;
+      while (addedDays < days) {
+        dueDate.setDate(dueDate.getDate() + 1);
+        if (dueDate.getDay() !== 0 && dueDate.getDay() !== 6) addedDays++;
+      }
+      return dueDate.toISOString().split('T')[0];
+    };
+
+    const slaDaysProtocol = bestTemplate?.sla_business_days ?? 2;
+    const criticalityProtocol = bestTemplate?.criticality ?? 'non_critical';
+    // Crítico = mesmo dia, não-crítico = até 2 dias úteis
+    const protocolDueDate = criticalityProtocol === 'critical'
+      ? new Date().toISOString().split('T')[0]
+      : calculateDueDate(slaDaysProtocol);
+
+    log(`[create-protocol] Template: ${bestTemplate?.title || 'default'}, Criticality: ${criticalityProtocol}, Due Date: ${protocolDueDate}`);
+
     const { data: protocolRecord, error: protocolError } = await supabaseClient
       .from('protocols')
       .insert({
@@ -404,6 +424,7 @@ serve(async (req: Request) => {
         participant_id: isValidUUID(participant_id) ? participant_id : null,
         category: finalCategory,
         priority: priority || 'normal',
+        due_date: protocolDueDate, // ✅ FIX: Popular due_date no protocolo
         summary: summary || 'Gerado via sistema',
         status: 'open',
         created_by_agent_id: isValidUUID(created_by_agent_id) ? created_by_agent_id : null,

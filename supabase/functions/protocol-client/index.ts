@@ -9,6 +9,18 @@ const corsHeaders = {
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// ✅ Traduzir categoria para português
+function translateCategory(category: string): string {
+    const map: Record<string, string> = {
+        operational: "Operacional",
+        support: "Suporte",
+        financial: "Financeiro",
+        commercial: "Comercial",
+        admin: "Administrativo",
+    };
+    return map[category] || category;
+}
+
 serve(async (req: Request): Promise<Response> => {
     if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -74,7 +86,7 @@ Seu chamado foi registrado com sucesso:
 
 ✅ *Protocolo:* ${code}
 🏢 *Condomínio:* ${condominiumName}
-📌 *Categoria:* ${protocol.category || "Operacional"}
+📌 *Categoria:* ${translateCategory(protocol.category || "operational")}
 🟢 *Prioridade:* ${protocol.priority || "normal"}
 ⏰ *Vencimento:* ${protocol.due_date ? String(protocol.due_date).slice(0, 10) : "—"}
 
