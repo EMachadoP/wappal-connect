@@ -170,7 +170,7 @@ serve(async (req: Request): Promise<Response> => {
         model: 'webhook-drop',
         provider: 'zapi',
         created_at: now
-      }).catch(() => { });
+      });
       return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
     }
 
@@ -257,7 +257,7 @@ serve(async (req: Request): Promise<Response> => {
 
     // ✅ PATCH 3: phone primeiro quando existir (evita 2 conversas)
     let rawIdentity = isGroup
-      ? pickFirst(rawChatId)
+      ? pickFirst(rawChatId, normalizedPhone)  // ✅ FIX: fallback phone para grupos
       : (fromMe
         ? pickFirst(normalizedPhone, rawChatId, normalizedLid)   // OUT: phone primeiro
         : pickFirst(rawChatId, normalizedPhone, normalizedLid)); // IN: chatId/phone antes de LID
@@ -279,7 +279,7 @@ serve(async (req: Request): Promise<Response> => {
         model: 'webhook-drop',
         provider: 'zapi',
         created_at: now
-      }).catch(() => { });
+      });
       return new Response("Ignored: No Identity", { status: 400 });
     }
 
@@ -306,7 +306,7 @@ serve(async (req: Request): Promise<Response> => {
         model: 'webhook-drop',
         provider: 'zapi',
         created_at: now
-      }).catch(() => { });
+      });
       return new Response("Ignored: Invalid Identity", { status: 400 });
     }
 
