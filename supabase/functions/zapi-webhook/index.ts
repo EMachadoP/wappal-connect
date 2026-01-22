@@ -228,7 +228,7 @@ serve(async (req: Request): Promise<Response> => {
     function threadKeyFromChatId(chatId: string) {
       const cid = (chatId || "").trim().toLowerCase();
 
-      if (cid.endsWith("@g.us")) return `g:${cid}`;
+      if (cid.endsWith("@g.us")) return `group:${cid}`;  // ✅ FIX: usar "group:" para consistência
       if (cid.endsWith("@lid")) return `u:${cid}`; // ✅ mantém o @lid inteiro
 
       return `u:${cid.split("@")[0]}`;
