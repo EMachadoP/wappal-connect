@@ -303,117 +303,110 @@ serve(async (req: Request): Promise<Response> => {
 
     console.log(`[Webhook] Identity: ${fromMe ? 'OUT' : 'IN'} | Key=${threadKey} | JID=${canonicalChatId}`);
 
-    // ✅ 1. RESOLVER/ATUALIZAR CONTATO - UPSERT ATÔMICO (elimina race condition)
+    // ✅ 1. RESOLVER/ATUALIZAR CONTATO - SELECT + INSERT com fallback
 
-    // Pré-condição: threadKey canônica é OBRIGATÓRIA para upsert
+    // Pré-condição: threadKey canônica é OBRIGATÓRIA
     if (!threadKey) {
-      console.warn('[Webhook] ❌ Missing threadKey - cannot upsert contact');
+      console.warn('[Webhook] ❌ Missing threadKey - cannot resolve contact');
       return new Response(JSON.stringify({ ok: false, reason: 'missing_thread_key' }), {
         status: 400,
         headers: corsHeaders
       });
     }
 
-    // Preparar payload do contato
-    const contactPayload: any = {
-      chat_key: threadKey,  // Chave única para UPSERT
-      is_group: isGroupChat,
-      updated_at: now,
-    };
+    let contactId: string;
 
-    // Só adicionar campos se tiverem valor (evita sobrescrever com null)
-    if (currentLid) {
-      contactPayload.chat_lid = currentLid;
-      contactPayload.lid = currentLid;
-    }
-    if (phone) {
-      contactPayload.phone = phone;
-    }
-    if (chatName && chatName !== 'Desconhecido' && !/^\d+$/.test(chatName.replace(/\D/g, ''))) {
-      contactPayload.name = chatName;
-    }
-
-    console.log(`[Webhook] 📦 UPSERT contact com chat_key: ${threadKey}`);
-
-    // ✅ UPSERT ATÔMICO - elimina race condition
-    const { data: contact, error: contactErr } = await supabase
+    // Buscar contato existente por chat_key
+    const { data: existingContact } = await supabase
       .from('contacts')
-      .upsert(contactPayload, { onConflict: 'chat_key' })
       .select('id, name, phone, chat_lid')
+      .eq('chat_key', threadKey)
       .maybeSingle();
 
-    if (contactErr) {
-      console.error('[Webhook] ❌ Erro no UPSERT contact:', contactErr);
-      throw new Error(`Erro no upsert contact: ${contactErr.message}`);
-    }
+    if (existingContact) {
+      contactId = existingContact.id;
+      console.log(`[Webhook] ✅ Contact encontrado: ${contactId}`);
 
-    if (!contact) {
-      // Fallback: buscar pelo chat_key recém-criado
-      const { data: fallbackContact } = await supabase
-        .from('contacts')
-        .select('id')
-        .eq('chat_key', threadKey)
-        .maybeSingle();
+      // Atualizar campos se necessário
+      const updates: any = { updated_at: now };
 
-      if (!fallbackContact) {
-        throw new Error('UPSERT retornou null e fallback também falhou');
-      }
-      console.log(`[Webhook] ⚠️ UPSERT fallback: encontrado contact ${fallbackContact.id}`);
-    }
-
-    const contactId = contact?.id || (await supabase
-      .from('contacts')
-      .select('id')
-      .eq('chat_key', threadKey)
-      .single()
-    ).data?.id;
-
-    if (!contactId) {
-      throw new Error('Não foi possível obter contactId após UPSERT');
-    }
-
-    // ✅ Cross-linking pós-UPSERT: atualizar campos que o UPSERT não sobrescreve
-    if (contact) {
-      const updates: any = {};
-
-      // Atualizar phone se o atual for vazio ou for um LID mascarado
-      if (phone && contact.phone !== phone) {
-        const currentPhone = contact.phone || '';
+      if (phone && existingContact.phone !== phone) {
+        const currentPhone = existingContact.phone || '';
         const currentPhoneIsLid = currentPhone.includes('@lid') || (currentPhone.length >= 14 && !currentPhone.startsWith('55'));
         if (!currentPhone || currentPhoneIsLid) {
           updates.phone = phone;
-          console.log(`[Webhook] 🔗 Cross-link: atualizando phone ${phone} (era: ${currentPhone || 'vazio'})`);
         }
       }
 
-      // Atualizar chat_lid se veio novo
-      if (currentLid && contact.chat_lid !== currentLid) {
+      if (currentLid && existingContact.chat_lid !== currentLid) {
         updates.chat_lid = currentLid;
         updates.lid = currentLid;
-        console.log(`[Webhook] 🔗 Cross-link: atualizando chat_lid ${currentLid}`);
       }
 
-      // Atualizar nome se o atual for genérico
-      const currentName = contact.name || "";
+      const currentName = existingContact.name || "";
       const isNameGeneric = !currentName ||
         currentName === 'Desconhecido' ||
-        currentName === 'G7 Serv' ||
-        currentName === 'Contact' ||
-        currentName === 'Unknown' ||
-        /^\d+$/.test(currentName.replace(/\D/g, '')) ||
-        (currentName.includes('@') && currentName.length > 15);
+        /^\d+$/.test(currentName.replace(/\D/g, ''));
 
-      if (isNameGeneric && chatName && chatName !== 'Desconhecido' && chatName !== 'G7 Serv' && !/^\d+$/.test(chatName.replace(/\D/g, ''))) {
+      if (isNameGeneric && chatName && chatName !== 'Desconhecido' && !/^\d+$/.test(chatName.replace(/\D/g, ''))) {
         updates.name = chatName;
-        console.log(`[Webhook] 🔄 Updating contact name from '${currentName}' to '${chatName}'`);
       }
 
-      if (Object.keys(updates).length > 0) {
+      if (Object.keys(updates).length > 1) {
         await supabase.from('contacts').update(updates).eq('id', contactId);
       }
+    } else {
+      // Criar novo contato
+      console.log(`[Webhook] 📦 Criando novo contact com chat_key: ${threadKey}`);
+
+      const contactPayload: any = {
+        chat_key: threadKey,
+        is_group: isGroupChat,
+        updated_at: now,
+      };
+
+      if (currentLid) {
+        contactPayload.chat_lid = currentLid;
+        contactPayload.lid = currentLid;
+      }
+      if (phone) {
+        contactPayload.phone = phone;
+      }
+      if (chatName && chatName !== 'Desconhecido' && !/^\d+$/.test(chatName.replace(/\D/g, ''))) {
+        contactPayload.name = chatName;
+      }
+
+      const { data: newContact, error: insertErr } = await supabase
+        .from('contacts')
+        .insert(contactPayload)
+        .select('id')
+        .single();
+
+      if (insertErr) {
+        // Race condition: outro request criou o contato primeiro
+        if (insertErr.code === '23505') {
+          console.log('[Webhook] ⚠️ Race condition detectada, buscando contato existente...');
+          const { data: raceContact } = await supabase
+            .from('contacts')
+            .select('id')
+            .eq('chat_key', threadKey)
+            .single();
+
+          if (raceContact) {
+            contactId = raceContact.id;
+          } else {
+            throw new Error(`Erro ao criar contato: ${insertErr.message}`);
+          }
+        } else {
+          throw new Error(`Erro ao criar contato: ${insertErr.message}`);
+        }
+      } else {
+        contactId = newContact.id;
+      }
+
+      console.log(`[Webhook] ✅ Novo contact criado: ${contactId}`);
     }
 
-    console.log(`[Webhook] ✅ Contact resolvido: ${contactId}`);
 
     // ✅ 3. RESOLVER MÍDIA/CONTEÚDO
     let content = payload.text?.message || payload.message?.text || payload.body || payload.caption || "";
@@ -473,59 +466,67 @@ serve(async (req: Request): Promise<Response> => {
       }
     }
 
-    console.log(`[Webhook] 📦 UPSERT conversation com thread_key: ${threadKey}`);
+    console.log(`[Webhook] 📦 Buscando/criando conversation com thread_key: ${threadKey}`);
 
-    // ✅ UPSERT ATÔMICO - elimina race condition
-    const { data: conv, error: convErr } = await supabase
+    // SELECT + INSERT para conversations (índice UNIQUE parcial não suporta ON CONFLICT)
+    let convId: string;
+    let convAssignedTo: string | null = null;
+
+    const { data: existingConv } = await supabase
       .from('conversations')
-      .upsert(convPayload, { onConflict: 'thread_key' })
       .select('id, assigned_to')
+      .eq('thread_key', threadKey)
       .maybeSingle();
 
-    if (convErr) {
-      // Se erro por conflict em outra constraint (ex: contact_id), tenta sem contact_id
-      if (convErr.code === '23505') {
-        console.warn(`[Webhook] ⚠️ UPSERT conflict, retrying without contact_id...`);
-        delete convPayload.contact_id;
+    if (existingConv) {
+      convId = existingConv.id;
+      convAssignedTo = existingConv.assigned_to;
+      console.log(`[Webhook] ✅ Conversation encontrada: ${convId}`);
 
-        const { data: convRetry, error: convRetryErr } = await supabase
-          .from('conversations')
-          .upsert(convPayload, { onConflict: 'thread_key' })
-          .select('id, assigned_to')
-          .maybeSingle();
+      // Atualizar campos
+      await supabase
+        .from('conversations')
+        .update({
+          last_message: lastMessagePreview.slice(0, 500),
+          last_message_type: msgType,
+          last_message_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          status: 'open',
+          ...((!fromMe && !isGroupChat && !isBackfill) ? { assigned_to: null } : {})
+        })
+        .eq('id', convId);
+    } else {
+      // Criar nova conversation
+      const { data: newConv, error: insertErr } = await supabase
+        .from('conversations')
+        .insert(convPayload)
+        .select('id, assigned_to')
+        .single();
 
-        if (convRetryErr) {
-          console.error('[Webhook] ❌ Erro no UPSERT conversation (retry):', convRetryErr);
-          throw convRetryErr;
-        }
-
-        if (!convRetry) {
-          // Fallback: buscar pelo thread_key
-          const { data: fallbackConv } = await supabase
+      if (insertErr) {
+        // Race condition: outro request criou a conversa primeiro
+        if (insertErr.code === '23505') {
+          console.log('[Webhook] ⚠️ Race condition em conversation, buscando existente...');
+          const { data: raceConv } = await supabase
             .from('conversations')
             .select('id, assigned_to')
             .eq('thread_key', threadKey)
-            .maybeSingle();
+            .single();
 
-          if (!fallbackConv) throw new Error('UPSERT conversation falhou e fallback também');
-          console.log(`[Webhook] ⚠️ UPSERT conversation fallback: ${fallbackConv.id}`);
+          if (raceConv) {
+            convId = raceConv.id;
+            convAssignedTo = raceConv.assigned_to;
+          } else {
+            throw new Error(`Erro ao criar conversation: ${insertErr.message}`);
+          }
+        } else {
+          throw new Error(`Erro ao criar conversation: ${insertErr.message}`);
         }
       } else {
-        console.error('[Webhook] ❌ Erro no UPSERT conversation:', convErr);
-        throw convErr;
+        convId = newConv.id;
+        convAssignedTo = newConv.assigned_to;
+        console.log(`[Webhook] ✅ Nova conversation criada: ${convId}`);
       }
-    }
-
-    // Garantir que temos o conv.id
-    const convId = conv?.id || (await supabase
-      .from('conversations')
-      .select('id')
-      .eq('thread_key', threadKey)
-      .single()
-    ).data?.id;
-
-    if (!convId) {
-      throw new Error('Não foi possível obter conversation_id após UPSERT');
     }
 
     console.log(`[Webhook] ✅ Conversation resolvida: ${convId}`);
@@ -618,7 +619,7 @@ serve(async (req: Request): Promise<Response> => {
     const { data: msgResult, error: msgError } = await supabase
       .from("messages")
       .insert({
-        conversation_id: conv.id,
+        conversation_id: convId,
         sender_type: fromMe ? "agent" : "contact",
         sender_name: senderName,
         sender_phone: senderPhone,
@@ -645,9 +646,9 @@ serve(async (req: Request): Promise<Response> => {
           .eq("provider_message_id", providerMsgId)
           .maybeSingle();
 
-        if (racedMsg && racedMsg.conversation_id !== conv.id) {
-          await supabase.from("messages").update({ conversation_id: conv.id, chat_id: canonicalChatId, raw_payload: payload }).eq("id", racedMsg.id);
-          console.log(`[Webhook] Race duplicada ${providerMsgId} -> RELINK para conv_id=${conv.id}`);
+        if (racedMsg && racedMsg.conversation_id !== convId) {
+          await supabase.from("messages").update({ conversation_id: convId, chat_id: canonicalChatId, raw_payload: payload }).eq("id", racedMsg.id);
+          console.log(`[Webhook] Race duplicada ${providerMsgId} -> RELINK para conv_id=${convId}`);
           return new Response(JSON.stringify({ success: true, duplicated: true, relinked: true, raced: true }), { status: 200, headers: corsHeaders });
         }
         console.log(`[Webhook] Race duplicada ignorada: ${providerMsgId}`);
@@ -671,7 +672,7 @@ serve(async (req: Request): Promise<Response> => {
               'apikey': supabaseServiceKey
             },
             body: JSON.stringify({
-              conversation_id: conv.id,
+              conversation_id: convId,
               content: `📋 Oi, ${employee.profileName}!\n\n${parsed.hint}`,
               message_type: 'text',
               sender_name: 'Sistema'
@@ -688,7 +689,7 @@ serve(async (req: Request): Promise<Response> => {
               'apikey': supabaseServiceKey
             },
             body: JSON.stringify({
-              conversation_id: conv.id,
+              conversation_id: convId,
               condominium_name: parsed.condominiumName,
               summary: parsed.summary,
               priority: parsed.priority || 'normal',
@@ -733,7 +734,7 @@ serve(async (req: Request): Promise<Response> => {
               'apikey': supabaseServiceKey,
               'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ message_id: msgResult.id, audio_url: audioUrl, conversation_id: conv.id }),
+            body: JSON.stringify({ message_id: msgResult.id, audio_url: audioUrl, conversation_id: convId }),
           }).catch(err => console.error('[Webhook] transcription call failed (background):', err));
         } else {
           // Chamada para ai-maybe-reply
@@ -744,13 +745,13 @@ serve(async (req: Request): Promise<Response> => {
               'apikey': supabaseServiceKey,
               'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ conversation_id: conv.id, initial_message_id: msgResult.id }),
+            body: JSON.stringify({ conversation_id: convId, initial_message_id: msgResult.id }),
           }).then(async r => {
             const text = await r.text();
             console.log(`[Webhook] ai-maybe-reply result: ${r.status} ${text}`);
             if (!r.ok) {
               await supabase.from('ai_logs').insert({
-                conversation_id: conv.id,
+                conversation_id: convId,
                 status: 'error',
                 error_message: `ai-maybe-reply failed: ${r.status} ${text}`,
                 model: 'webhook-handler'
@@ -773,7 +774,7 @@ serve(async (req: Request): Promise<Response> => {
         },
         body: JSON.stringify({
           message_id: msgResult.id,
-          conversation_id: conv.id,
+          conversation_id: convId,
           message_text: content,
           group_id: threadKey || canonicalChatIdFinal,
           sender_phone: senderPhone,
