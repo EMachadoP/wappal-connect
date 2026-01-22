@@ -17,6 +17,18 @@ function translateCategory(category: string): string {
         financial: "Financeiro",
         commercial: "Comercial",
         admin: "Administrativo",
+        cftv: "CFTV",
+        interfone: "Interfone",
+        antena_coletiva: "Antena Coletiva",
+        portao_veicular: "Portão Veicular",
+        porta_pedestre: "Porta Pedestre",
+        controle_acesso_pedestre: "Acesso Pedestre",
+        controle_acesso_veicular: "Acesso Veicular",
+        infraestrutura: "Infraestrutura",
+        cerca_eletrica: "Cerca Elétrica",
+        alarme: "Alarme",
+        concertina: "Concertina",
+        infra: "Infraestrutura"
     };
     return map[category] || category;
 }

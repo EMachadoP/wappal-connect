@@ -18,6 +18,18 @@ function translateCategory(category: string): string {
     financial: "Financeiro",
     commercial: "Comercial",
     admin: "Administrativo",
+    cftv: "CFTV",
+    interfone: "Interfone",
+    antena_coletiva: "Antena Coletiva",
+    portao_veicular: "Portão Veicular",
+    porta_pedestre: "Porta Pedestre",
+    controle_acesso_pedestre: "Acesso Pedestre",
+    controle_acesso_veicular: "Acesso Veicular",
+    infraestrutura: "Infraestrutura",
+    cerca_eletrica: "Cerca Elétrica",
+    alarme: "Alarme",
+    concertina: "Concertina",
+    infra: "Infraestrutura"
   };
   return map[category] || "Operacional";
 }
@@ -390,8 +402,21 @@ serve(async (req: Request) => {
       }
     }
 
-    const finalCategory = bestTemplate?.category || category || aiClassification?.category || 'operational';
+    const finalCategoryRaw = bestTemplate?.category || category || aiClassification?.category || 'operational';
     const finalTags = aiClassification?.tags || [];
+
+    // ✅ SANITIZE CATEGORY: Garantir que o valor está na lista permitida pelo banco
+    const allowedCategories = [
+      'operational', 'financial', 'support', 'admin', 'commercial',
+      'cftv', 'interfone', 'antena_coletiva', 'portao_veicular',
+      'porta_pedestre', 'controle_acesso_pedestre', 'controle_acesso_veicular',
+      'infraestrutura', 'cerca_eletrica', 'alarme', 'concertina', 'infra'
+    ];
+    const finalCategory = allowedCategories.includes(finalCategoryRaw) ? finalCategoryRaw : 'operational';
+
+    if (finalCategoryRaw !== finalCategory) {
+      log(`[create-protocol] ⚠️ Categoria ignorada por restrição do banco: ${finalCategoryRaw} -> fallback: ${finalCategory}`);
+    }
 
     // ✅ FIX: Calcular due_date para protocols baseado na criticidade
     const calculateDueDate = (days: number): string => {
