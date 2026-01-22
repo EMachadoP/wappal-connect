@@ -321,7 +321,9 @@ serve(async (req: Request): Promise<Response> => {
       ? normalizeChatId(normalizedPhoneDigits) // vira 55...@s.whatsapp.net
       : canonicalChatId;
 
-    const canonicalChatIdFinal = preferredChatId || canonicalChatId;
+    const canonicalChatIdFinal = isGroupChat
+      ? normalizeGroupJid(preferredChatId || canonicalChatId)  // ✅ FIX: Normalizar grupos
+      : (preferredChatId || canonicalChatId);
     const hitKey = threadKeyFromChatId(canonicalChatIdFinal);
 
     if (DEBUG_WEBHOOK) {
