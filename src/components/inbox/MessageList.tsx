@@ -314,11 +314,17 @@ export function MessageList({
             return s.length ? s : null;
           };
 
+          // ✅ FIX: Detectar humanos enviando pelo celular
+          const isHumanOperator =
+            norm(msg.sender_name) === "Operador (Celular)" ||
+            (msg.direction === "outbound" && msg.sender_id) ||  // tem sender_id = é humano
+            msg.agent_id;  // tem agent_id = é humano
+
           const isAIGenerated =
             msg.sender_type === "assistant" ||
             msg.is_system === true ||
-            norm(msg.sender_name) === "Ana Mônica" ||
-            (msg.direction === "outbound" && !msg.sender_id && !msg.agent_id);
+            (norm(msg.sender_name) === "Ana Mônica" && !isHumanOperator) ||
+            (msg.direction === "outbound" && !msg.sender_id && !msg.agent_id && norm(msg.sender_name) !== "Operador (Celular)");
 
           const isOutgoing = msg.sender_type === "agent" || isAIGenerated;
           let name: string | null = null;
