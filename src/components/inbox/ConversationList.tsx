@@ -10,6 +10,7 @@ interface Conversation {
   id: string;
   contact: {
     name: string;
+    phone?: string | null;
     profile_picture_url?: string | null;
   };
   last_message?: string | null;
@@ -57,7 +58,14 @@ export function ConversationList({
   // Filter mainly by search now, as the LIST is already filtered by SQL based on activeTab
   const filteredConversations = conversations.filter((conv) => {
     const contactName = conv.contact?.name || "Contato Desconhecido";
-    if (!contactName.toLowerCase().includes(search.toLowerCase())) return false;
+    const contactPhone = (conv.contact as any)?.phone || "";
+    const searchLower = search.toLowerCase().trim();
+
+    // ✅ Busca por nome OU telefone
+    const matchesName = contactName.toLowerCase().includes(searchLower);
+    const matchesPhone = contactPhone.includes(search.replace(/\D/g, ''));
+
+    if (searchLower && !matchesName && !matchesPhone) return false;
 
     // HIDE EMPTY SHELLS check (keep this for safety)
     const hasHistory = conv.last_message_at || conv.status === 'resolved';

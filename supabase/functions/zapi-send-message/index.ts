@@ -667,28 +667,45 @@ serve(async (req: Request) => {
         normalizeName(senderName) ??
         (isSystem ? "Ana Mônica" : "Atendente G7");
 
-      const { error: msgErr } = await supabaseAdmin.from("messages").insert({
-        conversation_id: resolvedConversationId,
-        // ✅ FIX: Sender fields for UI compatibility - validate UUID
-        sender_type: isSystem ? "assistant" : "agent",
-        sender_id: isValidUuid(userId) ? userId : null,
-        sender_name: safeSenderName,
-        // Legacy agent fields (mantidos para compatibilidade)
-        agent_id: isValidUuid(userId) ? userId : null,
-        agent_name: safeSenderName,
-        content: content || null,
-        message_type: message_type || "text",
-        media_url: media_url || null,
-        provider: "zapi",
-        provider_message_id: providerMessageId,
-        direction: "outbound",
-        status: "sent",
-        chat_id: dbChatId,  // ✅ FIX: Usa JID canônico (com @s.whatsapp.net)
-        sent_at: nowIso,
-      });
+      // ✅ DEDUPLICATION: Check if a message with this provider_message_id already exists
+      let shouldInsertMessage = true;
+      if (providerMessageId) {
+        const { data: existingMsg } = await supabaseAdmin
+          .from("messages")
+          .select("id")
+          .eq("provider_message_id", providerMessageId)
+          .maybeSingle();
 
-      if (msgErr) {
-        console.error("[zapi-send-message] Error inserting to messages:", msgErr.message);
+        if (existingMsg) {
+          console.log(`[zapi-send-message] ⏭️ Message already exists with provider_message_id=${providerMessageId}, skipping insert`);
+          shouldInsertMessage = false;
+        }
+      }
+
+      if (shouldInsertMessage) {
+        const { error: msgErr } = await supabaseAdmin.from("messages").insert({
+          conversation_id: resolvedConversationId,
+          // ✅ FIX: Sender fields for UI compatibility - validate UUID
+          sender_type: isSystem ? "assistant" : "agent",
+          sender_id: isValidUuid(userId) ? userId : null,
+          sender_name: safeSenderName,
+          // Legacy agent fields (mantidos para compatibilidade)
+          agent_id: isValidUuid(userId) ? userId : null,
+          agent_name: safeSenderName,
+          content: content || null,
+          message_type: message_type || "text",
+          media_url: media_url || null,
+          provider: "zapi",
+          provider_message_id: providerMessageId,
+          direction: "outbound",
+          status: "sent",
+          chat_id: dbChatId,  // ✅ FIX: Usa JID canônico (com @s.whatsapp.net)
+          sent_at: nowIso,
+        });
+
+        if (msgErr) {
+          console.error("[zapi-send-message] Error inserting to messages:", msgErr.message);
+        }
       }
 
       // 2) Update conversation preview
