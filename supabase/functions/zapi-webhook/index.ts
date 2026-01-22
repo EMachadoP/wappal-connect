@@ -372,8 +372,13 @@ serve(async (req: Request): Promise<Response> => {
       if (phone) {
         contactPayload.phone = phone;
       }
+
+      // ✅ GARANTIR NAME NUNCA NULL (constraint do banco)
       if (chatName && chatName !== 'Desconhecido' && !/^\d+$/.test(chatName.replace(/\D/g, ''))) {
         contactPayload.name = chatName;
+      } else {
+        // Fallback: usar phone ou threadKey como nome temporário
+        contactPayload.name = phone || canonicalChatIdFinal?.split('@')[0] || 'Contato Desconhecido';
       }
 
       const { data: newContact, error: insertErr } = await supabase
