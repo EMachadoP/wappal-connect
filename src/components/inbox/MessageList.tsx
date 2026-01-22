@@ -322,22 +322,37 @@ export function MessageList({
 
           const isAIGenerated =
             msg.sender_type === "assistant" ||
-            msg.is_system === true ||
-            (norm(msg.sender_name) === "Ana Mônica" && !isHumanOperator) ||
-            (msg.direction === "outbound" && !msg.sender_id && !msg.agent_id && norm(msg.sender_name) !== "Operador (Celular)");
+            norm(msg.sender_name) === "Ana Mônica" ||
+            msg.is_ai_generated === true;
 
-          const isOutgoing = msg.sender_type === "agent" || isAIGenerated;
+          const isOutgoing =
+            msg.direction === "outbound" ||
+            msg.sender_type === "agent" ||
+            msg.sender_type === "assistant";
           let name: string | null = null;
 
           if (isOutgoing) {
             if (isAIGenerated) {
               name = "Ana Mônica";
             } else {
-              name =
-                norm(msg.agent_name) ||
-                norm(getAgentName(msg.sender_id || msg.agent_id)) ||
-                norm(msg.sender_name) ||
-                "Atendente G7";
+              // ✅ Lógica de nomes personalizada:
+              // 1. ADMIN → Ana Mônica (se passa pela IA)
+              // 2. Operador pelo celular → G7 Serv
+              // 3. Agentes normais → Nome real
+
+              const agentName = norm(msg.agent_name) || norm(getAgentName(msg.sender_id || msg.agent_id));
+
+              // Verificar se é admin pelo profile
+              const profile = profiles.find(p => p.id === (msg.sender_id || msg.agent_id));
+              const isAdmin = profile?.role === 'admin';
+
+              if (isAdmin) {
+                name = "Ana Mônica"; // ADMIN se passa pela IA
+              } else if (norm(msg.sender_name) === "Operador (Celular)") {
+                name = "G7 Serv"; // Operador pelo celular
+              } else {
+                name = agentName || norm(msg.sender_name) || "Atendente G7";
+              }
             }
           } else {
             name =
