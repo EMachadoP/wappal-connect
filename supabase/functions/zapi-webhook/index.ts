@@ -93,7 +93,7 @@ serve(async (req: Request): Promise<Response> => {
       (payload.status && payload.messageId && statusLower !== 'received');
 
     if (isStatusUpdate) {
-      const messageId = payload.messageId || payload.whatsapp_message_id || payload.id?.id;
+      const messageId = payload.messageId || payload.whatsapp_message_id || payload.id?.id || payload.id;
       const status = payload.status?.toLowerCase();
       const timestamp = payload.timestamp || payload.timestampStatus || new Date().toISOString();
 
@@ -310,12 +310,12 @@ serve(async (req: Request): Promise<Response> => {
       : canonicalChatId;
 
     const canonicalChatIdFinal = preferredChatId || canonicalChatId;
-    const threadKey = threadKeyFromChatId(canonicalChatIdFinal);
+    const hitKey = threadKeyFromChatId(canonicalChatIdFinal);
 
     if (DEBUG_WEBHOOK) {
-      console.log(`[Webhook] 📥 Processing ${direction || 'inbound'}:`, { canonicalChatId, threadKey, fromMe, phone, currentLid });
+      console.log(`[Webhook] 📥 Processing ${direction || 'inbound'}:`, { canonicalChatId, hitKey, fromMe, phone, currentLid });
     } else {
-      console.log(`[Webhook] 📥 HIT ${direction || 'inbound'} Key=${threadKey} ID=${mask(canonicalChatId)}`);
+      console.log(`[Webhook] 📥 HIT ${direction || 'inbound'} Key=${hitKey} ID=${mask(canonicalChatId)}`);
     }
 
     // ✅ FIX: O chatName agora segue a direção da mensagem
@@ -328,7 +328,7 @@ serve(async (req: Request): Promise<Response> => {
         payload.chatName || 'Desconhecido';
     }
 
-    console.log(`[Webhook] Identity: ${fromMe ? 'OUT' : 'IN'} | Key=${threadKey} | JID=${canonicalChatId}`);
+    console.log(`[Webhook] Identity: ${fromMe ? 'OUT' : 'IN'} | Key=${hitKey} | JID=${canonicalChatId}`);
 
     // ✅ 1. RESOLVER CONTATO VIA RPC ATÔMICA (elimina race conditions e duplicações)
     // A RPC resolve_contact_identity faz:
@@ -487,7 +487,7 @@ serve(async (req: Request): Promise<Response> => {
     if (!providerMsgId) {
       const tsIso = payload.timestamp ? new Date(payload.timestamp).toISOString() : now;
       providerMsgId = await buildFallbackProviderMsgId({
-        canonicalChatId,
+        canonicalChatId: canonicalChatIdFinal,
         fromMe: !!fromMe,
         msgType,
         content: content ?? null,
@@ -565,7 +565,7 @@ serve(async (req: Request): Promise<Response> => {
           .maybeSingle();
 
         if (racedMsg && racedMsg.conversation_id !== convId) {
-          await supabase.from("messages").update({ conversation_id: convId, chat_id: canonicalChatId, raw_payload: payload }).eq("id", racedMsg.id);
+          await supabase.from("messages").update({ conversation_id: convId, chat_id: canonicalChatIdFinal, raw_payload: payload }).eq("id", racedMsg.id);
           console.log(`[Webhook] Race duplicada ${providerMsgId} -> RELINK para conv_id=${convId}`);
           return new Response(JSON.stringify({ success: true, duplicated: true, relinked: true, raced: true }), { status: 200, headers: corsHeaders });
         }
