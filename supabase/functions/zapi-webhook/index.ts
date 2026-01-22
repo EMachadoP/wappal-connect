@@ -516,6 +516,20 @@ serve(async (req: Request): Promise<Response> => {
           if (raceConv) {
             convId = raceConv.id;
             convAssignedTo = raceConv.assigned_to;
+
+            // IMPORTANTE: Atualizar campos mesmo após race condition
+            await supabase
+              .from('conversations')
+              .update({
+                last_message: lastMessagePreview.slice(0, 500),
+                last_message_type: msgType,
+                last_message_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+                status: 'open',
+                ...((!fromMe && !isGroupChat && !isBackfill) ? { assigned_to: null } : {})
+              })
+              .eq('id', convId);
+            console.log(`[Webhook] ✅ Conversation atualizada após race condition: ${convId}`);
           } else {
             throw new Error(`Erro ao criar conversation: ${insertErr.message}`);
           }
