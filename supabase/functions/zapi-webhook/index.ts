@@ -317,7 +317,6 @@ serve(async (req: Request): Promise<Response> => {
     // Preparar payload do contato
     const contactPayload: any = {
       chat_key: threadKey,  // Chave única para UPSERT
-      chat_id: canonicalChatId,
       is_group: isGroupChat,
       updated_at: now,
     };
