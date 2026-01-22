@@ -104,7 +104,7 @@ serve(async (req) => {
     // 3. Checar papel do participante (antes de verificar ai_mode)
     const { data: participantState } = await supabase
       .from('conversation_participant_state')
-      .select('current_participant_id, participants(name, role_type, entity_id, entities(name))')
+      .select('current_participant_id, participants(name, role_type, entity_id, entities(name, type))')
       .eq('conversation_id', conversation_id)
       .maybeSingle();
 
@@ -229,21 +229,34 @@ serve(async (req) => {
       };
 
       const roleLabel = roleLabels[participant.role_type] || participant.role_type;
-      const condoName = participant.entities?.name || 'não especificado';
+      const entityName = participant.entities?.name || 'não especificado';
+      const entityType = participant.entities?.type || 'condominio';
+
+      // ✅ Label dinâmico baseado no tipo da entidade
+      const entityTypeLabels: Record<string, string> = {
+        'empresa': 'Empresa',
+        'administradora': 'Administradora',
+        'condominio': 'Condomínio',
+        'prestador': 'Prestador'
+      };
+      const entityTypeLabel = entityTypeLabels[entityType] || 'Entidade';
 
       contextInfo += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
       contextInfo += `\n📋 DADOS DO REMETENTE (JÁ IDENTIFICADOS)`;
       contextInfo += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
       contextInfo += `\n👤 Nome: ${participant.name}`;
       if (participant.role_type) contextInfo += `\n💼 Função: ${roleLabel}`;
-      if (participant.entities?.name) contextInfo += `\n🏢 Condomínio: ${condoName}`;
+      if (participant.entities?.name) contextInfo += `\n🏢 ${entityTypeLabel}: ${entityName}`;
       contextInfo += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
       contextInfo += `\n\n⚠️ INSTRUÇÕES CRÍTICAS:`;
       contextInfo += `\n1. NUNCA pergunte o nome do remetente - você JÁ SABE que é "${participant.name}"`;
       if (participant.role_type) contextInfo += `\n2. NUNCA pergunte a função - você JÁ SABE que é "${roleLabel}"`;
-      if (participant.entities?.name) contextInfo += `\n3. NUNCA pergunte o condomínio - você JÁ SABE que é "${condoName}"`;
-      contextInfo += `\n4. Use essas informações DIRETAMENTE ao criar protocolos`;
+      if (participant.entities?.name) {
+        contextInfo += `\n3. NUNCA pergunte a ${entityTypeLabel.toLowerCase()} - você JÁ SABE que é "${entityName}"`;
+        contextInfo += `\n4. PRESUMA que qualquer necessidade ou solicitação é relacionada a "${entityName}" (${entityTypeLabel})`;
+      }
+      contextInfo += `\n5. Use essas informações DIRETAMENTE ao criar protocolos`;
     }
 
     const now = new Date();
