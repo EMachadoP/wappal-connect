@@ -330,114 +330,48 @@ serve(async (req: Request): Promise<Response> => {
 
     console.log(`[Webhook] Identity: ${fromMe ? 'OUT' : 'IN'} | Key=${threadKey} | JID=${canonicalChatId}`);
 
-    // ✅ 1. RESOLVER/ATUALIZAR CONTATO - SELECT + INSERT com fallback
+    // ✅ 1. RESOLVER CONTATO VIA RPC ATÔMICA (elimina race conditions e duplicações)
+    // A RPC resolve_contact_identity faz:
+    // - Busca por aliases (lid, phone, chatId)
+    // - Cria ou atualiza contato atomicamente
+    // - Registra aliases para futuras resoluções
 
-    // Pré-condição: threadKey canônica é OBRIGATÓRIA
-    if (!threadKey) {
-      console.warn('[Webhook] ❌ Missing threadKey - cannot resolve contact');
-      return new Response(JSON.stringify({ ok: false, reason: 'missing_thread_key' }), {
-        status: 400,
-        headers: corsHeaders
-      });
+    const normalizedName = chatName && chatName !== 'Desconhecido' && !/^\d+$/.test(chatName.replace(/\D/g, ''))
+      ? chatName
+      : null;
+
+    console.log(`[Webhook] 🔍 Resolvendo contato via RPC:`, {
+      lid: currentLid,
+      phone,
+      chatId: canonicalChatIdFinal,
+      name: normalizedName
+    });
+
+    const { data: resolved, error: resolveErr } = await supabase.rpc('resolve_contact_identity', {
+      p_lid: currentLid || null,
+      p_phone: phone || null,
+      p_chat_lid: currentLid || null,
+      p_chat_id: canonicalChatIdFinal || null,
+      p_name: normalizedName,
+    });
+
+    if (resolveErr) {
+      console.error('[Webhook] ❌ resolve_contact_identity failed:', resolveErr);
+      throw new Error(`[zapi-webhook] resolve_contact_identity failed: ${resolveErr.message}`);
     }
 
-    let contactId: string;
+    const contactId = resolved?.[0]?.contact_id;
+    const resolvedChatKey = resolved?.[0]?.chat_key;
 
-    // Buscar contato existente por chat_key
-    const { data: existingContact } = await supabase
-      .from('contacts')
-      .select('id, name, phone, chat_lid')
-      .eq('chat_key', threadKey)
-      .maybeSingle();
-
-    if (existingContact) {
-      contactId = existingContact.id;
-      console.log(`[Webhook] ✅ Contact encontrado: ${contactId}`);
-
-      // Atualizar campos se necessário
-      const updates: any = { updated_at: now };
-
-      if (phone && existingContact.phone !== phone) {
-        const currentPhone = existingContact.phone || '';
-        const currentPhoneIsLid = currentPhone.includes('@lid') || (currentPhone.length >= 14 && !currentPhone.startsWith('55'));
-        if (!currentPhone || currentPhoneIsLid) {
-          updates.phone = phone;
-        }
-      }
-
-      if (currentLid && existingContact.chat_lid !== currentLid) {
-        updates.chat_lid = currentLid;
-        updates.lid = currentLid;
-      }
-
-      const currentName = existingContact.name || "";
-      const isNameGeneric = !currentName ||
-        currentName === 'Desconhecido' ||
-        /^\d+$/.test(currentName.replace(/\D/g, ''));
-
-      if (isNameGeneric && chatName && chatName !== 'Desconhecido' && !/^\d+$/.test(chatName.replace(/\D/g, ''))) {
-        updates.name = chatName;
-      }
-
-      if (Object.keys(updates).length > 1) {
-        await supabase.from('contacts').update(updates).eq('id', contactId);
-      }
-    } else {
-      // Criar novo contato
-      console.log(`[Webhook] 📦 Criando novo contact com chat_key: ${threadKey}`);
-
-      const contactPayload: any = {
-        chat_key: threadKey,
-        is_group: isGroupChat,
-        updated_at: now,
-      };
-
-      if (currentLid) {
-        contactPayload.chat_lid = currentLid;
-        contactPayload.lid = currentLid;
-      }
-      if (phone) {
-        contactPayload.phone = phone;
-      }
-
-      // ✅ GARANTIR NAME NUNCA NULL (constraint do banco)
-      if (chatName && chatName !== 'Desconhecido' && !/^\d+$/.test(chatName.replace(/\D/g, ''))) {
-        contactPayload.name = chatName;
-      } else {
-        // Fallback: usar phone ou threadKey como nome temporário
-        contactPayload.name = phone || canonicalChatIdFinal?.split('@')[0] || 'Contato Desconhecido';
-      }
-
-      const { data: newContact, error: insertErr } = await supabase
-        .from('contacts')
-        .insert(contactPayload)
-        .select('id')
-        .single();
-
-      if (insertErr) {
-        // Race condition: outro request criou o contato primeiro
-        if (insertErr.code === '23505') {
-          console.log('[Webhook] ⚠️ Race condition detectada, buscando contato existente...');
-          const { data: raceContact } = await supabase
-            .from('contacts')
-            .select('id')
-            .eq('chat_key', threadKey)
-            .single();
-
-          if (raceContact) {
-            contactId = raceContact.id;
-          } else {
-            throw new Error(`Erro ao criar contato: ${insertErr.message}`);
-          }
-        } else {
-          throw new Error(`Erro ao criar contato: ${insertErr.message}`);
-        }
-      } else {
-        contactId = newContact.id;
-      }
-
-      console.log(`[Webhook] ✅ Novo contact criado: ${contactId}`);
+    if (!contactId) {
+      console.error('[Webhook] ❌ RPC returned no contact_id');
+      throw new Error('[zapi-webhook] missing contactId after resolve');
     }
+
+    console.log(`[Webhook] ✅ Contato resolvido: ${contactId} (chat_key: ${resolvedChatKey})`);
+
+    // Atualizar threadKey para usar o chat_key canônico retornado pela RPC
+    const finalThreadKey = isGroupChat ? threadKey : (resolvedChatKey || threadKey);
 
 
     // ✅ 3. RESOLVER MÍDIA/CONTEÚDO
@@ -455,7 +389,7 @@ serve(async (req: Request): Promise<Response> => {
     // ✅ 4. UPSERT CONVERSA - ATÔMICO (elimina race condition)
     const convPayload: any = {
       chat_id: canonicalChatIdFinal,
-      thread_key: threadKey,  // Chave única para UPSERT
+      thread_key: finalThreadKey,  // Chave única para UPSERT (usa chat_key canônico)
       contact_id: contactId,
       last_message: lastMessagePreview.slice(0, 500),
       last_message_type: msgType,
@@ -475,7 +409,7 @@ serve(async (req: Request): Promise<Response> => {
       .from('conversations')
       .select('id, thread_key')
       .eq('contact_id', contactId)
-      .neq('thread_key', threadKey)
+      .neq('thread_key', finalThreadKey)
       .limit(5);
 
     if (orphanConvs && orphanConvs.length > 0) {
@@ -486,7 +420,7 @@ serve(async (req: Request): Promise<Response> => {
         const { data: mainConv } = await supabase
           .from('conversations')
           .select('id')
-          .eq('thread_key', threadKey)
+          .eq('thread_key', finalThreadKey)
           .maybeSingle();
 
         if (mainConv) {
