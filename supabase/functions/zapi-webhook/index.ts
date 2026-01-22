@@ -54,6 +54,10 @@ serve(async (req: Request): Promise<Response> => {
   const now = new Date().toISOString();
   let payload: any;
 
+  // ✅ Persistence flags para error handling inteligente
+  let persistedMessage = false;
+  let isInvalidPayload = false;
+
   // ✅ BACKFILL MODE: Detecta header x-backfill para reimportação de mensagens
   // Quando x-backfill: 1, não chama IA e não incrementa unread
   const isBackfill = req.headers.get('x-backfill') === '1';
@@ -260,6 +264,7 @@ serve(async (req: Request): Promise<Response> => {
 
     if (!rawIdentity) {
       console.warn(`[Webhook] Ignored payload: unable to determine chatId. Raw:`, { rawChatId, normalizedPhone, normalizedLid });
+      isInvalidPayload = true;
       // ✅ LOG: Registrar drop por falta de identidade
       await supabase.from('ai_logs').insert({
         status: 'webhook_dropped',
@@ -269,7 +274,7 @@ serve(async (req: Request): Promise<Response> => {
         provider: 'zapi',
         created_at: now
       }).catch(() => { });
-      return new Response("Ignored: No Identity", { status: 200 });
+      return new Response("Ignored: No Identity", { status: 400 });
     }
 
     const canonicalChatId = normalizeChatId(String(rawIdentity));
@@ -286,6 +291,7 @@ serve(async (req: Request): Promise<Response> => {
 
     if (!canonicalChatId) {
       console.warn("[Webhook] Ignored: invalid JID", { rawIdentity });
+      isInvalidPayload = true;
       // ✅ LOG: Registrar drop por JID inválido
       await supabase.from('ai_logs').insert({
         status: 'webhook_dropped',
@@ -295,7 +301,7 @@ serve(async (req: Request): Promise<Response> => {
         provider: 'zapi',
         created_at: now
       }).catch(() => { });
-      return new Response("Ignored: Invalid Identity", { status: 200 });
+      return new Response("Ignored: Invalid Identity", { status: 400 });
     }
 
     // ✅ PATCH 3: REGRA DE OURO - se existe phone válido, a conversa SEMPRE é ancorada no phone JID
@@ -361,7 +367,7 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     const contactId = resolved?.[0]?.contact_id;
-    const resolvedChatKey = resolved?.[0]?.chat_key;
+    const resolvedChatKey = resolved?.[0]?.out_chat_key;
 
     if (!contactId) {
       console.error('[Webhook] ❌ RPC returned no contact_id');
@@ -554,6 +560,10 @@ serve(async (req: Request): Promise<Response> => {
       .select("id")
       .single();
 
+    if (!msgError && msgResult) {
+      persistedMessage = true; // ✅ Marcamos que a mensagem foi persistida
+    }
+
     if (msgError) {
       const msgErrStr = JSON.stringify(msgError);
       if (msgErrStr.includes("duplicate key") || msgErrStr.includes("23505")) {
@@ -705,7 +715,23 @@ serve(async (req: Request): Promise<Response> => {
 
   } catch (error: any) {
     console.error('[Webhook Error]', error.message);
-    // ✅ PASSO 2: Webhook NUNCA deve retornar 500 para retries da Z-API se a mensagem foi tratada
-    return new Response(JSON.stringify({ success: false, error: error.message }), { status: 200, headers: corsHeaders });
+
+    // ✅ ERROR HANDLING INTELIGENTE:
+    // - 400: Payload inválido (retry não adianta)
+    // - 200: Mensagem já persistida (retry duplicaria)
+    // - 500: Falha antes de persistir (retry necessário)
+
+    let status = 500; // default: retry
+
+    if (isInvalidPayload) {
+      status = 400; // payload ruim, retry não ajuda
+    } else if (persistedMessage) {
+      status = 200; // já salvou, não precisa retry
+    }
+
+    return new Response(
+      JSON.stringify({ success: false, error: error.message, persisted: persistedMessage }),
+      { status, headers: corsHeaders }
+    );
   }
 });
