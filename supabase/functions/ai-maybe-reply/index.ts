@@ -192,18 +192,40 @@ serve(async (req) => {
       console.log('[ai-maybe-reply] ⚠️ Nenhum participante identificado ainda');
     }
 
-    // 4. Buscar histórico de mensagens
-    const { data: msgs } = await supabase
+    // 4. Buscar histórico de mensagens (AUMENTADO PARA MELHOR CONTEXTO)
+    const TAKE_LAST = 30; // ✅ Aumentado de 10 para 30 para evitar "perguntas bobas"
+
+    const { data: msgs, error: msgsErr } = await supabase
       .from('messages')
-      .select('content, sender_type')
+      .select('content, transcript, sender_type, message_type, sent_at')
       .eq('conversation_id', conversation_id)
       .order('sent_at', { ascending: false })
-      .limit(10);
+      .limit(TAKE_LAST);
 
-    const messages = (msgs || []).reverse().map(m => ({
-      role: m.sender_type === 'contact' ? 'user' : 'assistant',
-      content: m.content || '',
-    }));
+    if (msgsErr) {
+      console.error('[ai-maybe-reply] Erro ao buscar mensagens:', msgsErr);
+      throw msgsErr;
+    }
+
+    const messages = (msgs || [])
+      .map((m) => {
+        const text = (m.transcript || m.content || '').trim();
+
+        // ✅ Descarta mensagens vazias/placeholders inúteis
+        if (!text || text === '...' || text.startsWith('[Mídia:') || text.startsWith('[Arquivo:')) {
+          return null;
+        }
+
+        // ✅ Normaliza role
+        const sender = (m.sender_type || '').toLowerCase();
+        const role = sender === 'contact' ? 'user' : 'assistant';
+
+        return { role, content: text };
+      })
+      .filter(Boolean)
+      .reverse() as { role: string; content: string }[];
+
+    console.log(`[ai-maybe-reply] Carregadas ${messages.length} mensagens úteis de ${msgs?.length || 0} totais`);
 
     // 5. Buscar prompt e configurações globais
     const { data: settings } = await supabase.from('ai_settings').select('*').maybeSingle();
