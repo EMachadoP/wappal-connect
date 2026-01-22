@@ -152,6 +152,15 @@ serve(async (req: Request): Promise<Response> => {
     );
     if (isIgnoredEvent) {
       console.log('[Webhook] Ignoring event:', payload.type || 'status-only');
+      // ✅ LOG: Registrar evento ignorado para diagnóstico
+      await supabase.from('ai_logs').insert({
+        status: 'webhook_dropped',
+        reason: 'ignored_event',
+        input_excerpt: `type=${payload.type}, status=${payload.status}`,
+        model: 'webhook-drop',
+        provider: 'zapi',
+        created_at: now
+      }).catch(() => { });
       return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
     }
 
@@ -251,6 +260,15 @@ serve(async (req: Request): Promise<Response> => {
 
     if (!rawIdentity) {
       console.warn(`[Webhook] Ignored payload: unable to determine chatId. Raw:`, { rawChatId, normalizedPhone, normalizedLid });
+      // ✅ LOG: Registrar drop por falta de identidade
+      await supabase.from('ai_logs').insert({
+        status: 'webhook_dropped',
+        reason: 'no_identity',
+        input_excerpt: JSON.stringify({ rawChatId, normalizedPhone, normalizedLid, fromMe }).substring(0, 500),
+        model: 'webhook-drop',
+        provider: 'zapi',
+        created_at: now
+      }).catch(() => { });
       return new Response("Ignored: No Identity", { status: 200 });
     }
 
@@ -267,7 +285,16 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (!canonicalChatId) {
-      if (DEBUG_WEBHOOK) console.warn("Ignored: invalid JID", { rawIdentity });
+      console.warn("[Webhook] Ignored: invalid JID", { rawIdentity });
+      // ✅ LOG: Registrar drop por JID inválido
+      await supabase.from('ai_logs').insert({
+        status: 'webhook_dropped',
+        reason: 'invalid_jid',
+        input_excerpt: JSON.stringify({ rawIdentity, normalizedPhone, normalizedLid }).substring(0, 500),
+        model: 'webhook-drop',
+        provider: 'zapi',
+        created_at: now
+      }).catch(() => { });
       return new Response("Ignored: Invalid Identity", { status: 200 });
     }
 
