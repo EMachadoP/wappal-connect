@@ -40,7 +40,7 @@ export function useConversations() {
         // DMs: contact pode vir null se RLS bloquear ou não existir
         const contactData = conv.contacts || {
           id: conv.contact_id,
-          name: "Sem Nome",
+          name: conv.title || "Sem Nome", // Usa title como fallback robusto (denormalizado)
           phone: ""
         };
 
@@ -48,8 +48,8 @@ export function useConversations() {
           ...conv,
           contact: {
             ...contactData,
-            // Use participant name if available, otherwise use contact name
-            name: conv.participants?.[0]?.name || contactData.name || contactData.phone || 'Sem Nome'
+            // Prioridade: Participant > Contact > Title (Denormalized) > Phone > Sem Nome
+            name: conv.participants?.[0]?.name || contactData.name || conv.title || contactData.phone || 'Sem Nome'
           }
         };
       });
