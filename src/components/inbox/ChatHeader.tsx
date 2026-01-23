@@ -84,7 +84,7 @@ export function ChatHeader({
             )}
           </div>
           <p className="text-xs text-muted-foreground flex items-center gap-2">
-            <span>{contact.phone || contact.lid || 'Sem identificação'}</span>
+            <span>{contact.is_group ? 'Grupo de Atendimento' : (contact.phone || contact.lid || 'Sem identificação')}</span>
             {assignedTo && profiles && (
               <>
                 <span>•</span>

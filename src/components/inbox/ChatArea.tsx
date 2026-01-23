@@ -69,7 +69,7 @@ export function ChatArea(props: ChatAreaProps) {
 
   const { condominiums, loading: loadingCondos } = useContactCondominiums(contact?.id ?? null);
 
-  if (!contact) {
+  if (!conversationId && !contact) {
     return (
       <div className="flex-1 flex items-center justify-center bg-muted/30">
         <div className="text-center text-muted-foreground p-6">

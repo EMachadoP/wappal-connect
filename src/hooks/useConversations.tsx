@@ -20,15 +20,32 @@ export function useConversations() {
       .order('last_message_at', { ascending: false });
 
     if (!error && data) {
-      // Map conversations to prioritize participant name over contact name
-      const conversationsWithNames = data.map(conv => ({
-        ...conv,
-        contact: {
-          ...conv.contacts,
-          // Use participant name if available, otherwise use contact name
-          name: conv.participants?.[0]?.name || conv.contacts?.name || conv.contacts?.phone || 'Sem Nome'
+      // Map conversations to prioritize participant name over contact name or group title
+      const conversationsWithNames = data.map(conv => {
+        const isGroup = conv.is_group;
+        const groupTitle = conv.title || 'Grupo';
+
+        // Se for grupo, não deve ter contact preenchido com dados de pessoa
+        if (isGroup) {
+          return {
+            ...conv,
+            title: groupTitle,
+            contact: {
+              name: groupTitle,
+              profile_picture_url: null
+            }
+          };
         }
-      }));
+
+        return {
+          ...conv,
+          contact: {
+            ...conv.contacts,
+            // Use participant name if available, otherwise use contact name
+            name: conv.participants?.[0]?.name || conv.contacts?.name || conv.contacts?.phone || 'Sem Nome'
+          }
+        };
+      });
       setConversations(conversationsWithNames);
     }
     setLoading(false);
