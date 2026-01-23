@@ -10,11 +10,11 @@ interface Conversation {
   id: string;
   title?: string | null;
   is_group?: boolean;
-  contact: {
+  contact?: {
     name: string;
     phone?: string | null;
     profile_picture_url?: string | null;
-  };
+  } | null;
   last_message?: string | null;
   last_message_type?: string;
   last_message_at?: string | null;
@@ -145,8 +145,8 @@ export function ConversationList({
             <ConversationItem
               key={conv.id}
               id={conv.id}
-              contactName={conv.is_group ? (conv.title || "Grupo") : (conv.contact.name || "Sem Nome")}
-              contactImageUrl={conv.contact.profile_picture_url}
+              contactName={conv.is_group ? (conv.title || "Grupo") : (conv.contact?.name || "Sem Nome")}
+              contactImageUrl={conv.contact?.profile_picture_url}
               lastMessage={conv.last_message}
               lastMessageType={conv.last_message_type}
               lastMessageAt={conv.last_message_at}
