@@ -327,12 +327,15 @@ async function executeCreateProtocol(
     throw new Error('conversation_id is required');
   }
 
-  // ✅ HARD GUARD: se for assunto de unidade e não veio apt, não chama
+  // ✅ FLEXIBLE: Apartamento é opcional
+  // Se participante identificado → usa dados cadastrados
+  // Se não identificado → IA extrai da conversa ou deixa em branco
   const summaryText = String(args?.summary || '');
   const apt = (args?.apartment || '').toString().trim();
-  if (needsApartmentByText(summaryText) && !apt) {
-    console.error('[TICKET] Missing apartment for unit-related issue');
-    throw new Error('MISSING_APARTMENT');
+
+  // Apenas LOG se parecer necessário mas não foi fornecido (não bloqueia)
+  if (needsApartmentByText(summaryText) && !apt && !participantId) {
+    console.warn('[TICKET] ⚠️ Apartamento pode ser necessário mas não fornecido (não bloqueando)');
   }
 
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1025,10 +1028,10 @@ serve(async (req) => {
     // ✅ FIX: Porteiros e funcionários NÃO precisam informar apartamento
     const ROLES_WITHOUT_APARTMENT = ['porteiro', 'zelador', 'funcionario', 'gerente_predio', 'administrador'];
     const roleSkipsApartment = ROLES_WITHOUT_APARTMENT.includes(contactRole);
-    
+
     const textNeedsApartment = /(interfone|tv|controle|apartamento|apto|unidade)/i.test(recentText);
     const needsApartment = textNeedsApartment && !roleSkipsApartment;
-    
+
     if (roleSkipsApartment && textNeedsApartment) {
       console.log(`[AI] Skipping apartment requirement for role: ${contactRole}`);
     }
