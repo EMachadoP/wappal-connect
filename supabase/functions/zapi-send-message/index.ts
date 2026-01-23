@@ -159,6 +159,137 @@ const stableKey = (obj: any) => {
   return `auto_${h.toString(16)}`;
 };
 
+// ✅ HELPER: Extrair apenas dígitos
+function digitsOnly(v: string) {
+  return (v || "").replace(/\D+/g, "");
+}
+
+// ✅ HELPER: Derivar thread_key do dbChatId (JID canônico)
+function threadKeyFromJid(dbChatId: string | null | undefined) {
+  // dbChatId exemplo: "5581997438430@s.whatsapp.net" ou "...@lid"
+  const base = (dbChatId ?? "").split("@")[0];
+  const dig = digitsOnly(base);
+  if (!dig) return null;
+
+  // Se parece com grupo (tem hífen), adiciona prefixo group:
+  if (dbChatId?.includes('@g.us')) {
+    return `group:${base}@g.us`;
+  }
+
+  // Se é LID ou phone, usa prefixo u:
+  return `u:${dig}`;
+}
+
+// ✅ HELPER: Resolver contactId a partir do dbChatId (LID-safe)
+async function resolveContactId(params: {
+  supabaseAdmin: any;
+  dbChatId: string | null;
+}) {
+  const { supabaseAdmin, dbChatId } = params;
+  if (!dbChatId) return null;
+
+  // Ex.: "5581997438430@s.whatsapp.net" -> "5581997438430"
+  const jidBase = dbChatId.split("@")[0] ?? "";
+  const phoneKey = digitsOnly(jidBase);
+
+  console.log(`[zapi-send-message] 🔍 Resolving contactId from dbChatId: ${dbChatId} (phoneKey: ${phoneKey})`);
+
+  // 1) Se tem dígitos, resolve por chat_key (ideal)
+  if (phoneKey) {
+    const { data } = await supabaseAdmin
+      .from("contacts")
+      .select("id, chat_key")
+      .eq("chat_key", phoneKey)
+      .maybeSingle();
+
+    if (data?.id) {
+      console.log(`[zapi-send-message] ✅ Found contact by chat_key: ${data.id}`);
+      return data.id;
+    }
+  }
+
+  // 2) Se não tem dígitos e é LID, resolve por chat_lid (alias)
+  if (dbChatId.includes("@lid")) {
+    const { data } = await supabaseAdmin
+      .from("contacts")
+      .select("id, chat_key")
+      .eq("chat_lid", dbChatId)
+      .maybeSingle();
+
+    if (data?.id) {
+      console.log(`[zapi-send-message] ✅ Found contact by chat_lid: ${data.id}`);
+      return data.id;
+    }
+  }
+
+  console.log(`[zapi-send-message] ⚠️ No contact found for dbChatId: ${dbChatId}`);
+  return null;
+}
+
+// ✅ HELPER: Resolve ou cria conversation_id de forma robusta
+async function resolveOrCreateConversationId(params: {
+  supabaseAdmin: any;
+  resolvedConversationId?: string | null;
+  thread_key?: string | null;
+  contact_id?: string | null;
+  dbChatId?: string | null;
+}) {
+  const { supabaseAdmin, resolvedConversationId, thread_key, contact_id, dbChatId } = params;
+
+  if (resolvedConversationId) return resolvedConversationId;
+
+  // tenta usar thread_key recebido (se existir), senão deriva do JID
+  const tk = (thread_key && thread_key.trim()) ? thread_key.trim() : threadKeyFromJid(dbChatId);
+  if (!tk) {
+    console.log("[zapi-send-message] ⚠️ Could not derive thread_key from dbChatId:", dbChatId);
+    return null;
+  }
+
+  console.log(`[zapi-send-message] 🔍 Resolving conversation by thread_key: ${tk}`);
+
+  // 1) tenta achar
+  const { data: existing, error: findErr } = await supabaseAdmin
+    .from("conversations")
+    .select("id")
+    .eq("thread_key", tk)
+    .maybeSingle();
+
+  if (findErr) {
+    console.log("[zapi-send-message] ⚠️ error finding conversation by thread_key:", findErr);
+  }
+  if (existing?.id) {
+    console.log(`[zapi-send-message] ✅ Found existing conversation: ${existing.id}`);
+    return existing.id;
+  }
+
+  // 2) cria/garante por UPSERT
+  const nowIso = new Date().toISOString();
+  console.log(`[zapi-send-message] 🆕 Creating conversation with thread_key: ${tk}`);
+
+  const { data: upserted, error: upsertErr } = await supabaseAdmin
+    .from("conversations")
+    .upsert(
+      {
+        thread_key: tk,
+        contact_id: contact_id ?? null,
+        chat_id: dbChatId ?? null,
+        last_message_at: nowIso,
+        status: 'open',
+      },
+      { onConflict: "thread_key" }
+    )
+    .select("id")
+    .single();
+
+  if (upsertErr) {
+    console.log("[zapi-send-message] ❌ error upserting conversation:", upsertErr);
+    return null;
+  }
+
+  console.log(`[zapi-send-message] ✅ Created conversation: ${upserted?.id}`);
+  return upserted?.id ?? null;
+}
+
 serve(async (req: Request) => {
   const reqId = crypto.randomUUID().slice(0, 8);
   console.log(`[zapi-send-message] HIT reqId=${reqId} method=${req.method}`);
@@ -652,7 +783,59 @@ serve(async (req: Request) => {
     }
 
     // ✅ IMMEDIATE VISIBILITY: Insert into public.messages and update conversation preview
-    if (resolvedConversationId) {
+    // ✅ ALINHAMENTO COM WEBHOOK: Deriva thread_key no mesmo formato (dm:contactId, group:jid)
+    let derivedThreadKey: string | null = null;
+    let resolvedContactId: string | null = null;
+
+    if (finalIsGroup) {
+      // Para grupos, usar mesmo formato do webhook: group:${normalizeGroupJid(...)}
+      const normalizedGroup = dbChatId; // já está normalizado
+      derivedThreadKey = normalizedGroup ? `group:${normalizedGroup}` : null;
+      console.log(`[zapi-send-message] Group thread_key: ${derivedThreadKey}`);
+    } else {
+      // Para DM, resolver contactId e usar formato dm:${contactId}
+      resolvedContactId = await resolveContactId({ supabaseAdmin, dbChatId });
+      console.log(`[zapi-send-message] Resolved contactId = ${resolvedContactId} from dbChatId = ${dbChatId}`);
+
+      if (resolvedContactId) {
+        derivedThreadKey = `dm:${resolvedContactId}`;
+        console.log(`[zapi-send-message] DM thread_key: ${derivedThreadKey}`);
+      } else {
+        console.warn(`[zapi-send-message] ⚠️ Could not resolve contactId for dbChatId: ${dbChatId}`);
+      }
+    }
+
+    const persistConversationId = await resolveOrCreateConversationId({
+      supabaseAdmin,
+      resolvedConversationId,
+      thread_key: derivedThreadKey, // ✅ Formato alinhado: dm:UUID ou group:JID
+      contact_id: resolvedContactId, // ✅ Passa contactId resolvido
+      dbChatId,
+    });
+
+    console.log("[zapi-send-message] persistConversationId =", persistConversationId);
+
+    if (!persistConversationId) {
+      // ✅ Log detalhado para diagnóstico (sem dados sensíveis)
+      console.error("[zapi-send-message] ❌ PERSISTENCE FAILURE", {
+        derivedThreadKey,
+        dbChatId,
+        resolvedConversationId,
+        providerMessageId,
+        finalIsGroup,
+      });
+      console.log("[zapi-send-message] ❌ Could not resolve/create conversation_id, skipping UI persistence");
+      // Retorna 400 pro front perceber que enviou, mas não persistiu
+      // O outbox já foi marcado sent acima, então ainda terá rastreio
+      return new Response(JSON.stringify({
+        ok: false,
+        error: "Could not resolve/create conversation_id for persistence",
+        sent: true,
+        messageId: providerMessageId
+      }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    {
       const nowIso = new Date().toISOString();
 
       console.log(`[zapi-send-message] Inserting message: type=${isSystem ? 'assistant' : 'agent'} name=${senderName || 'Ana Mônica'}`);
@@ -684,7 +867,7 @@ serve(async (req: Request) => {
 
       if (shouldInsertMessage) {
         const { error: msgErr } = await supabaseAdmin.from("messages").insert({
-          conversation_id: resolvedConversationId,
+          conversation_id: persistConversationId,
           // ✅ FIX: Sender fields for UI compatibility - validate UUID
           sender_type: isSystem ? "assistant" : "agent",
           sender_id: isValidUuid(userId) ? userId : null,
@@ -783,7 +966,7 @@ serve(async (req: Request) => {
       const { error: convErr } = await supabaseAdmin
         .from("conversations")
         .update(updateData)
-        .eq("id", resolvedConversationId);
+        .eq("id", persistConversationId);
 
       if (convErr) {
         console.error("[zapi-send-message] Error updating conversation:", convErr.message);
