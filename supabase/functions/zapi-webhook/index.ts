@@ -327,12 +327,16 @@ serve(async (req: Request): Promise<Response> => {
       console.log(`[Webhook] 📥 HIT ${direction || 'inbound'} Key=${hitKey} ID=${mask(canonicalChatId)}`);
     }
 
-    // ✅ FIX: O chatName agora segue a direção da mensagem
+    // ✅ FIX: Conversation naming prioritization
     let chatName: string;
-    if (fromMe) {
+    if (isGroupChat) {
+      // For groups, always prioritize the group's name
+      chatName = payload.chatName || payload.contact?.name || 'Grupo sem nome';
+    } else if (fromMe) {
       chatName = payload.chatName || payload.contact?.name || payload.recipientName ||
         (canonicalChatId.split('@')[0]) || 'Desconhecido';
     } else {
+      // For DMs, prioritize the sender's own name
       chatName = payload.senderName || payload.pushName || payload.contact?.name ||
         payload.chatName || 'Desconhecido';
     }
