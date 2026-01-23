@@ -33,6 +33,24 @@ function translateCategory(category: string): string {
     return map[category] || category;
 }
 
+// ✅ NEW: Help identify if contact name is a generic building role
+function isGenericContactName(name?: string | null) {
+    const n = (name ?? "").trim().toLowerCase();
+    if (!n) return true;
+
+    const generic = [
+        "portaria", "recepcao", "recepção", "guarita", "porteiro", "zelador", "zeladoria",
+        "administracao", "administração", "sindico", "síndico", "condominio", "condomínio",
+        "predio", "prédio", "edificio", "edifício"
+    ];
+
+    // só número ou muito curto
+    if (/^\d+$/.test(n)) return true;
+    if (n.length <= 3) return true;
+
+    return generic.some(k => n.includes(k));
+}
+
 serve(async (req: Request): Promise<Response> => {
     if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -90,24 +108,23 @@ serve(async (req: Request): Promise<Response> => {
             ? protocol.protocol_code
             : `G7-${protocol.protocol_code}`;
 
-        const clientMsg = `🎯 *Protocolo Gerado*
+        const now = new Date();
+        const nowBr = now.toLocaleString("pt-BR", { timeZone: "America/Recife" });
 
-Olá ${contact.name || "Cliente"}!
-
-Seu chamado foi registrado com sucesso:
-
-✅ *Protocolo:* ${code}
-🏢 *Condomínio:* ${condominiumName}
-📌 *Categoria:* ${translateCategory(protocol.category || "operational")}
-🟢 *Prioridade:* ${protocol.priority || "normal"}
-⏰ *Vencimento:* ${protocol.due_date ? String(protocol.due_date).slice(0, 10) : "—"}
-
-📝 *Resumo:*
-${protocol.summary || "Sem descrição adicional."}
-
-_Nosso time já foi notificado e em breve retornaremos._
-
-*G7 Serv*`;
+        const clientMsg = [
+            "🎯 Seu chamado foi registrado com sucesso:",
+            "",
+            `✅ Protocolo: ${code}`,
+            `📌 Categoria: ${translateCategory(protocol.category || "operational")}`,
+            `🟢 Prioridade: ${protocol.priority || "normal"}`,
+            `⏰ Vencimento: ${protocol.due_date ? String(protocol.due_date).slice(0, 10) : "-"}`,
+            `🕒 Data e hora: ${nowBr}`,
+            "",
+            "Nosso time já foi notificado.",
+            "",
+            "Grato",
+            "G7 Serv",
+        ].join("\n");
 
         const recipient = recipientPhone || recipientLid;
 

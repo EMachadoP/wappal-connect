@@ -139,6 +139,47 @@ function scoreCondoCandidate(userTokens: string[], condoName: string): number {
   return (hit * 10) + (all ? 100 : 0);
 }
 
+// ✅ NEW: Help identify if contact name is a generic building role
+function isGenericContactName(name?: string | null) {
+  const n = (name ?? "").trim().toLowerCase();
+  if (!n) return true;
+
+  const generic = [
+    "portaria", "recepcao", "recepção", "guarita", "porteiro", "zelador", "zeladoria",
+    "administracao", "administração", "sindico", "síndico", "condominio", "condomínio",
+    "predio", "prédio", "edificio", "edifício"
+  ];
+
+  // só número ou muito curto
+  if (/^\d+$/.test(n)) return true;
+  if (n.length <= 3) return true;
+
+  return generic.some(k => n.includes(k));
+}
+
+function translateCategory(category?: string): string {
+  const map: Record<string, string> = {
+    operational: "Operacional",
+    support: "Suporte",
+    financial: "Financeiro",
+    commercial: "Comercial",
+    admin: "Administrativo",
+    cftv: "CFTV",
+    interfone: "Interfone",
+    antena_coletiva: "Antena Coletiva",
+    portao_veicular: "Portão Veicular",
+    porta_pedestre: "Porta Pedestre",
+    controle_acesso_pedestre: "Acesso Pedestre",
+    controle_acesso_veicular: "Acesso Veicular",
+    infraestrutura: "Infraestrutura",
+    cerca_eletrica: "Cerca Elétrica",
+    alarme: "Alarme",
+    concertina: "Concertina",
+    infra: "Infraestrutura"
+  };
+  return map[category || ""] || "Operacional";
+}
+
 async function resolveCondoByTokens(supabase: any, userText: string) {
   const tokens = tokensForCondoSearch(userText);
   if (!tokens.length) return { kind: "none" as const };
@@ -165,7 +206,11 @@ async function resolveCondoByTokens(supabase: any, userText: string) {
   const bestHasAll = best.score >= 100;
   const clearWin = !second || (best.score - second.score) >= 50;
 
-  if (bestHasAll && clearWin) return { kind: "matched" as const, condo: best };
+  // ✅ UX FIX: If ONLY ONE candidate is found, accept it even if not a "clearWin" or "bestHasAll"
+  // This prevents "I found 1 condo. Is it Puerto Montt?" when there is no other choice.
+  if (list.length === 1 || (bestHasAll && clearWin)) {
+    return { kind: "matched" as const, condo: best };
+  }
 
   return { kind: "ambiguous" as const, options: list.slice(0, 3) };
 }
@@ -576,8 +621,26 @@ serve(async (req) => {
         // ✅ sucesso -> limpa pendência
         await clearPending(conversationId, supabase);
 
+        const protocol = ticketData.protocol || ticketData;
+        const nowBr = new Date().toLocaleString("pt-BR", { timeZone: "America/Recife" });
+
+        const lines = [
+          "🎯 Seu chamado foi registrado com sucesso:",
+          "",
+          `✅ Protocolo: ${protocol.protocol_code || protocol.code || protocol.protocol_number || protocol.id}`,
+          `📌 Categoria: ${translateCategory(protocol.category)}`,
+          `🟢 Prioridade: ${protocol.priority || "normal"}`,
+          `⏰ Vencimento: ${protocol.due_date ? String(protocol.due_date).slice(0, 10) : "-"}`,
+          `🕒 Data e hora: ${nowBr}`,
+          "",
+          "Nosso time já foi notificado.",
+          "",
+          "Grato",
+          "G7 Serv",
+        ];
+
         return new Response(JSON.stringify({
-          text: `Certo. Já registrei o chamado sob o protocolo **${protocolCode}** e encaminhei para a equipe operacional. Vamos dar sequência por aqui.`,
+          text: lines.join("\n"),
           finish_reason: 'RETRY_PROTOCOL_SUCCESS',
           provider: 'state-machine',
           model: 'deterministic',
@@ -1257,8 +1320,26 @@ REGRAS DE FORMATO - MUITO IMPORTANTE:
     if (functionCall && (functionCall.name === 'create_protocol' || functionCall.name === 'create_ticket')) {
       try {
         const ticketData = await executeCreateProtocol(supabase, supabaseUrl, supabaseServiceKey, conversationId!, participant_id, functionCall.args);
-        const protocolCode = ticketData.protocol?.protocol_code || ticketData.protocol_code;
-        generatedText = `Certo. Já registrei o chamado sob o protocolo **${protocolCode}** e encaminhei para a equipe operacional. Vamos dar sequência por aqui.`;
+
+        const protocol = ticketData.protocol || ticketData;
+        const nowBr = new Date().toLocaleString("pt-BR", { timeZone: "America/Recife" });
+
+        const lines = [
+          "🎯 Seu chamado foi registrado com sucesso:",
+          "",
+          `✅ Protocolo: ${protocol.protocol_code || protocol.code || protocol.protocol_number || protocol.id}`,
+          `📌 Categoria: ${translateCategory(protocol.category)}`,
+          `🟢 Prioridade: ${protocol.priority || "normal"}`,
+          `⏰ Vencimento: ${protocol.due_date ? String(protocol.due_date).slice(0, 10) : "-"}`,
+          `🕒 Data e hora: ${nowBr}`,
+          "",
+          "Nosso time já foi notificado.",
+          "",
+          "Grato",
+          "G7 Serv",
+        ];
+
+        generatedText = lines.join("\n");
       } catch (e) {
         console.error('Tool call failed:', e);
         console.error('Tool call error details:', {
