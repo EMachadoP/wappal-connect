@@ -164,6 +164,24 @@ function digitsOnly(v: string) {
   return (v || "").replace(/\D+/g, "");
 }
 
+// ✅ HELPER: Gerar variações de telefone Brasil (12 vs 13 dígitos)
+function brVariants(phoneKey: string) {
+  const v = new Set<string>();
+  v.add(phoneKey);
+
+  // 55DDXXXXXXXX (12) -> 55DD9XXXXXXXX (13)
+  if (phoneKey.startsWith("55") && phoneKey.length === 12) {
+    v.add(phoneKey.slice(0, 4) + "9" + phoneKey.slice(4));
+  }
+
+  // 55DD9XXXXXXXX (13) -> 55DDXXXXXXXX (12)
+  if (phoneKey.startsWith("55") && phoneKey.length === 13 && phoneKey[4] === "9") {
+    v.add(phoneKey.slice(0, 4) + phoneKey.slice(5));
+  }
+
+  return Array.from(v);
+}
+
 // ✅ HELPER: Derivar thread_key do dbChatId (JID canônico)
 function threadKeyFromJid(dbChatId: string | null | undefined) {
   // dbChatId exemplo: "5581997438430@s.whatsapp.net" ou "...@lid"
@@ -180,7 +198,7 @@ function threadKeyFromJid(dbChatId: string | null | undefined) {
   return `u:${dig}`;
 }
 
-// ✅ HELPER: Resolver contactId a partir do dbChatId (LID-safe)
+// ✅ HELPER: Resolver contactId a partir do dbChatId (LID-safe + Variance-aware)
 async function resolveContactId(params: {
   supabaseAdmin: any;
   dbChatId: string | null;
@@ -192,37 +210,83 @@ async function resolveContactId(params: {
   const jidBase = dbChatId.split("@")[0] ?? "";
   const phoneKey = digitsOnly(jidBase);
 
-  console.log(`[zapi-send-message] 🔍 Resolving contactId from dbChatId: ${dbChatId} (phoneKey: ${phoneKey})`);
+  console.log(`[zapi-send-message] 🔍 Resolving contactId safely from dbChatId: ${dbChatId} (phoneKey: ${phoneKey})`);
 
-  // 1) Se tem dígitos, resolve por chat_key (ideal)
+  // 1) TELEFONE: match exato primeiro (testando com e sem prefixo)
   if (phoneKey) {
-    const { data } = await supabaseAdmin
+    // Refuse too-short keys (prevents garbage contacts)
+    if (phoneKey.length < 10) {
+      console.warn(`[zapi-send-message] ⚠️ phoneKey too short (${phoneKey.length}): ${phoneKey}. Refusing resolution.`);
+      return null;
+    }
+
+    const exactCandidates = [phoneKey, `phone:${phoneKey}`, `u:${phoneKey}`];
+
+    const { data: exact } = await supabaseAdmin
       .from("contacts")
       .select("id, chat_key")
-      .eq("chat_key", phoneKey)
-      .maybeSingle();
+      .in("chat_key", exactCandidates)
+      .limit(2);
 
-    if (data?.id) {
-      console.log(`[zapi-send-message] ✅ Found contact by chat_key: ${data.id}`);
-      return data.id;
+    if (exact?.length === 1) {
+      console.log(`[zapi-send-message] ✅ Found contact by exact chat_key (prefixed): ${exact[0].id}`);
+      return exact[0].id;
+    }
+
+    if (exact?.length && exact.length > 1) {
+      console.warn("[zapi-send-message] ⚠️ multiple exact chat_key matches for", phoneKey);
+      return null;
+    }
+
+    // 2) TELEFONE: tentar variações BR (12/13), mas só aceitar se der 1 resultado único
+    const rawVariants = brVariants(phoneKey);
+    const variantCandidates: string[] = [];
+    rawVariants.forEach(v => {
+      variantCandidates.push(v);
+      variantCandidates.push(`phone:${v}`);
+      variantCandidates.push(`u:${v}`);
+    });
+
+    const { data: candidates } = await supabaseAdmin
+      .from("contacts")
+      .select("id, chat_key")
+      .in("chat_key", variantCandidates)
+      .limit(3);
+
+    if (candidates?.length === 1) {
+      console.log(`[zapi-send-message] ✅ Found contact by phone variant: ${candidates[0].id} (chat_key: ${candidates[0].chat_key})`);
+      return candidates[0].id;
+    }
+
+    if (candidates?.length && candidates.length > 1) {
+      console.warn("[zapi-send-message] ⚠️ ambiguous phone variants", {
+        dbChatId,
+        phoneKey,
+        rawVariants,
+        candidates: candidates.map((c: any) => ({ id: c.id, chat_key: c.chat_key })),
+      });
+      return null; // NÃO adivinha se for ambíguo
     }
   }
 
-  // 2) Se não tem dígitos e é LID, resolve por chat_lid (alias)
+  // 3) LID: match exato em chat_lid ou lid
   if (dbChatId.includes("@lid")) {
-    const { data } = await supabaseAdmin
+    const { data: byChatLid } = await supabaseAdmin
       .from("contacts")
-      .select("id, chat_key")
+      .select("id")
       .eq("chat_lid", dbChatId)
       .maybeSingle();
+    if (byChatLid?.id) return byChatLid.id;
 
-    if (data?.id) {
-      console.log(`[zapi-send-message] ✅ Found contact by chat_lid: ${data.id}`);
-      return data.id;
-    }
+    const { data: byLid } = await supabaseAdmin
+      .from("contacts")
+      .select("id")
+      .eq("lid", dbChatId)
+      .maybeSingle();
+    if (byLid?.id) return byLid.id;
   }
 
-  console.log(`[zapi-send-message] ⚠️ No contact found for dbChatId: ${dbChatId}`);
+  console.log(`[zapi-send-message] ⚠️ No unique contact found for dbChatId: ${dbChatId}`);
   return null;
 }
 

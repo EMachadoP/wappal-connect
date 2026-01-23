@@ -1,0 +1,7 @@
+{
+    "conversation_id": "SUBSTITUIR_PELO_ID_DA_CONVERSA",
+    "content": "Diagnóstico de sistema",
+    "message_type": "text",
+    "sender_name": "Sistema",
+    "is_system": true
+}
