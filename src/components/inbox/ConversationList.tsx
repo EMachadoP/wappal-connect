@@ -8,6 +8,8 @@ import { Button } from '@/components/ui/button';
 
 interface Conversation {
   id: string;
+  title?: string | null;
+  is_group?: boolean;
   contact: {
     name: string;
     phone?: string | null;
@@ -57,8 +59,8 @@ export function ConversationList({
 
   // Filter mainly by search now, as the LIST is already filtered by SQL based on activeTab
   const filteredConversations = conversations.filter((conv) => {
-    const contactName = conv.contact?.name || "Contato Desconhecido";
-    const contactPhone = (conv.contact as any)?.phone || "";
+    const contactName = conv.is_group ? (conv.title || "Grupo") : (conv.contact?.name || "Contato Desconhecido");
+    const contactPhone = conv.is_group ? "" : ((conv.contact as any)?.phone || "");
     const searchLower = search.toLowerCase().trim();
 
     // ✅ Busca por nome OU telefone
@@ -143,7 +145,7 @@ export function ConversationList({
             <ConversationItem
               key={conv.id}
               id={conv.id}
-              contactName={conv.contact.name || "Sem Nome"}
+              contactName={conv.is_group ? (conv.title || "Grupo") : (conv.contact.name || "Sem Nome")}
               contactImageUrl={conv.contact.profile_picture_url}
               lastMessage={conv.last_message}
               lastMessageType={conv.last_message_type}
