@@ -56,7 +56,39 @@ export default function InboxPage() {
 
     if (data) {
       setActiveConvData(data);
-      setActiveContact(data.contacts);
+
+      // ✅ FIX: Se contact for null (RLS block ou Grupo), criar fallback
+      let contactData = data.contacts;
+
+      if (!contactData) {
+        if (data.is_group) {
+          contactData = {
+            id: null,
+            name: data.title || "Grupo",
+            is_group: true,
+            profile_picture_url: null,
+            phone: ""
+          } as any;
+        } else {
+          // DM sem contato visível (RLS ou orfão)
+          contactData = {
+            id: data.contact_id,
+            name: "Sem Nome",
+            is_group: false,
+            profile_picture_url: null,
+            phone: "" // chat_id usually serves as fallback in Header
+          } as any;
+        }
+      } else if (data.is_group) {
+        // ✅ FIX: Se for grupo mas veio JOIN errado (possível em dados antigos), forçar nome do grupo
+        contactData = {
+          ...contactData,
+          name: data.title || "Grupo",
+          is_group: true
+        };
+      }
+
+      setActiveContact(contactData);
 
       // ✅ Marcar como lida via Edge Function (evita problemas de RLS)
       if (data.unread_count > 0) {
