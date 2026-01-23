@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "npm:@supabase/supabase-js@2.92.0";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2?target=deno";
 import { isEmployeeSender } from "../_shared/is-employee.ts";
 import { parseAndExtract } from "../_shared/parse-extract.ts";
 
@@ -604,6 +604,7 @@ serve(async (req) => {
 
       // Se o usuário mandou algo útil, usa como summary novo (mais recente)
       const newSummary = hasUsefulText(lastUserMsgText) ? lastUserMsgText : summaryFromPayload;
+      const activeCondoId = convState?.active_condominium_id || payload?.active_condominium_id;
 
       try {
         const ticketData = await executeCreateProtocol(
@@ -632,15 +633,15 @@ serve(async (req) => {
           `🟢 Prioridade: ${protocol.priority || "normal"}`,
           `⏰ Vencimento: ${protocol.due_date ? String(protocol.due_date).slice(0, 10) : "-"}`,
           `🕒 Data e hora: ${nowBr}`,
-          "",
-          "Nosso time já foi notificado.",
-          "",
-          "Grato",
-          "G7 Serv",
         ];
 
+        let finalMsg = lines.join("\n");
+        if (!activeCondoId) {
+          finalMsg += "\n\nPra agilizar, me diga o condomínio quando puder (pode ser só o nome mesmo).";
+        }
+
         return new Response(JSON.stringify({
-          text: lines.join("\n"),
+          text: finalMsg,
           finish_reason: 'RETRY_PROTOCOL_SUCCESS',
           provider: 'state-machine',
           model: 'deterministic',
@@ -1173,6 +1174,15 @@ serve(async (req) => {
     const pf = (stateNow?.pending_field ?? null) as string | null;
     const pp = (stateNow?.pending_payload ?? {}) as any;
 
+    // ✅ Define activeCondoId for the standard LLM flow
+    const activeCondoId = stateNow?.active_condominium_id || pp?.active_condominium_id;
+
+    // ✅ ANTI-ROBOT GREETING LOGIC
+    let greeting = "";
+    if (pp && pp.requester_name && !isGenericContactName(pp.requester_name)) {
+      greeting = `Olá ${pp.requester_name}!\n\n`;
+    }
+
     const stateHint =
       pf === "condominium" && pp?.condo_options?.length
         ? `PENDENTE: confirmar condomínio. Opções encontradas: ${pp.condo_options.map((o: any) => o.name).join(" | ")}. Peça para o cliente escolher uma.`
@@ -1340,6 +1350,10 @@ REGRAS DE FORMATO - MUITO IMPORTANTE:
         ];
 
         generatedText = lines.join("\n");
+
+        if (!activeCondoId) {
+          generatedText += "\n\nPra agilizar, me diga o condomínio quando puder (pode ser só o nome mesmo).";
+        }
       } catch (e) {
         console.error('Tool call failed:', e);
         console.error('Tool call error details:', {

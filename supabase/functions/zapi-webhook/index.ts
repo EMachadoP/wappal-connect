@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
-import { createClient } from "npm:@supabase/supabase-js@2.92.0";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2?target=deno";
 import { isEmployeeSender } from "../_shared/is-employee.ts";
 import { parseAndExtract } from "../_shared/parse.ts";
 
@@ -353,14 +353,14 @@ serve(async (req: Request): Promise<Response> => {
       ? chatName
       : null;
 
-    console.log(`[Webhook] 🔍 Resolvendo contato via RPC:`, {
+    console.log(`[Webhook] 🔍 Resolvendo contato via RPC V6:`, {
       lid: currentLid,
       phone,
       chatId: canonicalChatIdFinal,
       name: normalizedName
     });
 
-    const { data: resolved, error: resolveErr } = await supabase.rpc('resolve_contact_identity', {
+    const { data: resolved, error: resolveErr } = await supabase.rpc('resolve_contact_identity_v6', {
       p_lid: currentLid || null,
       p_phone: phone || null,
       p_chat_lid: currentLid || null,
