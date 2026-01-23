@@ -23,7 +23,9 @@ export interface DisplayParticipant {
  */
 export function getChatDisplayName(
     contact?: DisplayContact | null,
-    participant?: DisplayParticipant | null
+    participant?: DisplayParticipant | null,
+    title?: string | null,
+    chatId?: string | null
 ): string {
     // 1. Prioritize explicitly passed participant name (identified sender)
     if (participant?.name) {
@@ -52,9 +54,19 @@ export function getChatDisplayName(
         return contact.name;
     }
 
-    // 5. Fallback to phone
+    // 5. Fallback to conversation title (Denormalized)
+    if (title && title !== 'Sem Nome' && title !== 'Grupo') {
+        return title;
+    }
+
+    // 6. Fallback to phone
     if (contact?.phone) {
         return contact.phone;
+    }
+
+    // 7. Fallback to chatId (cleaned)
+    if (chatId) {
+        return chatId.split('@')[0];
     }
 
     return "Sem Nome";

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { getChatDisplayName } from "@/utils/displayUtils";
 
 export function useConversations() {
   const [conversations, setConversations] = useState<any[]>([]);
@@ -40,7 +41,7 @@ export function useConversations() {
         // DMs: contact pode vir null se RLS bloquear ou não existir
         const contactData = conv.contacts || {
           id: conv.contact_id,
-          name: conv.title || "Sem Nome", // Usa title como fallback robusto (denormalizado)
+          name: conv.title || "Sem Nome",
           phone: ""
         };
 
@@ -48,8 +49,7 @@ export function useConversations() {
           ...conv,
           contact: {
             ...contactData,
-            // Prioridade: Participant > Contact > Title (Denormalized) > Phone > Sem Nome
-            name: conv.participants?.[0]?.name || contactData.name || conv.title || contactData.phone || 'Sem Nome'
+            name: getChatDisplayName(conv.contacts, conv.participants?.[0], conv.title, conv.chat_id)
           }
         };
       });

@@ -10,6 +10,7 @@ import { ChatArea } from '@/components/inbox/ChatArea';
 import { useRealtimeMessages } from '@/hooks/useRealtimeMessages';
 import { ChatSkeleton } from '@/components/inbox/ChatSkeleton';
 import { useRealtimeInbox } from '@/hooks/useRealtimeInbox';
+import { getChatDisplayName } from '@/utils/displayUtils';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { toast } from 'sonner';
 
@@ -57,34 +58,26 @@ export default function InboxPage() {
     if (data) {
       setActiveConvData(data);
 
+      // ✅ FIX: Fallback robusto unificado para o nome
+      const displayName = getChatDisplayName(data.contacts, null, data.title, data.chat_id);
+
       // ✅ FIX: Se contact for null (RLS block ou Grupo), criar fallback
       let contactData = data.contacts;
 
       if (!contactData) {
-        if (data.is_group) {
-          contactData = {
-            id: null,
-            name: data.title || "Grupo",
-            is_group: true,
-            profile_picture_url: null,
-            phone: ""
-          } as any;
-        } else {
-          // DM sem contato visível (RLS ou orfão)
-          contactData = {
-            id: data.contact_id,
-            name: "Sem Nome",
-            is_group: false,
-            profile_picture_url: null,
-            phone: "" // chat_id usually serves as fallback in Header
-          } as any;
-        }
-      } else if (data.is_group) {
-        // ✅ FIX: Se for grupo mas veio JOIN errado (possível em dados antigos), forçar nome do grupo
+        contactData = {
+          id: data.contact_id,
+          name: displayName,
+          is_group: data.is_group,
+          profile_picture_url: null,
+          phone: data.chat_id ? data.chat_id.split('@')[0] : ""
+        } as any;
+      } else {
         contactData = {
           ...contactData,
-          name: data.title || "Grupo",
-          is_group: true
+          name: displayName,
+          is_group: data.is_group,
+          phone: contactData.phone || (data.chat_id ? data.chat_id.split('@')[0] : "")
         };
       }
 

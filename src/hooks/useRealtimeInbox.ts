@@ -71,7 +71,8 @@ export function useRealtimeInbox({ onNewInboundMessage, tab = 'inbox', userId }:
           id: conv.id,
           contact: {
             ...conv.contacts,
-            name: getChatDisplayName(conv.contacts)
+            name: getChatDisplayName(conv.contacts, null, conv.title, conv.chat_id),
+            phone: conv.contacts?.phone || (conv.chat_id ? conv.chat_id.split('@')[0] : "")
           },
           last_message:
             conv.last_message ??
