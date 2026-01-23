@@ -1,7 +1,7 @@
 // @ts-ignore
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 // @ts-ignore
-import { createClient } from "npm:@supabase/supabase-js@2.92.0";
+import { createClient } from "npm:@supabase/supabase-js@2";
 
 declare const Deno: any;
 

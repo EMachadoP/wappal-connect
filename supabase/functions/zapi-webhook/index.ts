@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2?target=deno";
+import { createClient } from "npm:@supabase/supabase-js@2";
 import { isEmployeeSender } from "../_shared/is-employee.ts";
 import { parseAndExtract } from "../_shared/parse.ts";
 
@@ -343,45 +343,48 @@ serve(async (req: Request): Promise<Response> => {
 
     console.log(`[Webhook] Identity: ${fromMe ? 'OUT' : 'IN'} | Key=${hitKey} | JID=${canonicalChatId}`);
 
-    // ✅ 1. RESOLVER CONTATO VIA RPC ATÔMICA (elimina race conditions e duplicações)
-    // A RPC resolve_contact_identity faz:
-    // - Busca por aliases (lid, phone, chatId)
-    // - Cria ou atualiza contato atomicamente
-    // - Registra aliases para futuras resoluções
+    // ✅ 1. RESOLVER CONTATO / GRUPO
+    let contactId: string | null = null;
+    let resolvedChatKey: string | null = canonicalChatIdFinal;
 
     const normalizedName = chatName && chatName !== 'Desconhecido' && !/^\d+$/.test(chatName.replace(/\D/g, ''))
       ? chatName
       : null;
 
-    console.log(`[Webhook] 🔍 Resolvendo contato via RPC V6:`, {
-      lid: currentLid,
-      phone,
-      chatId: canonicalChatIdFinal,
-      name: normalizedName
-    });
+    if (isGroupChat) {
+      console.log(`[Webhook] 👥 Grupo detectado. Ignorando RPC de identidade.`);
+      contactId = null; // Grupo não é contato individual
+    } else {
+      console.log(`[Webhook] 🔍 Resolvendo contato via RPC V6:`, {
+        lid: currentLid,
+        phone,
+        chatId: canonicalChatIdFinal,
+        name: normalizedName
+      });
 
-    const { data: resolved, error: resolveErr } = await supabase.rpc('resolve_contact_identity_v6', {
-      p_lid: currentLid || null,
-      p_phone: phone || null,
-      p_chat_lid: currentLid || null,
-      p_chat_id: canonicalChatIdFinal || null,
-      p_name: normalizedName,
-    });
+      const { data: resolved, error: resolveErr } = await supabase.rpc('resolve_contact_identity_v6', {
+        p_lid: currentLid || null,
+        p_phone: phone || null,
+        p_chat_lid: currentLid || null,
+        p_chat_id: canonicalChatIdFinal || null,
+        p_name: normalizedName,
+      });
 
-    if (resolveErr) {
-      console.error('[Webhook] ❌ resolve_contact_identity failed:', resolveErr);
-      throw new Error(`[zapi-webhook] resolve_contact_identity failed: ${resolveErr.message}`);
+      if (resolveErr) {
+        console.error('[Webhook] ❌ resolve_contact_identity_v6 failed:', resolveErr);
+        throw new Error(`[zapi-webhook] resolve_contact_identity_v6 failed: ${resolveErr.message}`);
+      }
+
+      contactId = resolved?.[0]?.contact_id || null;
+      resolvedChatKey = resolved?.[0]?.out_chat_key || canonicalChatIdFinal;
+
+      if (!contactId) {
+        console.error('[Webhook] ❌ RPC returned no contact_id');
+        throw new Error('[zapi-webhook] missing contactId after resolve');
+      }
+
+      console.log(`[Webhook] ✅ Contato resolvido: ${contactId} (chat_key: ${resolvedChatKey})`);
     }
-
-    const contactId = resolved?.[0]?.contact_id;
-    const resolvedChatKey = resolved?.[0]?.out_chat_key;
-
-    if (!contactId) {
-      console.error('[Webhook] ❌ RPC returned no contact_id');
-      throw new Error('[zapi-webhook] missing contactId after resolve');
-    }
-
-    console.log(`[Webhook] ✅ Contato resolvido: ${contactId} (chat_key: ${resolvedChatKey})`);
 
     // ✅ Thread key CANÔNICA (não depende de phone vs lid)
     const finalThreadKey = isGroupChat
@@ -405,11 +408,13 @@ serve(async (req: Request): Promise<Response> => {
       chat_id: canonicalChatIdFinal,
       thread_key: finalThreadKey,
       contact_id: contactId,
+      title: isGroupChat ? (payload.chatName || 'Grupo') : null, // ✅ Prevent participant name overwrite
       last_message: lastMessagePreview.slice(0, 500),
       last_message_type: msgType,
       last_message_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       status: "open",
+      is_group: isGroupChat,
     };
 
     // ✅ REGRA DE NEGÓCIO: Mensagem INBOUND sempre volta para "Entradas"

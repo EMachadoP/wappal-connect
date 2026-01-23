@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2?target=deno";
+import { createClient } from "npm:@supabase/supabase-js@2";
 import { isEmployeeSender } from "../_shared/is-employee.ts";
 import { parseAndExtract } from "../_shared/parse-extract.ts";
 
@@ -1418,8 +1418,13 @@ REGRAS DE FORMATO - MUITO IMPORTANTE:
       }
     }
 
+    let finalText = generatedText;
+    if (greeting && !generatedText.includes("registrado com sucesso") && !generatedText.includes("Seu chamado foi registrado")) {
+      finalText = greeting + generatedText;
+    }
+
     return new Response(JSON.stringify({
-      text: generatedText,
+      text: finalText,
       provider: provider.provider,
       model: provider.model,
       tokens_in: tokensIn,
