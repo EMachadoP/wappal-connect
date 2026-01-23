@@ -37,12 +37,19 @@ export function useConversations() {
           };
         }
 
+        // DMs: contact pode vir null se RLS bloquear ou não existir
+        const contactData = conv.contacts || {
+          id: conv.contact_id,
+          name: "Sem Nome",
+          phone: ""
+        };
+
         return {
           ...conv,
           contact: {
-            ...conv.contacts,
+            ...contactData,
             // Use participant name if available, otherwise use contact name
-            name: conv.participants?.[0]?.name || conv.contacts?.name || conv.contacts?.phone || 'Sem Nome'
+            name: conv.participants?.[0]?.name || contactData.name || contactData.phone || 'Sem Nome'
           }
         };
       });
