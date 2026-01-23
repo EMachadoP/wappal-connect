@@ -193,7 +193,7 @@ serve(async (req: Request): Promise<Response> => {
       const v0 = (input || "").trim().toLowerCase().replace("@gus", "@g.us");
       if (!v0) return null;
 
-      // ✅ Preserve @lid (never convert to phone JID)
+      // ✅ Preserve @lid
       if (v0.endsWith("@lid")) return v0;
 
       const left = v0.split("@")[0] || "";
@@ -201,22 +201,19 @@ serve(async (req: Request): Promise<Response> => {
       const looksGroup = v0.endsWith("@g.us") || left.includes("-");
 
       if (looksGroup) {
-        // group might come without suffix
         const base = hasAt ? v0 : left;
-        return base.endsWith("@g.us") ? base : `${base}@g.us`;
+        const jid = base.endsWith("@g.us") ? base : `${base}@g.us`;
+        // Double check for @gus@g.us
+        return jid.replace("@gus@g.us", "@g.us");
       }
 
       // user: only digits
       const digits = left.replace(/\D/g, "");
       if (!digits) return null;
 
-      // ✅ PATCH 3: Handle LID-like digits by adding @lid suffix (don't reject!)
-      // If digits >= 14 and NOT starting with 55 (BR), treat as LID and add suffix
+      // LID-like (non-BR 14+ digits)
       const isLidLike = digits.length >= 14 && !digits.startsWith('55');
-      if (isLidLike) {
-        // Return as LID with proper suffix instead of null
-        return `${digits}@lid`;
-      }
+      if (isLidLike) return `${digits}@lid`;
 
       const br = (digits.length === 10 || digits.length === 11) ? `55${digits}` : digits;
       return `${br}@s.whatsapp.net`;
@@ -227,10 +224,8 @@ serve(async (req: Request): Promise<Response> => {
 
     function threadKeyFromChatId(chatId: string) {
       const cid = (chatId || "").trim().toLowerCase();
-
-      if (cid.endsWith("@g.us")) return `group:${cid}`;  // ✅ FIX: usar "group:" para consistência
-      if (cid.endsWith("@lid")) return `u:${cid}`; // ✅ mantém o @lid inteiro
-
+      if (cid.endsWith("@g.us")) return `group:${cid}`;
+      // For DMs, we prefer dm:contactId, but as a fallback/lookup:
       return `u:${cid.split("@")[0]}`;
     }
 

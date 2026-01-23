@@ -51,25 +51,11 @@ const normalizeUserId = (id: string) => {
 
 const getChatKey = (id: string | null | undefined, isGrp: boolean) => {
   if (!id) return null;
-  const raw = id.trim().toLowerCase();
-
-  if (raw.startsWith("g:")) return `g:${normalizeGroupJid(raw)}`;
-  if (raw.startsWith("u:")) {
-    let digits = normalizeUserId(raw);
-    if (!digits) return null;
-    if (digits.endsWith("@lid")) return `u:${digits}`; // LID-first
-    if (digits.length === 10 || digits.length === 11) digits = "55" + digits;
-    return `u:${digits}`;
-  }
-
-  const group = !!isGrp || isLikelyGroupId(raw);
-  if (group) return `g:${normalizeGroupJid(raw)}`;
-
-  let digits = normalizeUserId(raw);
-  if (!digits) return null;
-  if (digits.endsWith("@lid")) return `u:${digits}`; // LID-first
-  if (digits.length === 10 || digits.length === 11) digits = "55" + digits;
-  return `u:${digits}`;
+  const canonical = normalizeChatId(id);
+  if (!canonical) return null;
+  if (canonical.endsWith("@g.us")) return `group:${canonical}`;
+  // For DMs, we use u:digits as internal lookup key (historical)
+  return `u:${canonical.split("@")[0]}`;
 };
 
 const looksLikeGroup = (raw: string) => {
@@ -77,22 +63,41 @@ const looksLikeGroup = (raw: string) => {
   return s.endsWith("@g.us") || /^\d{10,14}-\d+$/.test(s.split("@")[0]);
 };
 
-const formatForZAPI = (id: string, isGrp: boolean): string => {
-  if (!id) return id as any;
+const normalizeChatId = (input: string) => {
+  const v0 = (input || "").trim().toLowerCase().replace("@gus", "@g.us");
+  if (!v0) return null;
 
-  let clean = stripPrefix(id.trim().toLowerCase());
+  // ✅ Preserve @lid
+  if (v0.endsWith("@lid")) return v0;
 
-  // ✅ FIX: Allow LIDs (Z-API accepts them as raw numbers usually, or we pass them through)
-  // if (!isGrp && clean.includes('@lid')) {
-  //   throw new Error(`Tentativa de enviar para LID (${clean}) sem telefone real. Contato precisa ter phone cadastrado.`);
-  // }
+  const left = v0.split("@")[0] || "";
+  const hasAt = v0.includes("@");
+  const looksGroup = v0.endsWith("@g.us") || left.includes("-");
 
-  // Remove any existing suffix first
-  if (clean.includes('@')) {
-    clean = clean.split('@')[0];
+  if (looksGroup) {
+    const base = hasAt ? v0 : left;
+    const jid = base.endsWith("@g.us") ? base : `${base}@g.us`;
+    // Double check for @gus@g.us
+    return jid.replace("@gus@g.us", "@g.us");
   }
 
-  // ✅ Validar se é um número válido (11-15 dígitos para incluir LIDs)
+  // user: only digits
+  const digits = left.replace(/\D/g, "");
+  if (!digits) return null;
+
+  // LID-like (non-BR 14+ digits)
+  const isLidLike = digits.length >= 14 && !digits.startsWith('55');
+  if (isLidLike) return `${digits}@lid`;
+
+  const br = (digits.length === 10 || digits.length === 11) ? `55${digits}` : digits;
+  return `${br}@s.whatsapp.net`;
+};
+
+const formatForZAPI = (id: string, isGrp: boolean): string => {
+  if (!id) return id as any;
+  let clean = stripPrefix(id.trim().toLowerCase());
+  if (clean.includes('@')) clean = clean.split('@')[0];
+
   if (!isGrp) {
     const onlyDigits = clean.replace(/\D/g, '');
     if (onlyDigits.length < 10 || onlyDigits.length > 15) {
@@ -100,8 +105,6 @@ const formatForZAPI = (id: string, isGrp: boolean): string => {
     }
   }
 
-  // Para grupos, adicionar @g.us
-  // Para usuários e LIDs, retornar apenas os dígitos
   return isGrp ? `${clean}@g.us` : clean;
 };
 
@@ -667,12 +670,16 @@ serve(async (req: Request) => {
     }
 
     // ✅ ROBUST CONVERSATION RESOLUTION (App Sync Fix)
-    const cleanJid = formattedRecipient.trim().toLowerCase().replace(/^(u:|g:)/i, "");
+    const canonicalChatIdFinal = normalizeChatId(String(recipient));
+    if (!canonicalChatIdFinal) throw new Error("Falha ao normalizar destinatário para conversa.");
 
-    // ✅ FIX: Remover duplicate cleanJid
-    const candidateKeys = finalIsGroup
-      ? [cleanJid, `g:${cleanJid}`]
-      : [cleanJid, `u:${cleanJid}`];
+    const candidateKeys = [canonicalChatIdFinal.split('@')[0]];
+    if (finalIsGroup) {
+      candidateKeys.push(`group:${canonicalChatIdFinal}`);
+    } else {
+      // DM: Try dm:contactId fallback is hard without contactId here, but we try the phone/lid versions
+      candidateKeys.push(`u:${canonicalChatIdFinal.split('@')[0]}`);
+    }
 
     const { data: convRow } = await supabaseAdmin
       .from("conversations")
