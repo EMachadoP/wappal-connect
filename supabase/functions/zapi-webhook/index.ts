@@ -182,9 +182,21 @@ serve(async (req: Request): Promise<Response> => {
       if (!s) return s;
       s = stripPrefix(s);
       s = s.replace(/\s+/g, '');
-      const base = s.includes('@') ? s.split('@')[0] : s;
-      const base2 = base.endsWith('-group') ? base.slice(0, -'-group'.length) : base;
-      return `${base2}@g.us`;
+      const baseRaw = s.includes('@') ? s.split('@')[0] : s;
+      const base = baseRaw.endsWith('-group') ? baseRaw.slice(0, -'-group'.length) : baseRaw;
+
+      // ✅ FIX: Injetar hífen em IDs de grupo formato [criador][timestamp] se estiver faltando
+      // Ex: 5581974384301496317602 -> 558197438430-1496317602
+      if (!base.includes('-') && /^\d{18,22}$/.test(base)) {
+        // Assume os últimos 10 dígitos como timestamp (padrão WhatsApp)
+        const phonePart = base.slice(0, -10);
+        const timestampPart = base.slice(-10);
+        const dashVersion = `${phonePart}-${timestampPart}@g.us`;
+        console.log(`[Webhook] Normalizing group JID: ${base} -> ${dashVersion}`);
+        return dashVersion;
+      }
+
+      return `${base}@g.us`;
     };
 
     const onlyDigits = (v?: string | null) => (v ?? "").replace(/\D/g, "");
@@ -202,9 +214,8 @@ serve(async (req: Request): Promise<Response> => {
 
       if (looksGroup) {
         const base = hasAt ? v0 : left;
-        const jid = base.endsWith("@g.us") ? base : `${base}@g.us`;
-        // Double check for @gus@g.us
-        return jid.replace("@gus@g.us", "@g.us");
+        // Re-use our robust group normalization
+        return normalizeGroupJid(base);
       }
 
       // user: only digits
