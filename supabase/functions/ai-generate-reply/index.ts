@@ -939,6 +939,27 @@ serve(async (req) => {
         }
       }
 
+      // ✅ NEW: Proactive condo detection from history if still missing ID
+      if (!hasIdentifiedCondo && conversationId) {
+        const candidate = findRecentCondoCandidate(messagesNoSystem);
+        if (candidate) {
+          console.log(`[AI] Proactive condo candidate found in history: "${candidate}"`);
+          const r = await resolveCondoByTokens(supabase, candidate);
+          if (r.kind === "matched") {
+            await supabase.from("conversations").update({
+              active_condominium_id: r.condo.id,
+              active_condominium_confidence: 0.8 // Found in history context
+            }).eq("id", conversationId);
+            hasIdentifiedCondo = true;
+          } else if (r.kind === "not_found") {
+            // Store as raw name to avoid asking again
+            await supabase.from("conversations").update({
+              pending_payload: { ...pendingPayload, condo_raw_name: candidate }
+            }).eq("id", conversationId);
+          }
+        }
+      }
+
       // ✅ FIX: Escape hatch with condoStepDone flag
       if (pendingField === "condominium_name") {
         let condoStepDone = false;
@@ -1148,7 +1169,12 @@ serve(async (req) => {
         // Choose variation deterministic (stable)
         let h = 0; const seed = `${conversationId}:${protocolCode}`;
         for (let i = 0; i < seed.length; i++) h = ((h * 31) + seed.charCodeAt(i)) >>> 0;
-        const msg = CONFIRMS[h % CONFIRMS.length];
+        let msg = CONFIRMS[h % CONFIRMS.length];
+
+        // ✅ FIX: Only add footer if we REALLY don't have condo info
+        if (!hasCondoInfo) {
+          msg += "\n\nPra agilizar, me diga o condomínio quando puder (pode ser só o nome mesmo).";
+        }
 
         return new Response(JSON.stringify({
           text: msg,
@@ -1351,7 +1377,7 @@ REGRAS DE FORMATO - MUITO IMPORTANTE:
 
         generatedText = lines.join("\n");
 
-        if (!activeCondoId) {
+        if (!hasCondoInfo) {
           generatedText += "\n\nPra agilizar, me diga o condomínio quando puder (pode ser só o nome mesmo).";
         }
       } catch (e) {

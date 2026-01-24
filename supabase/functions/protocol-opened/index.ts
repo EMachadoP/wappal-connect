@@ -50,7 +50,8 @@ serve(async (req: Request): Promise<Response> => {
         due_date, 
         conversation_id,
         condominium_id,
-        condominiums!inner(name),
+        condominium_raw_name,
+        condominiums(name),
         conversations(id, contact_id, contacts(id, name, phone, chat_lid, lid, chat_key, is_group))
       `);
 
@@ -76,8 +77,8 @@ serve(async (req: Request): Promise<Response> => {
       throw new Error(`ID do grupo técnico inválido. Recebido: ${techGroupIdRaw}, Normalizado: ${techGroupId}`);
     }
 
-    // ✅ FIX: Acessar nome do condomínio via JOIN
-    const condominiumName = protocol.condominiums?.name || "Não Identificado";
+    // ✅ FIX: Acessar nome do condomínio via JOIN ou fallback para raw_name
+    const condominiumName = (protocol as any).condominiums?.name || protocol.condominium_raw_name || "Não Identificado";
 
     const code = protocol.protocol_code.startsWith("G7-") ? protocol.protocol_code : `G7-${protocol.protocol_code}`;
     const sequenceCode = protocol.protocol_code; // Ex: 202601-0100-PG0
