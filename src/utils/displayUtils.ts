@@ -45,8 +45,10 @@ export function getChatDisplayName(
     }
 
     // 3. Handle groups
-    if (contact?.is_group && contact.group_name) {
-        return contact.group_name;
+    if (contact?.is_group || (chatId && chatId.endsWith('@g.us'))) {
+        if (contact?.group_name) return contact.group_name;
+        if (title && title !== 'Grupo' && title !== 'Sem Nome') return title;
+        if (contact?.name && contact.name !== 'Contact' && contact.name !== 'Unknown') return contact.name;
     }
 
     // 4. Fallback to contact name

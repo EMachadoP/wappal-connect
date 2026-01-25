@@ -145,7 +145,11 @@ export function ConversationList({
             <ConversationItem
               key={conv.id}
               id={conv.id}
-              contactName={conv.is_group ? (conv.title || "Grupo") : (conv.contact?.name || "Sem Nome")}
+              contactName={
+                conv.is_group === true
+                  ? (conv.title || conv.contact?.name || "Grupo")
+                  : (conv.contact?.name || conv.title || "Sem Nome")
+              }
               contactImageUrl={conv.contact?.profile_picture_url}
               lastMessage={conv.last_message}
               lastMessageType={conv.last_message_type}
