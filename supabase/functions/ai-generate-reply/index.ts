@@ -540,7 +540,7 @@ async function acquireLock(supabase: any, conversationId: string) {
 
 // --- SERVE ---
 
-serve(async (req) => {
+serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   const startTime = Date.now();

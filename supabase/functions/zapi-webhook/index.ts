@@ -263,7 +263,7 @@ serve(async (req: Request): Promise<Response> => {
 
     // ✅ PATCH 3: phone primeiro quando existir (evita 2 conversas)
     let rawIdentity = isGroup
-      ? pickFirst(rawChatId, normalizedPhone)  // ✅ FIX: fallback phone para grupos
+      ? rawChatId // ✅ FIX: grupos NUNCA usam phone, apenas chat_id
       : (fromMe
         ? pickFirst(normalizedPhone, rawChatId, normalizedLid)   // OUT: phone primeiro
         : pickFirst(rawChatId, normalizedPhone, normalizedLid)); // IN: chatId/phone antes de LID
@@ -328,7 +328,7 @@ serve(async (req: Request): Promise<Response> => {
       : canonicalChatId;
 
     const canonicalChatIdFinal = isGroupChat
-      ? normalizeGroupJid(preferredChatId || canonicalChatId)  // ✅ FIX: Normalizar grupos
+      ? normalizeGroupJid(canonicalChatId || rawChatId || '')  // ✅ FIX: Ensure string
       : (preferredChatId || canonicalChatId);
     const hitKey = threadKeyFromChatId(canonicalChatIdFinal);
 
@@ -341,8 +341,8 @@ serve(async (req: Request): Promise<Response> => {
     // ✅ FIX: Conversation naming prioritization
     let chatName: string;
     if (isGroupChat) {
-      // For groups, always prioritize the group's name
-      chatName = payload.chatName || payload.contact?.name || 'Grupo sem nome';
+      // For groups, always prioritize the group's name from multiple sources
+      chatName = payload.chatName || payload.contact?.name || payload.senderName || 'Grupo sem nome';
     } else if (fromMe) {
       chatName = payload.chatName || payload.contact?.name || payload.recipientName ||
         (canonicalChatId.split('@')[0]) || 'Desconhecido';
