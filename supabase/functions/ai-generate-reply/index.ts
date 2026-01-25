@@ -136,7 +136,9 @@ function scoreCondoCandidate(userTokens: string[], condoName: string): number {
   let hit = 0;
   for (const tok of userTokens) if (n.includes(tok)) hit++;
   const all = (userTokens.length > 0 && hit === userTokens.length);
-  return (hit * 10) + (all ? 100 : 0);
+  // ✅ FIX: Massive bonus for "Golden Match" (substring or full containment)
+  const exactSubstring = n.includes(userTokens.join(" ")) || userTokens.join(" ").includes(n);
+  return (hit * 10) + (all ? 100 : 0) + (exactSubstring ? 50 : 0);
 }
 
 // ✅ NEW: Help identify if contact name is a generic building role
@@ -204,7 +206,9 @@ async function resolveCondoByTokens(supabase: any, userText: string) {
   const second = list[1];
 
   const bestHasAll = best.score >= 100;
-  const clearWin = !second || (best.score - second.score) >= 50;
+  // ✅ FIX: Relaxed threshold. If abs score is high (>80), even small diff is enough.
+  const diff = second ? (best.score - second.score) : 100;
+  const clearWin = !second || diff >= 50 || (best.score >= 80 && diff >= 20);
 
   // ✅ UX FIX: If ONLY ONE candidate is found, accept it even if not a "clearWin" or "bestHasAll"
   // This prevents "I found 1 condo. Is it Puerto Montt?" when there is no other choice.
@@ -604,7 +608,20 @@ serve(async (req: Request) => {
 
       // Se o usuário mandou algo útil, usa como summary novo (mais recente)
       const newSummary = hasUsefulText(lastUserMsgText) ? lastUserMsgText : summaryFromPayload;
-      const activeCondoId = convState?.active_condominium_id || payload?.active_condominium_id;
+
+      // ✅ FIX: CONTEXT AWARENESS - Check active_condominium_id BEFORE asking
+      let activeCondoId = convState?.active_condominium_id || payload?.active_condominium_id;
+      let activeCondoName = null;
+
+      if (!activeCondoId && conversationId) {
+        // Double check DB if missing in state
+        const { data: c } = await supabase.from('conversations').select('active_condominium_id, condominiums(name)').eq('id', conversationId).single();
+        if (c?.active_condominium_id) {
+          activeCondoId = c.active_condominium_id;
+          activeCondoName = c.condominiums?.name;
+          console.log(`[STATE] 🧠 Context Aware: Found active_condominium_id=${activeCondoId}`);
+        }
+      }
 
       try {
         const ticketData = await executeCreateProtocol(
@@ -613,7 +630,9 @@ serve(async (req: Request) => {
           {
             summary: (newSummary || summaryFromPayload).slice(0, 500),
             priority: priorityFromPayload,
-            apartment: aptFromPayload
+            apartment: aptFromPayload,
+            condominium_id: activeCondoId, // Inject context
+            condominium_name: activeCondoName
           }
         );
 
