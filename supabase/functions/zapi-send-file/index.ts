@@ -185,7 +185,7 @@ serve(async (req) => {
         message_type: messageType,
         content: caption || file_name || null,
         media_url: file_url,
-        whatsapp_message_id: zapiResult.messageId || zapiResult.zapiMessageId,
+        provider_message_id: zapiResult.messageId || zapiResult.zapiMessageId,
         sent_at: new Date().toISOString(),
         direction: 'outbound',
         status: 'sent',
