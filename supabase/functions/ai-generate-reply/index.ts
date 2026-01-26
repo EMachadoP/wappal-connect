@@ -582,6 +582,14 @@ serve(async (req: Request) => {
     // ✅ If app sent short context, hydrate from DB to avoid repetition
     messagesNoSystem = await hydrateMessagesFromDbIfNeeded(supabase, conversationId, messagesNoSystem);
 
+    // ✅ FIX: Verificar se é primeira interação (sem histórico de assistant)
+    const assistantMessages = messagesNoSystem.filter((m: any) => m.role === 'assistant');
+    const isFirstInteraction = assistantMessages.length === 0;
+
+    if (isFirstInteraction) {
+      console.log('[AI] 👋 First interaction detected - will follow greeting flow, no auto-protocol');
+    }
+
     // Get last user message and recent context
     const lastUserMsg = getLastByRole(messagesNoSystem, 'user');
     const lastUserMsgText = (lastUserMsg?.content || "").trim();
@@ -1146,14 +1154,33 @@ serve(async (req: Request) => {
     const hasIdentifiedCondoId = Boolean(convData?.active_condominium_id);
     const hasCondoInfo = hasIdentifiedCondoId || Boolean(condoRawName && String(condoRawName).trim().length > 0);
 
-    const canOpenNow = hasCondoInfo && hasOperationalContext && (!needsApartment || Boolean(aptCandidate));
+    // ✅ FIX: Exigir histórico mínimo de conversa antes de abrir protocolo automaticamente
+    // Isso garante que a IA teve chance de fazer triagem conforme o script
+    const messageCount = messagesNoSystem?.length || 0;
+    const hasMinimumConversation = messageCount >= 6; // Pelo menos 3 trocas (user + assistant)
+
+    // ✅ FIX: Verificar se a IA já fez pelo menos uma pergunta de triagem
+    const aiAskedQuestion = messagesNoSystem.some((m: any) =>
+      m.role === 'assistant' && /\?/.test(m.content)
+    );
+
+    const canOpenNow = hasCondoInfo && hasOperationalContext && (!needsApartment || Boolean(aptCandidate)) && hasMinimumConversation && aiAskedQuestion;
 
     // ✅ FIX: re-declare for downstream uses
     const isProvidingApartment = Boolean(extractApartment(lastUserMsgText)) && hasOperationalContext;
-    const isProvidingApartmentWithCondo = isProvidingApartment && hasCondoInfo;
+    const isProvidingApartmentWithCondo = isProvidingApartment && hasCondoInfo && hasMinimumConversation;
     const canActuallyOpen = canOpenNow;
 
-    if (conversationId && (canActuallyOpen || isProvidingApartmentWithCondo)) {
+    // ✅ FIX: Log para debug
+    if (canOpenNow && !hasMinimumConversation) {
+      console.log(`[AI] ⏸️ Skipping auto-open: insufficient conversation history (${messageCount} messages, need 6+)`);
+    }
+    if (canOpenNow && !aiAskedQuestion) {
+      console.log(`[AI] ⏸️ Skipping auto-open: AI hasn't asked any questions yet`);
+    }
+
+    // ✅ FIX: NUNCA abrir protocolo automaticamente na primeira interação
+    if (conversationId && (canActuallyOpen || isProvidingApartmentWithCondo) && !isFirstInteraction) {
       try {
         const ticketData = await executeCreateProtocol(
           supabase,
@@ -1276,7 +1303,12 @@ REGRAS DE FORMATO - MUITO IMPORTANTE:
       type: "function",
       function: {
         name: "create_protocol",
-        description: "Registra tecnicamente um problema de condomínio para a equipe operacional.",
+        description: `REGRAS OBRIGATÓRIAS ANTES DE USAR ESTA FERRAMENTA:
+1. NÃO usar na primeira mensagem do cliente
+2. PRIMEIRO fazer perguntas de triagem para entender o problema
+3. SÓ chamar após ter TODOS os dados: nome do condomínio + descrição clara do problema + nome do solicitante + apartamento (se for problema de unidade)
+4. Se faltar qualquer dado, perguntar ao cliente ANTES de chamar esta ferramenta
+5. Seguir o fluxo: saudação → entender problema → testes rápidos → coletar dados → só então registrar`,
         parameters: {
           type: "object",
           properties: {
@@ -1356,19 +1388,12 @@ REGRAS DE FORMATO - MUITO IMPORTANTE:
     }
 
     // --- FALLBACK INTENT DETECTION ---
+    // ✅ FIX: DESATIVADO - Este fallback força abertura indesejada
+    // A IA deve chamar a tool explicitamente via tool_call, não por regex no texto
     const aiSaidWillRegister = /vou registrar|vou abrir|vou encaminhar|registrei/i.test(generatedText);
-    // ✅ Don't trigger fallback when in pending state
     if (!pf && !functionCall && aiSaidWillRegister) {
-      console.warn('FALLBACK: Intent detected. Forcing protocol creation...');
-      functionCall = {
-        name: 'create_protocol',
-        args: {
-          summary: (lastIssueMsg?.content || buildSummaryFromRecentUserMessages(messagesNoSystem)).slice(0, 500),
-          priority: /travado|urgente|urgência|emergência/i.test(recentText) ? 'critical' : 'normal',
-          apartment: aptCandidate,
-          requester_name: pp?.requester_name || undefined
-        }
-      };
+      // ✅ APENAS LOG - NÃO forçar abertura
+      console.log('[AI] 📝 Intent detected in text but NOT forcing protocol. AI should use tool_call explicitly.');
     }
 
     // Implementation of Tool call (if triggered by AI or Fallback)
