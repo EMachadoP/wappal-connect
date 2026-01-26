@@ -170,13 +170,18 @@ serve(async (req) => {
     }
 
     // Save message to database
+    // ✅ FIX: Added chat_id and ensured sender_id is valid UUID
+    const isValidUuid = (uid: any) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(uid));
+
     const { data: message, error: msgError } = await supabase
       .from('messages')
       .insert({
         conversation_id,
+        chat_id: recipientPhone, // ✅ Alinhamento com zapi-send-message
         sender_type: 'agent',
-        sender_id,
+        sender_id: isValidUuid(sender_id) ? sender_id : null,
         agent_name: sender_name || 'Atendente G7',
+        sender_name: sender_name || 'Atendente G7',
         message_type: messageType,
         content: caption || file_name || null,
         media_url: file_url,
@@ -191,7 +196,10 @@ serve(async (req) => {
 
     if (msgError) {
       console.error('Error saving message:', msgError);
-      throw msgError;
+      return new Response(JSON.stringify({ error: 'Error saving message to database', details: msgError }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     // Update conversation
