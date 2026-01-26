@@ -20,6 +20,7 @@ export function AppLayout({ children, hideHeader = false, hideBottomNav = false 
 
       <main className={cn(
         "flex-1 flex flex-col min-h-0",
+        isMobile && "pt-safe mt-2",
         isMobile && !hideBottomNav ? 'pb-bottom-nav' : 'pb-safe'
       )}>
         {children}

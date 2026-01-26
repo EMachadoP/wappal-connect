@@ -124,7 +124,7 @@ serve(async (req) => {
         .maybeSingle();
 
       if (check1 && check1.id !== initialId) {
-        console.log('[ai-maybe-reply] Debounce: Nova msg após 4s. Abortando.');
+        console.log('[ai-maybe-reply] ⏸️ Debounce: Nova msg após 4s. Abortando.', { current: check1.id, expected: initialId });
         await logAiSkip(supabase, conversation_id, {
           status: 'skipped',
           skip_reason: 'debounced',
@@ -145,7 +145,7 @@ serve(async (req) => {
         .maybeSingle();
 
       if (check2 && check2.id !== initialId) {
-        console.log('[ai-maybe-reply] Debounce: Nova msg após 6s. Abortando.');
+        console.log('[ai-maybe-reply] ⏸️ Debounce: Nova msg após 6s. Abortando.', { current: check2.id, expected: initialId });
         return new Response(JSON.stringify({ success: false, reason: 'Debounced at 6s' }));
       }
 
@@ -159,7 +159,7 @@ serve(async (req) => {
         .maybeSingle();
 
       if (latestInbound?.id && initialId && latestInbound.id !== initialId) {
-        console.log('[ai-maybe-reply] ⏭️ Atropelado por mensagem mais nova, cancelando resposta.');
+        console.log('[ai-maybe-reply] ⏭️ Atropelado por mensagem mais nova, cancelando resposta.', { latest: latestInbound.id, initial: initialId });
         await logAiSkip(supabase, conversation_id, {
           status: 'skipped',
           skip_reason: 'debounced',
@@ -168,7 +168,7 @@ serve(async (req) => {
         return new Response(JSON.stringify({ success: false, reason: 'superseded_by_newer_inbound' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
 
-      console.log('[ai-maybe-reply] Processando...');
+      console.log('[ai-maybe-reply] 🚀 Debounce finalizado. Iniciando processamento...');
 
       // 2. Carregar dados da conversa e configurações
       const { data: conv } = await supabase

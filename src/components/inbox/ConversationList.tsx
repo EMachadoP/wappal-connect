@@ -97,10 +97,10 @@ export function ConversationList({
               variant="default"
               size="sm"
               onClick={() => setNewMessageModalOpen(true)}
-              className="gap-2 h-8 px-3"
+              className="gap-2 h-8 px-2 sm:px-3"
             >
               <Plus className="w-4 h-4" />
-              Nova Conversa
+              <span className="hidden sm:inline">Nova Conversa</span>
             </Button>
           </div>
         </div>

@@ -1162,12 +1162,15 @@ serve(async (req: Request) => {
     // ✅ FIX: NUNCA responder deterministicamente se a última mensagem for uma pergunta
     const isQuestion = lastUserMsgText.endsWith('?');
 
-    // ✅ FIX: Verificar se a IA já fez pelo menos uma pergunta de triagem
+    // ✅ FIX: Verificar se a IA já fez pelo menos uma pergunta de triagem (ou se já tem contexto operacional forte)
     const aiAskedQuestion = messagesNoSystem.some((m: any) =>
       m.role === 'assistant' && /\?/.test(m.content)
     );
 
-    const canOpenNow = hasCondoInfo && hasOperationalContext && (!needsApartment || Boolean(aptCandidate)) && hasMinimumConversation && aiAskedQuestion && !isQuestion;
+    // Se o contexto operacional é muito forte (ex: "portão quebrado"), relaxamos a exigência de pergunta prévia da IA
+    const strongOperationalContext = /quebrado|parado|não funciona|travou|emergência/i.test(recentText);
+
+    const canOpenNow = hasCondoInfo && hasOperationalContext && (!needsApartment || Boolean(aptCandidate)) && (hasMinimumConversation || strongOperationalContext) && (aiAskedQuestion || strongOperationalContext) && !isQuestion;
 
     // ✅ FIX: re-declare for downstream uses
     const isProvidingApartment = Boolean(extractApartment(lastUserMsgText)) && hasOperationalContext;
@@ -1175,10 +1178,10 @@ serve(async (req: Request) => {
     const canActuallyOpen = canOpenNow;
 
     // ✅ FIX: Log para debug
-    if (canOpenNow && !hasMinimumConversation) {
+    if (canOpenNow && !hasMinimumConversation && !strongOperationalContext) {
       console.log(`[AI] ⏸️ Skipping auto-open: insufficient conversation history (${messageCount} messages, need 6+)`);
     }
-    if (canOpenNow && !aiAskedQuestion) {
+    if (canOpenNow && !aiAskedQuestion && !strongOperationalContext) {
       console.log(`[AI] ⏸️ Skipping auto-open: AI hasn't asked any questions yet`);
     }
 
