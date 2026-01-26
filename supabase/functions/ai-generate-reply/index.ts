@@ -455,7 +455,8 @@ async function executeCreateProtocol(
     requester_name: args.requester_name || (convWithPayload?.contacts as any)?.name || 'Não informado',
     requester_role: args.requester_role || 'Morador',
     apartment: args.apartment,
-    notify_group: true // IMPORTANT: Triggers WhatsApp + Asana
+    notify_group: true, // IMPORTANT: Triggers WhatsApp + Asana
+    notify_client: false // ✅ AI handles the response back to user
   };
 
   console.log('[TICKET] Calling create-protocol with body:', bodyObj);
@@ -1155,16 +1156,18 @@ serve(async (req: Request) => {
     const hasCondoInfo = hasIdentifiedCondoId || Boolean(condoRawName && String(condoRawName).trim().length > 0);
 
     // ✅ FIX: Exigir histórico mínimo de conversa antes de abrir protocolo automaticamente
-    // Isso garante que a IA teve chance de fazer triagem conforme o script
     const messageCount = messagesNoSystem?.length || 0;
     const hasMinimumConversation = messageCount >= 6; // Pelo menos 3 trocas (user + assistant)
+
+    // ✅ FIX: NUNCA responder deterministicamente se a última mensagem for uma pergunta
+    const isQuestion = lastUserMsgText.endsWith('?');
 
     // ✅ FIX: Verificar se a IA já fez pelo menos uma pergunta de triagem
     const aiAskedQuestion = messagesNoSystem.some((m: any) =>
       m.role === 'assistant' && /\?/.test(m.content)
     );
 
-    const canOpenNow = hasCondoInfo && hasOperationalContext && (!needsApartment || Boolean(aptCandidate)) && hasMinimumConversation && aiAskedQuestion;
+    const canOpenNow = hasCondoInfo && hasOperationalContext && (!needsApartment || Boolean(aptCandidate)) && hasMinimumConversation && aiAskedQuestion && !isQuestion;
 
     // ✅ FIX: re-declare for downstream uses
     const isProvidingApartment = Boolean(extractApartment(lastUserMsgText)) && hasOperationalContext;
@@ -1197,6 +1200,7 @@ serve(async (req: Request) => {
         );
 
         const protocolCode = ticketData.protocol?.protocol_code || ticketData.protocol_code;
+        const officialCode = protocolCode.startsWith("G7-") ? protocolCode : `G7-${protocolCode}`;
 
         // Limpar estados pendentes após sucesso
         await supabase.from("conversations").update({
@@ -1207,10 +1211,10 @@ serve(async (req: Request) => {
 
         // Protocol confirmation variations
         const CONFIRMS = [
-          `Certo. Chamado registrado sob o protocolo ${protocolCode}. Já encaminhei para a equipe operacional e seguimos por aqui.`,
-          `Perfeito — protocolei como ${protocolCode}. Já direcionei para a equipe operacional e vamos acompanhando por aqui.`,
-          `Entendido. Protocolo ${protocolCode} registrado e encaminhado. Qualquer ajuste ou detalhe, me avise por aqui.`,
-          `Combinado. Registrei o chamado (${protocolCode}) e já deixei encaminhado para a equipe. Seguimos por aqui.`
+          `Certo. Chamado registrado sob o protocolo ${officialCode}. Já encaminhei para a equipe operacional e seguimos por aqui.`,
+          `Perfeito — protocolei como ${officialCode}. Já direcionei para a equipe operacional e vamos acompanhando por aqui.`,
+          `Entendido. Protocolo ${officialCode} registrado e encaminhado. Qualquer ajuste ou detalhe, me avise por aqui.`,
+          `Combinado. Registrei o chamado (${officialCode}) e já deixei encaminhado para a equipe. Seguimos por aqui.`
         ];
         // Choose variation deterministic (stable)
         let h = 0; const seed = `${conversationId}:${protocolCode}`;
