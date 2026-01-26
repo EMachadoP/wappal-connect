@@ -77,6 +77,12 @@ serve(async (req) => {
     const lock = await tryAcquireLock(supabase, conversation_id, 60);
     if (!lock.ok) {
       console.log("[ai-maybe-reply] Concurrency Limit: locked", { conversation_id });
+      await supabase.from('ai_logs').insert({
+        conversation_id,
+        status: 'skipped',
+        error_message: 'Concurrency Limit: locked',
+        model: 'ai-maybe-reply'
+      });
       // Retorna OK para o webhook, mas aborta a IA silenciosamente
       return new Response(JSON.stringify({ ok: true, skipped: "locked" }), { status: 200, headers: corsHeaders });
     }
@@ -114,6 +120,12 @@ serve(async (req) => {
 
       if (check1 && check1.id !== initialId) {
         console.log('[ai-maybe-reply] Debounce: Nova msg após 4s. Abortando.');
+        await supabase.from('ai_logs').insert({
+          conversation_id,
+          status: 'skipped',
+          error_message: 'Debounce: New message after 4s',
+          model: 'ai-maybe-reply'
+        });
         return new Response(JSON.stringify({ success: false, reason: 'Debounced at 4s' }));
       }
 
@@ -149,6 +161,12 @@ serve(async (req) => {
       // ✅ FIX: Se já chegou uma mensagem mais nova, esta execução foi "atropelada"
       if (latestInbound?.id && initialId && latestInbound.id !== initialId) {
         console.log('[ai-maybe-reply] ⏭️ Atropelado por mensagem mais nova, cancelando resposta.');
+        await supabase.from('ai_logs').insert({
+          conversation_id,
+          status: 'skipped',
+          error_message: 'Superseded by newer inbound',
+          model: 'ai-maybe-reply'
+        });
         return new Response(JSON.stringify({ success: false, reason: 'superseded_by_newer_inbound' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
 
