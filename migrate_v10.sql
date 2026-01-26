@@ -69,6 +69,7 @@ BEGIN
 END $$;
 
 -- 4) Upgrade RPC resolve_contact_identity_v6 (v7 logic)
+-- 4) Upgrade RPC resolve_contact_identity_v6 (Refined Logic)
 CREATE OR REPLACE FUNCTION public.resolve_contact_identity_v6(
   p_lid      TEXT,
   p_phone    TEXT,
@@ -85,71 +86,71 @@ DECLARE
   v_chat_key TEXT;
   v_digits_from_chat_id TEXT := regexp_replace(COALESCE(p_chat_id,''), '\D', '', 'g');
   v_digits_from_phone   TEXT := regexp_replace(COALESCE(p_phone,''),   '\D', '', 'g');
-  v_candidates UUID[];
-  v_variant1 TEXT;
-  v_name     TEXT := NULLIF(BTRIM(COALESCE(p_name,'')), '');
   v_chat_lid TEXT := NULLIF(BTRIM(COALESCE(p_chat_lid,'')), '');
   v_lid      TEXT := NULLIF(BTRIM(COALESCE(p_lid,'')), '');
+  v_name     TEXT := NULLIF(BTRIM(COALESCE(p_name,'')), '');
 BEGIN
-  IF v_chat_lid IS NOT NULL THEN
-    SELECT c.id INTO v_existing_id FROM public.contacts c WHERE c.chat_lid = v_chat_lid OR c.lid = v_chat_lid LIMIT 1;
+  -- 1) Tentar match por LID/ChatLID (Alta Prioridade)
+  IF v_chat_lid IS NOT NULL OR v_lid IS NOT NULL THEN
+    SELECT id INTO v_existing_id 
+    FROM public.contacts 
+    WHERE chat_lid IN (v_chat_lid, v_lid) 
+       OR lid IN (v_chat_lid, v_lid) 
+    ORDER BY created_at ASC LIMIT 1;
+
     IF v_existing_id IS NOT NULL THEN
       SELECT c.chat_key INTO v_chat_key FROM public.contacts c WHERE c.id = v_existing_id;
-      RETURN QUERY SELECT v_existing_id, v_chat_key, v_chat_key, 'chat_lid_match'::text;
+      RETURN QUERY SELECT v_existing_id, v_chat_key, v_chat_key, 'lid_match'::text;
       RETURN;
     END IF;
   END IF;
 
+  -- 2) Tentar match por ChatId exato (@s.whatsapp.net ou @g.us)
+  IF p_chat_id IS NOT NULL AND p_chat_id ~ '@' THEN
+    SELECT id INTO v_existing_id 
+    FROM public.contacts 
+    WHERE chat_id = p_chat_id 
+    ORDER BY created_at ASC LIMIT 1;
+
+    IF v_existing_id IS NOT NULL THEN
+      SELECT c.chat_key INTO v_chat_key FROM public.contacts c WHERE c.id = v_existing_id;
+      RETURN QUERY SELECT v_existing_id, v_chat_key, v_chat_key, 'chat_id_match'::text;
+      RETURN;
+    END IF;
+  END IF;
+
+  -- 3) Normalizar Key (Dígitos) e tentar match por chat_key ou phone
   v_chat_key := NULLIF(v_digits_from_chat_id, '');
   IF v_chat_key IS NULL THEN v_chat_key := NULLIF(v_digits_from_phone, ''); END IF;
 
-  IF v_chat_key IS NOT NULL AND length(v_chat_key) < 10 THEN
-    RETURN QUERY SELECT NULL::uuid, v_chat_key, v_chat_key, 'refused_too_short'::text;
-    RETURN;
-  END IF;
-
   IF v_chat_key IS NOT NULL THEN
-    SELECT c.id INTO v_existing_id
-    FROM public.contacts c
-    WHERE c.chat_key = v_chat_key 
-       OR regexp_replace(COALESCE(c.phone,''), '\D', '', 'g') = v_chat_key
-       OR c.chat_key = 'u:' || v_chat_key
-    ORDER BY c.updated_at DESC NULLS LAST
+    -- Desempate: LID > Phone > Oldest
+    SELECT id INTO v_existing_id
+    FROM public.contacts
+    WHERE chat_key = v_chat_key 
+       OR regexp_replace(COALESCE(phone,''), '\D', '', 'g') = v_chat_key
+       OR chat_key = 'u:' || v_chat_key -- fallback para chaves legadas ainda não normalizadas
+    ORDER BY (lid IS NOT NULL) DESC, (phone IS NOT NULL) DESC, created_at ASC
     LIMIT 1;
 
     IF v_existing_id IS NOT NULL THEN
-      UPDATE public.contacts c SET 
-        chat_lid = COALESCE(v_chat_lid, c.chat_lid),
-        lid      = COALESCE(v_lid,      c.lid),
-        phone    = COALESCE(v_chat_key,  c.phone),
-        name     = CASE WHEN c.name IS NULL OR c.name ~ '^\d+$' THEN COALESCE(v_name, c.name) ELSE c.name END,
+      UPDATE public.contacts SET 
+        chat_id = COALESCE(chat_id, p_chat_id),
+        chat_lid = COALESCE(chat_lid, v_chat_lid),
+        lid = COALESCE(lid, v_lid),
+        phone = COALESCE(phone, v_chat_key),
+        name = CASE WHEN name IS NULL OR name ~ '^\d+$' THEN COALESCE(v_name, name) ELSE name END,
         updated_at = now()
-      WHERE c.id = v_existing_id;
-      RETURN QUERY SELECT v_existing_id, v_chat_key, v_chat_key, 'chat_key_or_phone_match'::text;
+      WHERE id = v_existing_id;
+      
+      SELECT c.chat_key INTO v_chat_key FROM public.contacts c WHERE c.id = v_existing_id;
+      RETURN QUERY SELECT v_existing_id, v_chat_key, v_chat_key, 'chat_key_match'::text;
       RETURN;
     END IF;
-
-    IF v_chat_key LIKE '55%' AND (length(v_chat_key)=12 OR length(v_chat_key)=13) THEN
-      IF length(v_chat_key)=12 THEN v_variant1 := left(v_chat_key,4) || '9' || right(v_chat_key,8);
-      ELSE IF substr(v_chat_key,5,1)='9' THEN v_variant1 := left(v_chat_key,4) || right(v_chat_key,8); END IF;
-      END IF;
-
-      SELECT ARRAY_AGG(DISTINCT c.id) INTO v_candidates
-      FROM public.contacts c
-      WHERE c.chat_key IN (v_chat_key, v_variant1)
-         OR regexp_replace(COALESCE(c.phone,''), '\D', '', 'g') IN (v_chat_key, v_variant1);
-
-      IF array_length(v_candidates,1) = 1 THEN
-        v_existing_id := v_candidates[1];
-        SELECT c.chat_key INTO v_chat_key FROM public.contacts c WHERE c.id = v_existing_id;
-        UPDATE public.contacts c SET chat_lid = COALESCE(v_chat_lid, c.chat_lid), lid = COALESCE(v_lid, c.lid), updated_at = now() WHERE c.id = v_existing_id;
-        RETURN QUERY SELECT v_existing_id, v_chat_key, v_chat_key, 'variant_match'::text;
-        RETURN;
-      END IF;
-    END IF;
-
-    INSERT INTO public.contacts (chat_key, chat_lid, lid, phone, name, created_at, updated_at)
-    VALUES (v_chat_key, v_chat_lid, v_lid, v_chat_key, COALESCE(v_name, v_chat_key), now(), now())
+    
+    -- 4) Criar se não existir
+    INSERT INTO public.contacts (chat_key, chat_id, chat_lid, lid, phone, name, created_at, updated_at)
+    VALUES (v_chat_key, p_chat_id, v_chat_lid, v_lid, v_chat_key, COALESCE(v_name, v_chat_key), now(), now())
     RETURNING id INTO v_existing_id;
     RETURN QUERY SELECT v_existing_id, v_chat_key, v_chat_key, 'created'::text;
     RETURN;

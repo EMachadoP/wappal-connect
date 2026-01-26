@@ -9,83 +9,91 @@ const corsHeaders = {
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+  const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+  let conversation_id: string | null = null;
+  let lockToken: string | null = null;
+
+  // -----------------------------
+  // AI Logs - padronizado
+  // -----------------------------
+  async function logAiSkip(
+    supabase: any,
+    convId: string,
+    opts: {
+      status: "skipped" | "ok" | "error";
+      skip_reason?: "locked" | "debounced" | "paused" | "role_blocked" | "unknown";
+      error_message?: string;
+      model?: string;
+      meta?: any;
+    }
+  ) {
+    try {
+      await supabase.from("ai_logs").insert({
+        conversation_id: convId,
+        status: opts.status,
+        skip_reason: opts.skip_reason ?? null,
+        error_message: opts.error_message ?? null,
+        model: opts.model ?? "ai-maybe-reply",
+        meta: opts.meta ?? null,
+      });
+    } catch (e) {
+      console.warn("[ai_logs] insert failed", e);
+    }
+  }
+
+  // -----------------------------
+  // RPC Locking (V11) - atômico no Postgres clock
+  // -----------------------------
+  async function acquireLockRpc(supabase: any, convId: string, ttlSeconds = 60) {
+    const { data, error } = await supabase.rpc("acquire_conversation_lock", {
+      p_conversation_id: convId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    return {
+      ok: !!row?.ok,
+      token: row?.token ?? null,
+      until: row?.until ?? null
+    };
+  }
+
+  async function releaseLockRpc(supabase: any, convId: string, token: string) {
+    const { data, error } = await supabase.rpc("release_conversation_lock", {
+      p_conversation_id: convId,
+      p_token: token,
+    });
+    if (error) {
+      console.warn("[lock] release rpc failed", error);
+      return false;
+    }
+    return !!data;
+  }
+
   try {
-    const { conversation_id, initial_message_id } = await req.json();
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-    // --- CONCURRENCY HELPERS ---
-    function nowIso() {
-      return new Date().toISOString();
-    }
-
-    function addSecondsIso(seconds: number) {
-      return new Date(Date.now() + seconds * 1000).toISOString();
-    }
-
-    // Lock ATÔMICO: tenta pegar se estiver livre/expirado
-    async function tryAcquireLock(supabase: any, conversationId: string, ttlSeconds = 60) {
-      const token = crypto.randomUUID();
-      const now = nowIso();
-      const until = addSecondsIso(ttlSeconds);
-
-      const { data, error } = await supabase
-        .from("conversations")
-        .update({
-          processing_until: until,
-          processing_token: token,
-        })
-        .eq("id", conversationId)
-        // pega lock apenas se estiver livre/expirado
-        .or(`processing_until.is.null,processing_until.lt.${now}`)
-        .select("id, processing_until, processing_token")
-        .maybeSingle();
-
-      if (error) throw error;
-      if (!data) return { ok: false as const, token: null as string | null };
-
-      console.log(`[lock] Acquired for ${conversationId} with token ${token} until ${until}`);
-      return { ok: true as const, token };
-    }
-
-    // Release seguro: só libera se token for o mesmo
-    async function releaseLock(supabase: any, conversationId: string, token: string) {
-      const { data, error } = await supabase
-        .from("conversations")
-        .update({
-          processing_until: addSecondsIso(-1),
-          processing_token: null,
-        })
-        .eq("id", conversationId)
-        .eq("processing_token", token)
-        .select("id");
-
-      if (error) console.warn("[lock] release failed", error);
-      if (!error && (!data || data.length === 0)) {
-        console.warn("[lock] release had no effect (0 rows). Possible id/token mismatch.", {
-          conversationId,
-        });
-      }
-    }
+    const body = await req.json();
+    conversation_id = body.conversation_id;
+    const { initial_message_id } = body;
 
     if (!conversation_id) {
       return new Response(JSON.stringify({ ok: false, error: "missing conversation_id" }), { status: 400 });
     }
 
-    // ✅ Lock no worker (não no webhook)
-    const lock = await tryAcquireLock(supabase, conversation_id, 60);
+    // ✅ Lock no worker (não no webhook) - via RPC V11
+    const lock = await acquireLockRpc(supabase, conversation_id, 60);
     if (!lock.ok) {
       console.log("[ai-maybe-reply] Concurrency Limit: locked", { conversation_id });
-      await supabase.from('ai_logs').insert({
-        conversation_id,
-        status: 'skipped',
-        error_message: 'Concurrency Limit: locked',
-        model: 'ai-maybe-reply'
+      await logAiSkip(supabase, conversation_id, {
+        status: "skipped",
+        skip_reason: "locked",
+        error_message: "Concurrency Limit: locked"
       });
-      // Retorna OK para o webhook, mas aborta a IA silenciosamente
       return new Response(JSON.stringify({ ok: true, skipped: "locked" }), { status: 200, headers: corsHeaders });
     }
+    lockToken = lock.token;
 
     try {
       // ✅ debounce existente (4s + 2s)
@@ -104,11 +112,8 @@ serve(async (req) => {
       }
 
       console.log('[ai-maybe-reply] Debounce: Msg inicial:', initialId);
-
-      // Espera 4 segundos
       await new Promise(r => setTimeout(r, 4000));
 
-      // Check 1: Verificar se chegou nova mensagem
       const { data: check1 } = await supabase
         .from('messages')
         .select('id')
@@ -120,19 +125,16 @@ serve(async (req) => {
 
       if (check1 && check1.id !== initialId) {
         console.log('[ai-maybe-reply] Debounce: Nova msg após 4s. Abortando.');
-        await supabase.from('ai_logs').insert({
-          conversation_id,
+        await logAiSkip(supabase, conversation_id, {
           status: 'skipped',
-          error_message: 'Debounce: New message after 4s',
-          model: 'ai-maybe-reply'
+          skip_reason: 'debounced',
+          error_message: 'Debounce: New message after 4s'
         });
         return new Response(JSON.stringify({ success: false, reason: 'Debounced at 4s' }));
       }
 
-      // Espera mais 2 segundos (total: 6s)
       await new Promise(r => setTimeout(r, 2000));
 
-      // Check 2: Verificação final
       const { data: check2 } = await supabase
         .from('messages')
         .select('id')
@@ -147,8 +149,6 @@ serve(async (req) => {
         return new Response(JSON.stringify({ success: false, reason: 'Debounced at 6s' }));
       }
 
-      console.log('[ai-maybe-reply] Debounce OK após 6s. Verificando se é a última inbound...');
-
       const { data: latestInbound } = await supabase
         .from('messages')
         .select('id, sent_at')
@@ -158,14 +158,12 @@ serve(async (req) => {
         .limit(1)
         .maybeSingle();
 
-      // ✅ FIX: Se já chegou uma mensagem mais nova, esta execução foi "atropelada"
       if (latestInbound?.id && initialId && latestInbound.id !== initialId) {
         console.log('[ai-maybe-reply] ⏭️ Atropelado por mensagem mais nova, cancelando resposta.');
-        await supabase.from('ai_logs').insert({
-          conversation_id,
+        await logAiSkip(supabase, conversation_id, {
           status: 'skipped',
-          error_message: 'Superseded by newer inbound',
-          model: 'ai-maybe-reply'
+          skip_reason: 'debounced',
+          error_message: 'Superseded by newer inbound'
         });
         return new Response(JSON.stringify({ success: false, reason: 'superseded_by_newer_inbound' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
@@ -206,11 +204,10 @@ serve(async (req) => {
         const pausedUntil = new Date(conv.ai_paused_until).getTime();
         if (!Number.isNaN(pausedUntil) && pausedUntil > Date.now()) {
           console.log('[ai-maybe-reply] ⏸️ AI paused temporarily until', conv.ai_paused_until);
-          await supabase.from('ai_logs').insert({
-            conversation_id,
+          await logAiSkip(supabase, conversation_id, {
             status: 'skipped',
-            reason: 'paused_temporarily',
-            model: 'ai-maybe-reply'
+            skip_reason: 'paused',
+            error_message: 'AI temporarily paused'
           });
           return new Response(JSON.stringify({ success: false, reason: 'AI Temporarily Paused' }));
         }
@@ -236,11 +233,10 @@ serve(async (req) => {
 
       if (conv.ai_mode === 'OFF') {
         console.log('[ai-maybe-reply] IA está desligada (OFF) para esta conversa.');
-        await supabase.from('ai_logs').insert({
-          conversation_id,
+        await logAiSkip(supabase, conversation_id, {
           status: 'skipped',
-          reason: 'ai_mode_off',
-          model: 'ai-maybe-reply'
+          skip_reason: 'paused',
+          error_message: 'IA mode is OFF'
         });
         return new Response(JSON.stringify({ success: false, reason: 'IA OFF' }));
       }
@@ -257,12 +253,11 @@ serve(async (req) => {
         // IMPORTANTE: Só bloqueia se for REALMENTE fornecedor ou funcionario
         if (participant.role_type === 'fornecedor' || participant.role_type === 'funcionario') {
           console.log(`[ai-maybe-reply] ⛔ Bloqueando: ${participant.role_type} confirmado`);
-          await supabase.from('ai_logs').insert({
-            conversation_id,
+          await logAiSkip(supabase, conversation_id, {
             status: 'skipped',
-            reason: `role_${participant.role_type}`,
-            model: 'ai-maybe-reply',
-            metadata: { participant_name: participant.name }
+            skip_reason: 'role_blocked',
+            error_message: `Blocked by role: ${participant.role_type}`,
+            meta: { participant_name: participant.name }
           });
           return new Response(JSON.stringify({
             success: false,
@@ -293,16 +288,11 @@ serve(async (req) => {
       const messages = (msgs || [])
         .map((m) => {
           const text = (m.transcript || m.content || '').trim();
-
-          // ✅ Descarta mensagens vazias/placeholders inúteis
           if (!text || text === '...' || text.startsWith('[Mídia:') || text.startsWith('[Arquivo:')) {
             return null;
           }
-
-          // ✅ Normaliza role
           const sender = (m.sender_type || '').toLowerCase();
           const role = sender === 'contact' ? 'user' : 'assistant';
-
           return { role, content: text };
         })
         .filter(Boolean)
@@ -318,194 +308,63 @@ serve(async (req) => {
       if (participantState?.participants) {
         const participant = participantState.participants as any;
         const roleLabels: Record<string, string> = {
-          'sindico': 'Síndico',
-          'subsindico': 'Subsíndico',
-          'porteiro': 'Porteiro',
-          'zelador': 'Zelador',
-          'morador': 'Morador',
-          'administrador': 'Administrador',
-          'conselheiro': 'Conselheiro',
-          'funcionario': 'Funcionário',
-          'supervisor_condominial': 'Supervisor Condominial',
-          'visitante': 'Visitante',
-          'prestador': 'Prestador de Serviço',
-          'fornecedor': 'Fornecedor',
-          'outro': 'Outro'
+          'sindico': 'Síndico', 'subsindico': 'Subsíndico', 'porteiro': 'Porteiro', 'zelador': 'Zelador', 'morador': 'Morador',
+          'administrador': 'Administrador', 'conselheiro': 'Conselheiro', 'funcionario': 'Funcionário', 'supervisor_condominial': 'Supervisor Condominial',
+          'visitante': 'Visitante', 'prestador': 'Prestador de Serviço', 'fornecedor': 'Fornecedor', 'outro': 'Outro'
         };
-
         const roleLabel = roleLabels[participant.role_type] || participant.role_type;
         const entityName = participant.entities?.name || 'não especificado';
         const entityType = participant.entities?.type || 'condominio';
-
-        // ✅ Label dinâmico baseado no tipo da entidade
-        const entityTypeLabels: Record<string, string> = {
-          'empresa': 'Empresa',
-          'administradora': 'Administradora',
-          'condominio': 'Condomínio',
-          'prestador': 'Prestador'
-        };
+        const entityTypeLabels: Record<string, string> = { 'empresa': 'Empresa', 'administradora': 'Administradora', 'condominio': 'Condomínio', 'prestador': 'Prestador' };
         const entityTypeLabel = entityTypeLabels[entityType] || 'Entidade';
 
-        contextInfo += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-        contextInfo += `\n📋 DADOS DO REMETENTE (JÁ IDENTIFICADOS)`;
-        contextInfo += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-        contextInfo += `\n👤 Nome: ${participant.name}`;
-        if (participant.role_type) contextInfo += `\n💼 Função: ${roleLabel}`;
-        if (participant.entities?.name) contextInfo += `\n🏢 ${entityTypeLabel}: ${entityName}`;
-        contextInfo += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-
-        contextInfo += `\n\n⚠️ INSTRUÇÕES CRÍTICAS:`;
-        contextInfo += `\n1. NUNCA pergunte o nome do remetente - você JÁ SABE que é "${participant.name}"`;
-        if (participant.role_type) contextInfo += `\n2. NUNCA pergunte a função - você JÁ SABE que é "${roleLabel}"`;
-        if (participant.entities?.name) {
-          contextInfo += `\n3. NUNCA pergunte a ${entityTypeLabel.toLowerCase()} - você JÁ SABE que é "${entityName}"`;
-          contextInfo += `\n4. PRESUMA que qualquer necessidade ou solicitação é relacionada a "${entityName}" (${entityTypeLabel})`;
-        }
-        contextInfo += `\n5. Use essas informações DIRETAMENTE ao criar protocolos`;
+        contextInfo += `\n👤 Nome: ${participant.name}\n💼 Função: ${roleLabel}\n🏢 ${entityTypeLabel}: ${entityName}\n`;
+        contextInfo += `\n⚠️ NUNCA pergunte nome, função ou entidade - você JÁ SABE.\n`;
       }
 
       const now = new Date();
-      const formatter = new Intl.DateTimeFormat('pt-BR', {
-        timeZone: settings?.timezone || 'America/Recife',
-        dateStyle: 'full',
-        timeStyle: 'medium',
-      });
-      const currentTimeStr = formatter.format(now);
-
-      const variables: Record<string, string> = {
-        '{{customer_name}}': conv.contacts?.name || 'Cliente',
-        '{{current_time}}': currentTimeStr,
-      };
-
-      for (const [key, value] of Object.entries(variables)) {
-        systemPrompt = systemPrompt.replace(new RegExp(key, 'g'), value);
-      }
-
-      // Add message variation instructions
-      systemPrompt += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-      systemPrompt += `\n📝 REGRAS DE VARIAÇÃO DE MENSAGENS`;
-      systemPrompt += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-      systemPrompt += `\n\n⚠️ NUNCA REPITA A MESMA MENSAGEM!`;
-      systemPrompt += `\n\n1. **Varie a estrutura das frases** - Use diferentes formas de expressar a mesma ideia`;
-      systemPrompt += `\n2. **Use sinônimos** - Alterne palavras e expressões`;
-      systemPrompt += `\n3. **Mude a ordem** - Reorganize as informações de forma diferente`;
-      systemPrompt += `\n4. **Varie saudações** - Use diferentes formas de cumprimentar`;
-      systemPrompt += `\n5. **Personalize** - Adapte o tom conforme o contexto`;
-      systemPrompt += `\n\n✅ EXEMPLOS DE VARIAÇÃO:`;
-      systemPrompt += `\n\nMensagem 1: "Olá! Registrei seu chamado sob o protocolo #123. Vamos resolver isso rapidamente!"`;
-      systemPrompt += `\nMensagem 2: "Tudo certo! Criei o protocolo #124 para você. Nossa equipe já está ciente."`;
-      systemPrompt += `\nMensagem 3: "Perfeito! Anotei tudo no protocolo #125. Em breve daremos retorno."`;
-      systemPrompt += `\n\n❌ NUNCA faça:`;
-      systemPrompt += `\n- Repetir exatamente a mesma estrutura de frase`;
-      systemPrompt += `\n- Usar sempre as mesmas palavras de abertura`;
-      systemPrompt += `\n- Copiar o formato da mensagem anterior`;
-      systemPrompt += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-
-      systemPrompt += contextInfo;
-
-      // 5.5. Get participant_id for protocol creation
-      const { data: participantData } = await supabase
-        .from('conversation_participant_state')
-        .select('participant_id, participants(name, role_type, entity_id)')
-        .eq('conversation_id', conversation_id)
-        .maybeSingle();
-
-      const participant_id = participantData?.participant_id;
-      console.log('[ai-maybe-reply] Participant ID:', participant_id);
+      const currentTimeStr = new Intl.DateTimeFormat('pt-BR', { timeZone: settings?.timezone || 'America/Recife', dateStyle: 'full', timeStyle: 'medium' }).format(now);
+      systemPrompt = systemPrompt.replace(/{{customer_name}}/g, conv.contacts?.name || 'Cliente').replace(/{{current_time}}/g, currentTimeStr) + contextInfo;
 
       // 6. Gerar resposta
       console.log('[ai-maybe-reply] Chamando geração...');
       const aiResponse = await fetch(`${supabaseUrl}/functions/v1/ai-generate-reply`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${supabaseServiceKey}`,
-          'apikey': supabaseServiceKey,  // ✅ FIX: Added missing apikey header
-        },
-        body: JSON.stringify({
-          messages,
-          systemPrompt,
-          conversation_id,
-          participant_id,
-        }),
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}`, 'apikey': supabaseServiceKey },
+        body: JSON.stringify({ messages, systemPrompt, conversation_id, participant_id: participantState?.current_participant_id }),
       });
 
-      // ✅ FIX: Validate response before parsing
-      const aiText = await aiResponse.text();
-      if (!aiResponse.ok) {
-        console.error('[ai-maybe-reply] ai-generate-reply FAILED:', aiResponse.status, aiText);
-        throw new Error(`ai-generate-reply failed: ${aiResponse.status}`);
-      }
-
-      const aiData = JSON.parse(aiText);
-      let text = (aiData?.text ?? "").toString().trim();
-
-      // ✅ FIX: Don't throw error on empty text - use fallback if LLM fails
-      if (!text || !text.trim()) {
-        console.warn('[ai-maybe-reply] IA retornou texto vazio ou null. Usando fallback seguro.');
-        text = "Em que posso ajudar hoje?";
-        aiData.text = text;
-      }
-
-      // 6.5. DEDUPLICATION: Check if identical message was sent recently
-      const { data: recentDuplicate } = await supabase
-        .from('messages')
-        .select('id')
-        .eq('conversation_id', conversation_id)
-        .eq('sender_type', 'assistant')
-        .eq('content', aiData.text)
-        .gte('sent_at', new Date(Date.now() - 60 * 1000).toISOString())
-        .limit(1)
-        .maybeSingle();
-
-      if (recentDuplicate) {
-        console.log('[ai-maybe-reply] Dedupe: Identical message sent recently, skipping.');
-        return new Response(JSON.stringify({ success: false, reason: 'Deduplicated' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-      }
+      if (!aiResponse.ok) throw new Error(`ai-generate-reply failed: ${aiResponse.status}`);
+      const aiData = await aiResponse.json();
+      let text = (aiData?.text ?? "Em que posso ajudar hoje?").toString().trim();
 
       // 7. Enviar via Z-API
-      // ✅ FIX: Pass trigger-based idempotency_key to prevent duplicates
       const idempotencyKey = `ai_${conversation_id}_${initialId || 'unknown'}`;
-      console.log(`[ai-maybe-reply] Enviando resposta via Z-API (idempotency=${idempotencyKey})`);
-
-      const zapiResponse = await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
+      await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${supabaseServiceKey}`,
-          'apikey': supabaseServiceKey,  // ✅ FIX: Added missing apikey header
-        },
-        body: JSON.stringify({
-          conversation_id,
-          content: aiData.text,
-          message_type: 'text',
-          sender_name: 'Ana Mônica',
-          is_system: true,  // ✅ CRITICAL: Mark as system to preserve AI state
-          idempotency_key: idempotencyKey  // ✅ FIX: Trigger-based key
-        }),
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}`, 'apikey': supabaseServiceKey },
+        body: JSON.stringify({ conversation_id, content: text, message_type: 'text', sender_name: 'Ana Mônica', is_system: true, idempotency_key: idempotencyKey }),
       });
 
-      // ✅ FIX: Validate Z-API response
-      const zapiText = await zapiResponse.text();
-      console.log(`[ai-maybe-reply] zapi-send-message response: status=${zapiResponse.status} body=${zapiText.slice(0, 500)}`);
-
-      if (!zapiResponse.ok) {
-        console.error('[ai-maybe-reply] zapi-send-message FAILED:', zapiResponse.status, zapiText);
-        throw new Error(`zapi-send-message failed: ${zapiResponse.status}`);
-      }
-
       console.log('[ai-maybe-reply] ✅ Mensagem enviada com sucesso');
-
       return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
     } finally {
-      if (lock?.token && conversation_id) {
-        await releaseLock(supabase, conversation_id, lock.token);
-        console.log(`[ai-maybe-reply] Lock release attempted for conversation ${conversation_id}`);
+      if (lockToken && conversation_id) {
+        await releaseLockRpc(supabase, conversation_id, lockToken);
       }
     }
-  } catch (error: any) {
-    console.error('[ai-maybe-reply] Erro (outer):', error);
-    return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  } catch (e: any) {
+    console.error("[ai-maybe-reply] Unhandled error", e);
+    try {
+      if (typeof conversation_id === "string" && conversation_id) {
+        await logAiSkip(supabase, conversation_id, {
+          status: "error",
+          skip_reason: "unknown",
+          error_message: String(e?.message ?? e)
+        });
+      }
+    } catch (_) { }
+    return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });
