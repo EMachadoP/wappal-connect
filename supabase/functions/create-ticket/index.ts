@@ -191,9 +191,9 @@ serve(async (req) => {
             // Don't fail the whole request, but log it
         }
 
-        // 4. Enviar notificação para o grupo de WhatsApp (se habilitado)
+        // 4. Enviar notificação para o grupo de WhatsApp (apenas se for OPERACIONAL)
         let whatsapp_message_id = null;
-        if (settings?.whatsapp_notifications_enabled && settings?.whatsapp_group_id) {
+        if (settings?.whatsapp_notifications_enabled && settings?.whatsapp_group_id && category === 'operational') {
             try {
                 const priorityIcon = (priority === 'critical' || priority === 'high') ? '🔴' : '🟢';
                 const priorityLabel = (priority === 'critical' || priority === 'high') ? 'Urgente' : 'Normal';

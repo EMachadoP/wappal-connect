@@ -1194,6 +1194,7 @@ serve(async (req: Request) => {
           {
             summary: (lastIssueMsg?.content || lastUserMsgText).slice(0, 500),
             priority: /travado|urgente|urgência|emergência/i.test(recentText) ? 'critical' : 'normal',
+            category: 'operational', // Deterministic is always technical/operational
             apartment: aptCandidate,
             requester_name: pendingPayload?.requester_name || undefined
           }
@@ -1280,6 +1281,12 @@ REGRAS DE EXECUÇÃO:
 - Se existir PENDENTE, faça apenas 1 pergunta curta para resolver. Não faça checklists longos.
 - Não repita perguntas já respondidas no histórico.
 - Só chame create_protocol quando tiver: nome do condomínio + descrição clara + (apartamento quando for unidade) + nome do solicitante.
+- CATEGORIAS DE PROTOCOLO:
+    - 'operational': Falhas técnicas, defeitos físicos, portões, interfones, câmeras. (ESTA NOTIFICA O GRUPO TÉCNICO).
+    - 'admin': Pedidos de cópia de contrato, cadastros, troca de tags, dúvidas administrativas.
+    - 'financial': Segunda via de boleto, dúvidas de pagamento.
+    - 'support': Dúvidas gerais de uso do sistema.
+- NÃO abra protocolos 'admin' ou 'support' para simples pedidos de informação que você possa responder ou que o cliente possa resolver sozinho, a menos que ele peça formalmente um registro/chamado.
 - Responda sempre em português natural, sem blocos estruturados, sem tom robótico.
 
 REGRAS DE FORMATO - MUITO IMPORTANTE:
@@ -1317,10 +1324,15 @@ REGRAS DE FORMATO - MUITO IMPORTANTE:
           type: "object",
           properties: {
             summary: { type: "string", description: "O problema detalhado" },
+            category: {
+              type: "string",
+              enum: ["operational", "support", "financial", "admin"],
+              description: "Categoria do chamado. 'operational' para problemas técnicos."
+            },
             priority: { type: "string", enum: ["normal", "critical"] },
             apartment: { type: "string", description: "Apartamento (se souber)" }
           },
-          required: ["summary"]
+          required: ["summary", "category"]
         }
       }
     }];
