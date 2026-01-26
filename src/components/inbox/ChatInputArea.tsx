@@ -84,7 +84,7 @@ export function ChatInputArea({ onSendMessage, onSendFile, isResolved, isMobile 
 
   if (isResolved) {
     return (
-      <div className={`p-3 border-t border-border bg-card ${isMobile ? 'pb-safe' : ''}`}>
+      <div className={`p-3 border-t border-border bg-card`}>
         <div className="text-center text-muted-foreground text-sm py-2">
           Conversa resolvida. {!isMobile && 'Use o menu para reabrir.'}
         </div>
@@ -93,7 +93,7 @@ export function ChatInputArea({ onSendMessage, onSendFile, isResolved, isMobile 
   }
 
   return (
-    <div className={`p-3 border-t border-border bg-card ${isMobile ? 'pb-safe' : ''}`}>
+    <div className={`p-3 border-t border-border bg-card`}>
       <div className="flex items-center gap-2">
         <EmojiPicker onEmojiSelect={(emoji) => setMessage(prev => prev + emoji)} />
         <Button variant="ghost" size="icon" className="shrink-0" onClick={() => fileInputRef.current?.click()}>

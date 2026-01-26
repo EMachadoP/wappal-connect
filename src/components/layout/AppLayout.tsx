@@ -2,6 +2,7 @@ import { ReactNode } from 'react';
 import { Header } from './Header';
 import { MobileBottomNav } from './MobileBottomNav';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { cn } from '@/lib/utils';
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -17,7 +18,10 @@ export function AppLayout({ children, hideHeader = false, hideBottomNav = false 
       {/* Desktop: show header, Mobile: hide header */}
       {!isMobile && !hideHeader && <Header />}
 
-      <main className={`flex-1 overflow-y-auto ${isMobile && !hideBottomNav ? 'pb-bottom-nav' : ''}`}>
+      <main className={cn(
+        "flex-1 flex flex-col min-h-0",
+        isMobile && !hideBottomNav ? 'pb-bottom-nav' : 'pb-safe'
+      )}>
         {children}
       </main>
 

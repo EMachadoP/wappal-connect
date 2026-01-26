@@ -412,7 +412,7 @@ export default function InboxPage() {
   if (!user) return <Navigate to="/auth" replace />;
 
   return (
-    <AppLayout>
+    <AppLayout hideBottomNav={isMobile && !!activeConversationId}>
       <div className="h-full overflow-hidden bg-background">
         {isMobile ? (
           activeConversationId ? (

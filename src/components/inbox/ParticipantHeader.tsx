@@ -59,9 +59,9 @@ export function ParticipantHeader({
   const needsCondominiumSelection = condominiums.length > 1 && !activeCondominiumId;
 
   return (
-    <div className="bg-muted/50 border-b border-border px-4 py-2">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex flex-col gap-1 min-w-0 flex-1">
+    <div className="bg-muted/50 border-b border-border px-3 py-1.5 sm:px-4 sm:py-2">
+      <div className="flex items-center justify-between gap-2 sm:gap-4">
+        <div className="flex flex-col gap-0.5 sm:gap-1 min-w-0 flex-1">
           {/* Row 1: Phone + WhatsApp name + Protocol */}
           <div className="flex items-center gap-2 flex-wrap">
             {phone && (
@@ -70,11 +70,10 @@ export function ParticipantHeader({
               </span>
             )}
             {whatsappDisplayName && (
-              <span className={`text-xs px-2 py-0.5 rounded ${
-                isEntityName 
-                  ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400' 
+              <span className={`text-xs px-2 py-0.5 rounded ${isEntityName
+                  ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400'
                   : 'bg-muted text-muted-foreground'
-              }`}>
+                }`}>
                 {isEntityName && <Building2 className="w-3 h-3 inline mr-1" />}
                 {whatsappDisplayName}
               </span>
@@ -104,7 +103,7 @@ export function ParticipantHeader({
                     {participant.entity.name}
                   </Badge>
                 )}
-                <Badge 
+                <Badge
                   variant={participant.confidence >= 0.8 ? 'default' : participant.confidence >= 0.5 ? 'secondary' : 'destructive'}
                   className="text-xs"
                 >
@@ -117,7 +116,7 @@ export function ParticipantHeader({
                 <span>Remetente não identificado</span>
               </div>
             )}
-            
+
             {/* Condominium selector */}
             {condominiums.length > 0 && onSelectCondominium && (
               <div className="flex items-center gap-1 ml-2 pl-2 border-l border-border">
@@ -135,7 +134,7 @@ export function ParticipantHeader({
                 )}
               </div>
             )}
-            
+
             {/* Notification status */}
             {conversationId && (
               <NotificationStatus conversationId={conversationId} />
@@ -143,9 +142,9 @@ export function ParticipantHeader({
           </div>
         </div>
 
-        <Button 
-          variant={isLowConfidence ? "default" : "outline"} 
-          size="sm" 
+        <Button
+          variant={isLowConfidence ? "default" : "outline"}
+          size="sm"
           onClick={onIdentify}
           className="shrink-0"
         >

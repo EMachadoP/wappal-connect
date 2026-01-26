@@ -103,10 +103,10 @@ export function ChatHeader({
             size="sm"
             variant="outline"
             onClick={onGenerateProtocol}
-            className="h-8"
+            className="h-8 px-2 sm:px-3"
           >
-            <FileText className="w-4 h-4 mr-2" />
-            Protocolo
+            <FileText className="w-4 h-4 sm:mr-2" />
+            <span className="hidden sm:inline">Protocolo</span>
           </Button>
         )}
 
@@ -115,10 +115,10 @@ export function ChatHeader({
             size="sm"
             variant="outline"
             onClick={onCreateTask}
-            className="h-8"
+            className="h-8 px-2 sm:px-3"
           >
-            <ListTodo className="w-4 h-4 mr-2" />
-            Tarefa
+            <ListTodo className="w-4 h-4 sm:mr-2" />
+            <span className="hidden sm:inline">Tarefa</span>
           </Button>
         )}
 
