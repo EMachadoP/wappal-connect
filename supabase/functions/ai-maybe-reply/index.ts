@@ -25,7 +25,7 @@ serve(async (req) => {
     }
 
     // Lock ATÔMICO: tenta pegar se estiver livre/expirado
-    async function tryAcquireLock(supabase: any, conversationId: string, ttlSeconds = 20) {
+    async function tryAcquireLock(supabase: any, conversationId: string, ttlSeconds = 60) {
       const token = crypto.randomUUID();
       const now = nowIso();
       const until = addSecondsIso(ttlSeconds);
@@ -44,21 +44,29 @@ serve(async (req) => {
 
       if (error) throw error;
       if (!data) return { ok: false as const, token: null as string | null };
+
+      console.log(`[lock] Acquired for ${conversationId} with token ${token} until ${until}`);
       return { ok: true as const, token };
     }
 
     // Release seguro: só libera se token for o mesmo
     async function releaseLock(supabase: any, conversationId: string, token: string) {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("conversations")
         .update({
           processing_until: addSecondsIso(-1),
           processing_token: null,
         })
         .eq("id", conversationId)
-        .eq("processing_token", token);
+        .eq("processing_token", token)
+        .select("id");
 
       if (error) console.warn("[lock] release failed", error);
+      if (!error && (!data || data.length === 0)) {
+        console.warn("[lock] release had no effect (0 rows). Possible id/token mismatch.", {
+          conversationId,
+        });
+      }
     }
 
     if (!conversation_id) {
@@ -66,7 +74,7 @@ serve(async (req) => {
     }
 
     // ✅ Lock no worker (não no webhook)
-    const lock = await tryAcquireLock(supabase, conversation_id, 20);
+    const lock = await tryAcquireLock(supabase, conversation_id, 60);
     if (!lock.ok) {
       console.log("[ai-maybe-reply] Concurrency Limit: locked", { conversation_id });
       // Retorna OK para o webhook, mas aborta a IA silenciosamente
@@ -474,8 +482,8 @@ serve(async (req) => {
 
     } finally {
       if (lock?.token && conversation_id) {
-        await releaseLock(supabase, `ai_reply_lock_${conversation_id}`, lock.token);
-        console.log(`[ai-maybe-reply] Lock released for conversation ${conversation_id} with token ${lock.token}`);
+        await releaseLock(supabase, conversation_id, lock.token);
+        console.log(`[ai-maybe-reply] Lock release attempted for conversation ${conversation_id}`);
       }
     }
   } catch (error: any) {
