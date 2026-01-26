@@ -141,24 +141,27 @@ export function ConversationList({
             Nenhuma conversa encontrada
           </div>
         ) : (
-          filteredConversations.map((conv) => (
-            <ConversationItem
-              key={conv.id}
-              id={conv.id}
-              contactName={
-                conv.is_group === true
-                  ? (conv.title || conv.contact?.name || "Grupo")
-                  : (conv.contact?.name || conv.title || "Sem Nome")
-              }
-              contactImageUrl={conv.contact?.profile_picture_url}
-              lastMessage={conv.last_message}
-              lastMessageType={conv.last_message_type}
-              lastMessageAt={conv.last_message_at}
-              unreadCount={conv.unread_count}
-              isActive={conv.id === activeConversationId}
-              onClick={() => onSelectConversation(conv.id)}
-            />
-          ))
+          filteredConversations.filter(Boolean).map((conv) => {
+            if (!conv) return null;
+            return (
+              <ConversationItem
+                key={conv.id}
+                id={conv.id}
+                contactName={
+                  conv.is_group === true
+                    ? (conv.title || conv.contact?.name || "Grupo")
+                    : (conv.contact?.name || conv.title || "Sem Nome")
+                }
+                contactImageUrl={conv.contact?.profile_picture_url}
+                lastMessage={conv.last_message}
+                lastMessageType={conv.last_message_type}
+                lastMessageAt={conv.last_message_at}
+                unreadCount={conv.unread_count}
+                isActive={conv.id === activeConversationId}
+                onClick={() => onSelectConversation(conv.id)}
+              />
+            );
+          })
         )}
       </div>
     </div>
