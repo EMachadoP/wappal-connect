@@ -69,22 +69,22 @@ export function ChatHeader({
             <ArrowLeft className="h-4 w-4" />
           </Button>
         )}
-        {contact.is_group ? (
+        {contact?.is_group ? (
           <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
             <Users className="w-5 h-5 text-primary" />
           </div>
         ) : (
-          <ConversationAvatar name={contact.name} imageUrl={contact.profile_picture_url} />
+          <ConversationAvatar name={contact?.name || '...'} imageUrl={contact?.profile_picture_url} />
         )}
         <div>
           <div className="flex items-center gap-2">
-            <p className="font-medium">{contact.name}</p>
-            {contact.is_group && (
+            <p className="font-medium">{contact?.name || 'Carregando...'}</p>
+            {contact?.is_group && (
               <span className="text-xs bg-primary/20 text-primary px-2 py-0.5 rounded">Grupo</span>
             )}
           </div>
           <p className="text-xs text-muted-foreground flex items-center gap-2">
-            <span>{contact.is_group ? 'Grupo de Atendimento' : (contact.phone || contact.lid || 'Sem identificação')}</span>
+            <span>{contact?.is_group ? 'Grupo de Atendimento' : (contact?.phone || contact?.lid || 'Sem identificação')}</span>
             {assignedTo && profiles && (
               <>
                 <span>•</span>
