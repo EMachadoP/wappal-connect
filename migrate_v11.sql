@@ -2,6 +2,8 @@
 -- ATOMIC CONVERSATION LOCKING (V11)
 -- =====================================================
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- 1) RPC para adquirir lock de forma atômica (Postgres clock)
 CREATE OR REPLACE FUNCTION public.acquire_conversation_lock(
     p_conversation_id UUID,
@@ -65,3 +67,9 @@ $$;
 -- 3) Ajuste de esquema para logging padronizado
 ALTER TABLE public.ai_logs ADD COLUMN IF NOT EXISTS skip_reason TEXT;
 ALTER TABLE public.ai_logs ADD COLUMN IF NOT EXISTS meta JSONB;
+
+-- 4) Limpeza final (1x) — remove “locks órfãos” do bug antigo
+UPDATE public.conversations
+SET processing_until = now() - interval '1 second',
+    processing_token = NULL
+WHERE processing_until > now();
