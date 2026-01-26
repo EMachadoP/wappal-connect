@@ -48,6 +48,17 @@ function pickFirst(...vals: any[]) {
   return null;
 }
 
+// ✅ FIX: Detecta se um valor que parece "phone" é na verdade um ID de grupo
+// Formato típico: 558197438430-1496317602 (phone-timestamp)
+function looksLikeGroupId(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const s = String(value).replace(/\D/g, '');
+  // Grupo: 20-25 dígitos (phone 12-13 + timestamp 10)
+  // OU contém hífen no formato phone-timestamp
+  return /^\d{12,13}-\d{10}$/.test(String(value)) ||
+    (/^\d{20,25}$/.test(s) && !s.startsWith('55'));
+}
+
 serve(async (req: Request): Promise<Response> => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
@@ -259,14 +270,29 @@ serve(async (req: Request): Promise<Response> => {
     const normalizedPhone = payload.contact?.phone || rawPhone;
     const normalizedContactId = payload.contact?.id; // ID único do contato no Z-API
 
-    const isGroup = String(rawChatId || "").includes("@g.us") || String(rawChatId || "").includes("-") || payload.isGroup;
+    // ✅ FIX: Detectar grupo mesmo quando vem mascarado no campo phone
+    const isGroup = String(rawChatId || "").includes("@g.us") ||
+      String(rawChatId || "").includes("-") ||
+      payload.isGroup ||
+      looksLikeGroupId(normalizedPhone); // ✅ NOVO: detecta grupo no phone
 
     // ✅ PATCH 3: phone primeiro quando existir (evita 2 conversas)
-    let rawIdentity = isGroup
-      ? rawChatId // ✅ FIX: grupos NUNCA usam phone, apenas chat_id
-      : (fromMe
-        ? pickFirst(normalizedPhone, rawChatId, normalizedLid)   // OUT: phone primeiro
-        : pickFirst(rawChatId, normalizedPhone, normalizedLid)); // IN: chatId/phone antes de LID
+    // ✅ FIX: Se phone parece grupo, usa ele como chatId do grupo
+    let rawIdentity: string | null;
+
+    if (isGroup) {
+      // Para grupos: prioriza chatId, mas se phone parecer grupo, usa phone
+      if (looksLikeGroupId(normalizedPhone) && !rawChatId) {
+        rawIdentity = normalizedPhone;
+        console.log(`[Webhook] 🔄 Phone detectado como Group ID: ${normalizedPhone}`);
+      } else {
+        rawIdentity = rawChatId;
+      }
+    } else if (fromMe) {
+      rawIdentity = pickFirst(normalizedPhone, rawChatId, normalizedLid);
+    } else {
+      rawIdentity = pickFirst(rawChatId, normalizedPhone, normalizedLid);
+    }
 
     // Validação adicional: se phone parece LID (14+ dígitos), descarta
     if (!isGroup && normalizedPhone && /^\d{14,}$/.test(String(normalizedPhone).replace(/\D/g, '')) && !String(normalizedPhone).startsWith('55')) {
@@ -275,7 +301,13 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (!rawIdentity) {
-      console.warn(`[Webhook] Ignored payload: unable to determine chatId. Raw:`, { rawChatId, normalizedPhone, normalizedLid });
+      console.warn(`[Webhook] Ignored payload: unable to determine chatId. Raw:`, {
+        rawChatId,
+        normalizedPhone,
+        normalizedLid,
+        isGroup,
+        looksLikeGroup: looksLikeGroupId(normalizedPhone)
+      });
       isInvalidPayload = true;
       // ✅ LOG: Registrar drop por falta de identidade
       await supabase.from('ai_logs').insert({
