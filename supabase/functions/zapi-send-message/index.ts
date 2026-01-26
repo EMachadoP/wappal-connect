@@ -957,26 +957,19 @@ serve(async (req: Request) => {
           updateData.assigned_by = currentUserId;
 
           updateData.human_control = true;
+          updateData.human_control_at = nowIso;
+          updateData.last_human_message_at = nowIso;
           updateData.ai_mode = "OFF";
-          updateData.ai_paused_until = pauseUntilIso;
+          updateData.ai_paused_until = null;
           console.log(`[zapi-send-message] 👤 Takeover success for ${currentUserId}`);
         } else {
-          // B) Mensagem manual no Inbox (sem assumir): não pausa IA para não puxar pra Minha Caixa
-          if (!assignedTo) {
-            // ✅ NÃO pausa IA aqui para não “puxar” pra Minha Caixa por engano
-            // Se você precisa evitar auto-resposta, resolva no ai-generate (checando last agent msg)
-            console.log(`[zapi-send-message] Manual msg (unassigned): not pausing AI to preserve inbox routing`);
-          } else {
-            // C) Mensagem em conversa atribuída
-            if (currentUserId && assignedTo !== currentUserId && !isPrivileged) {
-              // Opcional: Bloquear se não for o dono
-              // return new Response(JSON.stringify({ error: "NOT_ASSIGNED_TO_YOU" }), { status: 403, ... });
-            }
-
-            updateData.human_control = true;
-            updateData.ai_paused_until = pauseUntilIso;
-            console.log(`[zapi-send-message] 👤 Message in assigned conv: Extending pause`);
-          }
+          // B) Mensagem manual no Inbox (sem assumir): Pausa AI e marca como controle humano
+          updateData.human_control = true;
+          updateData.human_control_at = nowIso;
+          updateData.last_human_message_at = nowIso;
+          updateData.ai_mode = "OFF";
+          updateData.ai_paused_until = null;
+          console.log(`[zapi-send-message] 👤 Manual message: Disabling AI`);
         }
       }
 

@@ -259,6 +259,18 @@ serve(async (req: Request): Promise<Response> => {
         direction === 'inbound' ? false :
           (fromMeRaw === true || fromMeRaw === 1 || fromMeRaw === "true" || fromMeRaw === "1");
 
+    // ✅ Helper: extrai id do provider (mesmo padrão do send-message)
+    function extractProviderMessageId(p: any): string | null {
+      return (
+        p?.messageId ||
+        p?.statusId ||
+        p?.zapiMessageId ||
+        p?.id ||
+        p?.message?.id ||
+        null
+      );
+    }
+
     // ✅ AJUSTE: Normalização Robusta - USA CAMPOS NORMALIZADOS DO Z-API
     // Z-API sempre entrega contact.lid e contact.phone normalizados, mesmo quando os raw fields variam
     const rawLid = pickFirst(payload.chatLid, payload.chat_lid, payload?.data?.chatLid);
@@ -509,6 +521,55 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     console.log(`[Webhook] ✅ Conversation resolvida: ${convId} (thread_key=${finalThreadKey})`);
+
+    // ✅ HUMAN TAKEOVER via WhatsApp (celular/web): fromMe=true e NÃO foi a IA que enviou.
+    if (fromMe === true && !isStatusUpdate) {
+      const providerMessageId = extractProviderMessageId(payload);
+
+      let sentByAssistant = false;
+      if (providerMessageId) {
+        const { data: msgRow, error: msgLookupErr } = await supabase
+          .from("messages")
+          .select("sender_type")
+          .eq("provider", "zapi")
+          .eq("provider_message_id", providerMessageId)
+          .order("sent_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (msgLookupErr) {
+          console.warn("[Webhook] provider message lookup failed", msgLookupErr);
+        }
+        sentByAssistant = msgRow?.sender_type === "assistant";
+      }
+
+      if (!sentByAssistant) {
+        const { error: disableErr } = await supabase
+          .from("conversations")
+          .update({
+            ai_mode: "OFF",
+            human_control: true,
+            human_control_at: now,
+            last_human_message_at: now,
+            ai_paused_until: null,
+          })
+          .eq("id", convId);
+
+        if (disableErr) {
+          console.warn("[Webhook] failed to disable AI after human WhatsApp reply", disableErr);
+        } else {
+          console.log("[Webhook] Outbound human message detected -> AI disabled", {
+            conversation_id: convId,
+            providerMessageId,
+          });
+        }
+      } else {
+        console.log("[Webhook] Outbound message is AI-sent (assistant) -> keep AI mode", {
+          conversation_id: convId,
+          providerMessageId,
+        });
+      }
+    }
 
     // ✅ PATCH 5: Apenas UM increment_unread_count (não incrementa em backfill)
     if (!fromMe && !isBackfill) await supabase.rpc('increment_unread_count', { conv_id: convId });
