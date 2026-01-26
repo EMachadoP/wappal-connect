@@ -83,10 +83,10 @@ export function ChatArea(props: ChatAreaProps) {
   const isResolved = props.conversationStatus === 'resolved';
 
   // Create contact object with unified name logic
-  const contactWithParticipantName = {
+  const contactWithParticipantName = contact ? {
     ...contact,
     name: getChatDisplayName(contact, participant),
-  };
+  } : { name: 'Carregando...', id: null };
 
   return (
     <div className="flex-1 flex flex-col bg-background h-full overflow-hidden">
@@ -127,7 +127,7 @@ export function ChatArea(props: ChatAreaProps) {
         />
       )}
 
-      {!contact.is_group && (
+      {contact && !contact.is_group && (
         <ParticipantHeader
           phone={contact.phone}
           whatsappDisplayName={contactInfo?.whatsapp_display_name || contact.whatsapp_display_name}
