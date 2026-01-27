@@ -202,21 +202,25 @@ async function resolveCondoByTokens(supabase: any, userText: string) {
 
   if (!list.length) return { kind: "not_found" as const };
 
+  // ✅ FIX: SEMPRE aceitar o melhor match, mesmo se houver outros parecidos
+  // Não queremos frustrar o cliente com listas ou perguntas repetidas
   const best = list[0];
-  const second = list[1];
 
-  const bestHasAll = best.score >= 100;
-  // ✅ FIX: Relaxed threshold. If abs score is high (>80), even small diff is enough.
-  const diff = second ? (best.score - second.score) : 100;
-  const clearWin = !second || diff >= 50 || (best.score >= 80 && diff >= 20);
-
-  // ✅ UX FIX: If ONLY ONE candidate is found, accept it even if not a "clearWin" or "bestHasAll"
-  // This prevents "I found 1 condo. Is it Puerto Montt?" when there is no other choice.
-  if (list.length === 1 || (bestHasAll && clearWin)) {
+  // Se o score é razoável (>= 50), aceita
+  if (best.score >= 50) {
+    console.log(`[CONDO] Accepting best match: "${best.name}" (score: ${best.score})`);
     return { kind: "matched" as const, condo: best };
   }
 
-  return { kind: "ambiguous" as const, options: list.slice(0, 3) };
+  // Se o score é baixo mas é a única opção, aceita também
+  if (list.length === 1) {
+    console.log(`[CONDO] Accepting only match: "${best.name}" (score: ${best.score})`);
+    return { kind: "matched" as const, condo: best };
+  }
+
+  // Só retorna not_found se realmente não houver nenhum candidato razoável
+  console.log(`[CONDO] No good match found. Best was: "${best.name}" (score: ${best.score})`);
+  return { kind: "not_found" as const };
 }
 
 function pickOptionIndex(text: string): number | null {
@@ -932,158 +936,90 @@ serve(async (req: Request) => {
     // 2) se estava pendente de algo, interpretar resposta e atualizar estado
     if (conversationId && pendingField) {
       if (pendingField === "condominium") {
-        // se havia opções salvas, aceitar “1/2/3”, “primeiro”, etc.
-        const options = pendingPayload?.condo_options as any[] | undefined;
-        const pickIdx = options?.length ? pickOptionIndex(lastUserMsgText) : null;
-        if (options?.length && pickIdx != null && options[pickIdx]) {
-          const chosen = options[pickIdx];
+        const r = await resolveCondoByTokens(supabase, lastUserMsgText);
+
+        if (r.kind === "matched") {
           await supabase.from("conversations").update({
-            active_condominium_id: chosen.id,
+            active_condominium_id: r.condo.id,
             pending_field: null,
             pending_payload: { ...pendingPayload, condo_options: null },
             pending_set_at: null
           }).eq("id", conversationId);
+          hasIdentifiedCondo = true;
         } else {
-          const r = await resolveCondoByTokens(supabase, lastUserMsgText);
-
-          if (r.kind === "matched") {
-            await supabase.from("conversations").update({
-              active_condominium_id: r.condo.id,
-              pending_field: null,
-              pending_payload: { ...pendingPayload, condo_options: null },
-              pending_set_at: null
-            }).eq("id", conversationId);
-          } else if (r.kind === "ambiguous") {
-            await supabase.from("conversations").update({
-              pending_payload: { ...pendingPayload, condo_options: r.options },
-              pending_set_at: new Date().toISOString()
-            }).eq("id", conversationId);
-          } else if (r.kind === "not_found") {
-            await supabase.from("conversations").update({
-              pending_payload: { ...pendingPayload, condo_raw: lastUserMsgText },
-              pending_set_at: new Date().toISOString()
-            }).eq("id", conversationId);
-          }
+          // ✅ Aceita o nome raw e segue
+          await supabase.from("conversations").update({
+            pending_field: null,
+            pending_payload: { ...pendingPayload, condo_raw_name: lastUserMsgText },
+            pending_set_at: null
+          }).eq("id", conversationId);
         }
       }
 
-      // ✅ NEW: Proactive condo detection from history if still missing ID
+      // ✅ Proactive condo detection from history - accept without re-asking
       if (!hasIdentifiedCondo && conversationId) {
         const candidate = findRecentCondoCandidate(messagesNoSystem);
         if (candidate) {
-          console.log(`[AI] Proactive condo candidate found in history: "${candidate}"`);
+          console.log(`[AI] Proactive condo candidate found: "${candidate}"`);
           const r = await resolveCondoByTokens(supabase, candidate);
+
           if (r.kind === "matched") {
             await supabase.from("conversations").update({
               active_condominium_id: r.condo.id,
-              active_condominium_confidence: 0.8 // Found in history context
+              active_condominium_confidence: 0.8
             }).eq("id", conversationId);
             hasIdentifiedCondo = true;
-          } else if (r.kind === "not_found") {
-            // Store as raw name to avoid asking again
+            console.log(`[AI] ✅ Proactive match accepted: "${r.condo.name}"`);
+          } else {
+            // ✅ Aceita o nome raw sem perguntar de novo
             await supabase.from("conversations").update({
               pending_payload: { ...pendingPayload, condo_raw_name: candidate }
             }).eq("id", conversationId);
+            console.log(`[AI] ⚠️ Proactive raw name stored: "${candidate}"`);
           }
         }
       }
 
       // ✅ FIX: Escape hatch with condoStepDone flag
+      // ✅ FIX: Simplified condominium resolution - accept on first attempt
       if (pendingField === "condominium_name") {
-        let condoStepDone = false;
         const lastText = lastUserMsgText.trim();
-        const retryCount = (pendingPayload.condo_retry_count || 0) + 1;
 
-        // 0) Se tinha opções e o usuário escolheu um número
-        if (Array.isArray(pendingPayload.condo_options) && pendingPayload.condo_options.length) {
-          const choice = parseInt(lastText, 10);
-          if (!Number.isNaN(choice) && choice >= 1 && choice <= pendingPayload.condo_options.length) {
-            const picked = pendingPayload.condo_options[choice - 1];
+        // Tentar resolver por tokens
+        const r = await resolveCondoByTokens(supabase, lastText);
 
-            await supabase.from("conversations").update({
-              active_condominium_id: picked.id,
-              pending_field: null,
-              pending_payload: { ...pendingPayload, condo_options: null, condo_retry_count: 0 },
-              pending_set_at: null,
-            }).eq("id", conversationId);
+        if (r.kind === "matched") {
+          // ✅ Encontrou! Aceita e segue
+          await supabase.from("conversations").update({
+            active_condominium_id: r.condo.id,
+            pending_field: null,
+            pending_payload: { ...pendingPayload, condo_options: null },
+            pending_set_at: null,
+          }).eq("id", conversationId);
 
-            // ✅ etapa concluída (será detectada por hasCondoInfo via active_condominium_id)
-            condoStepDone = true;
-          }
+          hasIdentifiedCondo = true;
+          console.log(`[CONDO] ✅ Matched and accepted: "${r.condo.name}"`);
+
+        } else {
+          // ✅ Não encontrou no banco? ACEITA O NOME RAW e segue
+          // O protocolo será criado com o nome que o cliente informou
+          // A equipe ajusta depois se necessário
+          console.log(`[CONDO] ⚠️ Not found in DB, accepting raw name: "${lastText}"`);
+
+          pendingPayload.condo_raw_name = lastText;
+          pendingPayload.condo_not_in_db = true;
+
+          await supabase.from("conversations").update({
+            pending_field: null,
+            pending_payload: pendingPayload,
+            pending_set_at: null,
+          }).eq("id", conversationId);
+
+          // NÃO seta hasIdentifiedCondo = true, pois não temos ID
+          // Mas também NÃO retorna pedindo confirmação - segue em frente
         }
 
-        // 1) Se ainda não concluiu, tenta resolver por tokens
-        if (!condoStepDone) {
-          const r = await resolveCondoByTokens(supabase, lastText);
-
-          if (r.kind === "matched") {
-            await supabase.from("conversations").update({
-              active_condominium_id: r.condo.id,
-              pending_field: null,
-              pending_payload: { ...pendingPayload, condo_options: null, condo_retry_count: 0 },
-              pending_set_at: null,
-            }).eq("id", conversationId);
-
-            condoStepDone = true;
-            // ✅ hasCondoInfo will be true on next read via active_condominium_id
-
-          } else if (r.kind === "ambiguous") {
-            await supabase.from("conversations").update({
-              pending_payload: { ...pendingPayload, condo_options: r.options, condo_retry_count: retryCount },
-              pending_set_at: new Date().toISOString(),
-            }).eq("id", conversationId);
-
-            return new Response(JSON.stringify({
-              text: `Encontrei ${r.options.length} condomínios parecidos. Qual deles é o correto?\n` +
-                r.options.map((o: any, i: number) => `${i + 1}. ${o.name}`).join("\n"),
-              finish_reason: "CONDO_AMBIGUOUS",
-              provider: "state-machine",
-              model: "deterministic",
-              request_id: crypto.randomUUID()
-            }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-
-          } else {
-            // not_found
-            if (retryCount >= 2) {
-              // ✅ ESCAPE: fecha etapa do condomínio mesmo sem ID
-              console.log(`[STATE] Condo not found after ${retryCount} attempts. Proceeding without ID using raw name: "${lastText}"`);
-
-              // ✅ CRITICAL FIX: Update LOCAL variable FIRST
-              pendingPayload.condo_raw_name = lastText;
-              pendingPayload.condo_not_in_db = true;
-              pendingPayload.condo_options = null;
-              pendingPayload.condo_retry_count = retryCount;
-
-              await supabase.from("conversations").update({
-                pending_field: null,
-                pending_payload: pendingPayload,
-                pending_set_at: null,
-              }).eq("id", conversationId);
-
-              condoStepDone = true; // ✅ importante: NÃO voltar para "perguntar condomínio" de novo
-              // NÃO seta hasIdentifiedCondo = true, pois não temos ID
-
-            } else {
-              // 1ª tentativa: orientar melhor
-              await supabase.from("conversations").update({
-                pending_payload: { ...pendingPayload, condo_raw: lastText, condo_retry_count: retryCount },
-                pending_set_at: new Date().toISOString(),
-              }).eq("id", conversationId);
-
-              return new Response(JSON.stringify({
-                text: "Não localizei esse nome exato. Pode confirmar como aparece na fatura ou o nome completo? " +
-                  "(ex.: 'Residencial Portal do Sol' / 'Condomínio Vista Verde')",
-                finish_reason: "CONDO_NOT_FOUND_RETRY",
-                provider: "state-machine",
-                model: "deterministic",
-                request_id: crypto.randomUUID()
-              }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-            }
-          }
-        }
-
-        // ✅ daqui pra frente o fluxo continua normalmente (vai para create-protocol)
-        // NÃO retorne mensagem pedindo o problema de novo.
+        // ✅ Continua o fluxo normalmente (não retorna aqui)
       }
 
       if (pendingField === "apartment") {
