@@ -10,9 +10,15 @@ ADD COLUMN IF NOT EXISTS manual_notes TEXT,
 ADD COLUMN IF NOT EXISTS is_fixed BOOLEAN DEFAULT FALSE,
 ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES auth.users(id);
 
--- 2. Adicionar índice para performance
+-- 2. Adicionar índices para performance
 CREATE INDEX IF NOT EXISTS idx_plan_items_source ON plan_items(source);
 CREATE INDEX IF NOT EXISTS idx_plan_items_plan_date ON plan_items(plan_date);
+
+-- 2.1 Adicionar colunas de tracking em protocol_work_items (caso faltem)
+ALTER TABLE protocol_work_items 
+ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ,
+ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
+ADD COLUMN IF NOT EXISTS notes TEXT;
 
 -- 3. Criar view atualizada para incluir cards manuais
 DROP VIEW IF EXISTS v_planning_week CASCADE;
