@@ -1149,7 +1149,7 @@ serve(async (req: Request) => {
           pending_set_at: null
         }).eq("id", conversationId);
 
-        // Protocol confirmation variations
+        // Protocol confirmation variations - CLEAN & NEUTRAL
         const CONFIRMS = [
           `Certo. Chamado registrado sob o protocolo ${officialCode}. Já encaminhei para a equipe operacional e seguimos por aqui.`,
           `Perfeito — protocolei como ${officialCode}. Já direcionei para a equipe operacional e vamos acompanhando por aqui.`,
@@ -1161,7 +1161,8 @@ serve(async (req: Request) => {
         for (let i = 0; i < seed.length; i++) h = ((h * 31) + seed.charCodeAt(i)) >>> 0;
         let msg = CONFIRMS[h % CONFIRMS.length];
 
-        // ✅ FIX: Only add footer if we REALLY don't have condo info
+        // ✅ PATCH 10: SILENT MATCH - Never repeat the condo name in the final msg if it was a technical match
+        // Only add footer if we REALLY have NO info at all.
         if (!hasCondoInfo) {
           msg += "\n\nPra agilizar, me diga o condomínio quando puder (pode ser só o nome mesmo).";
         }
@@ -1193,10 +1194,22 @@ serve(async (req: Request) => {
     // ✅ Define activeCondoId for the standard LLM flow
     const activeCondoId = stateNow?.active_condominium_id || pp?.active_condominium_id;
 
-    // ✅ ANTI-ROBOT GREETING LOGIC
+    // ✅ PATCH 10 + 11: ANTI-ROBOT GREETING LOGIC
+    // Only use name if:
+    // 1. User EXPLICITLY provided it as a greeting in recent messages
+    // 2. OR user is identified with a personal role (NOT Portaria/Shared)
     let greeting = "";
-    if (pp && pp.requester_name && !isGenericContactName(pp.requester_name)) {
-      greeting = `Olá ${pp.requester_name}!\n\n`;
+    const userMentionedName = messagesNoSystem.some((m: any) =>
+      m.role === 'user' && /(meu nome é|sou (o|a)?)\s+([A-Za-zÀ-ÿ]{2,})/i.test(m.content)
+    );
+
+    const SAFE_PERSONAL_ROLES = ['sindico', 'subsindico', 'morador', 'gerente_predio', 'supervisor', 'admin', 'owner'];
+    const isSafeRole = SAFE_PERSONAL_ROLES.includes(contactRole);
+
+    if (pp?.requester_name && !isGenericContactName(pp.requester_name)) {
+      if (userMentionedName || isSafeRole) {
+        greeting = `Olá ${pp.requester_name}!\n\n`;
+      }
     }
 
     const stateHint =
@@ -1225,8 +1238,13 @@ REGRAS DE EXECUÇÃO:
     - 'admin': Pedidos de cópia de contrato, cadastros, troca de tags, dúvidas administrativas.
     - 'financial': Segunda via de boleto, dúvidas de pagamento.
     - 'support': Dúvidas gerais de uso do sistema.
-- NÃO abra protocolos 'admin' ou 'support' para simples pedidos de informação que você possa responder ou que o cliente possa resolver sozinho, a menos que ele peça formalmente um registro/chamado.
+- NÃO abra protocolos 'admin' ou 'support' para simples pedidos de informação que você possa responder ou que levasse o cliente a resolver sozinho, a menos que ele peça formalmente um registro/chamado.
 - Responda sempre em português natural, sem blocos estruturados, sem tom robótico.
+
+REGRAS DE SILENT MATCH (PATCH 10):
+- NUNCA repita o nome formal do Condomínio se ele foi "adivinhado" ou "auto-vinculado". 
+- Ex: Se o usuário diz "aqui no Jardins", NÃO responda "Entendido, no Residencial Jardins das Oliveiras". Responda apenas "Entendido, no Jardins" ou de forma neutra.
+- NÃO confirme o nome do usuário ("Ah, então você é o Sr. Fulano") a menos que ele tenha acabado de se apresentar formalmente.
 
 REGRAS DE FORMATO - MUITO IMPORTANTE:
 - NUNCA exiba JSON, código, ou dados estruturados na sua resposta ao cliente.
