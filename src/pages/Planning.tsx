@@ -75,8 +75,11 @@ interface PlanItem {
     protocol_code: string;
     conversation_id: string;
     protocol_summary: string | null;
+    condominium_id: string | null;
     condominium_name: string | null;
     assignment_group_id: string | null;
+    manual_title: string | null;
+    manual_notes: string | null;
 }
 
 interface Technician {
@@ -165,13 +168,12 @@ const SortableItem = ({ item, openConversation, handleUpdateStatus, onEditItem, 
                 {item.work_item_status === 'done' && <CheckCircle className="h-3 w-3 text-green-600" />}
             </div>
 
-            {/* Rich Card Content */}
             <div className="text-sm font-semibold truncate">
-                {item.condominium_name || 'Condomínio não identificado'}
+                {item.condominium_name || item.manual_title || 'Sem título'}
             </div>
-            {item.protocol_summary && item.protocol_summary !== item.work_item_title && (
+            {(item.protocol_summary || item.manual_notes) && (
                 <div className="text-[11px] text-muted-foreground line-clamp-2 leading-tight mb-1">
-                    {item.protocol_summary}
+                    {item.protocol_summary || item.manual_notes}
                 </div>
             )}
             <div className="text-[10px] opacity-70 flex justify-between items-center">

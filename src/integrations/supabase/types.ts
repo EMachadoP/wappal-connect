@@ -58,6 +58,29 @@ export type Database = {
           },
         ]
       }
+      ai_conversation_locks: {
+        Row: {
+          conversation_id: string
+          locked_at: string
+        }
+        Insert: {
+          conversation_id: string
+          locked_at?: string
+        }
+        Update: {
+          conversation_id?: string
+          locked_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_conversation_locks_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: true
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ai_conversation_state: {
         Row: {
           ai_disabled_reason: string | null
@@ -157,11 +180,13 @@ export type Database = {
           id: string
           input_excerpt: string | null
           latency_ms: number | null
+          meta: Json | null
           model: string
           output_text: string | null
           prompt_version: string | null
           provider: string
           request_id: string | null
+          skip_reason: string | null
           status: string
           team_id: string | null
           tokens_in: number | null
@@ -174,11 +199,13 @@ export type Database = {
           id?: string
           input_excerpt?: string | null
           latency_ms?: number | null
+          meta?: Json | null
           model: string
           output_text?: string | null
           prompt_version?: string | null
           provider: string
           request_id?: string | null
+          skip_reason?: string | null
           status?: string
           team_id?: string | null
           tokens_in?: number | null
@@ -191,11 +218,13 @@ export type Database = {
           id?: string
           input_excerpt?: string | null
           latency_ms?: number | null
+          meta?: Json | null
           model?: string
           output_text?: string | null
           prompt_version?: string | null
           provider?: string
           request_id?: string | null
+          skip_reason?: string | null
           status?: string
           team_id?: string | null
           tokens_in?: number | null
@@ -482,6 +511,32 @@ export type Database = {
         }
         Relationships: []
       }
+      contact_aliases: {
+        Row: {
+          alias_key: string
+          contact_id: string
+          created_at: string
+        }
+        Insert: {
+          alias_key: string
+          contact_id: string
+          created_at?: string
+        }
+        Update: {
+          alias_key?: string
+          contact_id?: string
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "contact_aliases_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       contact_condominiums: {
         Row: {
           condominium_id: string
@@ -521,8 +576,33 @@ export type Database = {
           },
         ]
       }
+      contact_merge_map: {
+        Row: {
+          chat_key: string | null
+          id: string
+          merged_at: string | null
+          new_contact_id: string | null
+          old_contact_id: string | null
+        }
+        Insert: {
+          chat_key?: string | null
+          id?: string
+          merged_at?: string | null
+          new_contact_id?: string | null
+          old_contact_id?: string | null
+        }
+        Update: {
+          chat_key?: string | null
+          id?: string
+          merged_at?: string | null
+          new_contact_id?: string | null
+          old_contact_id?: string | null
+        }
+        Relationships: []
+      }
       contacts: {
         Row: {
+          chat_key: string | null
           chat_lid: string | null
           created_at: string
           group_name: string | null
@@ -539,6 +619,7 @@ export type Database = {
           whatsapp_display_name: string | null
         }
         Insert: {
+          chat_key?: string | null
           chat_lid?: string | null
           created_at?: string
           group_name?: string | null
@@ -555,6 +636,7 @@ export type Database = {
           whatsapp_display_name?: string | null
         }
         Update: {
+          chat_key?: string | null
           chat_lid?: string | null
           created_at?: string
           group_name?: string | null
@@ -568,6 +650,60 @@ export type Database = {
           profile_picture_url?: string | null
           tags?: string[] | null
           updated_at?: string
+          whatsapp_display_name?: string | null
+        }
+        Relationships: []
+      }
+      contacts_backup_20260115: {
+        Row: {
+          chat_key: string | null
+          chat_lid: string | null
+          created_at: string | null
+          group_name: string | null
+          id: string | null
+          is_group: boolean | null
+          lid: string | null
+          lid_collected_at: string | null
+          lid_source: string | null
+          name: string | null
+          phone: string | null
+          profile_picture_url: string | null
+          tags: string[] | null
+          updated_at: string | null
+          whatsapp_display_name: string | null
+        }
+        Insert: {
+          chat_key?: string | null
+          chat_lid?: string | null
+          created_at?: string | null
+          group_name?: string | null
+          id?: string | null
+          is_group?: boolean | null
+          lid?: string | null
+          lid_collected_at?: string | null
+          lid_source?: string | null
+          name?: string | null
+          phone?: string | null
+          profile_picture_url?: string | null
+          tags?: string[] | null
+          updated_at?: string | null
+          whatsapp_display_name?: string | null
+        }
+        Update: {
+          chat_key?: string | null
+          chat_lid?: string | null
+          created_at?: string | null
+          group_name?: string | null
+          id?: string | null
+          is_group?: boolean | null
+          lid?: string | null
+          lid_collected_at?: string | null
+          lid_source?: string | null
+          name?: string | null
+          phone?: string | null
+          profile_picture_url?: string | null
+          tags?: string[] | null
+          updated_at?: string | null
           whatsapp_display_name?: string | null
         }
         Relationships: []
@@ -616,6 +752,8 @@ export type Database = {
           id: string
           identification_asked: boolean
           last_confirmed_at: string | null
+          last_read_at: string | null
+          last_read_message_id: string | null
           updated_at: string
         }
         Insert: {
@@ -625,6 +763,8 @@ export type Database = {
           id?: string
           identification_asked?: boolean
           last_confirmed_at?: string | null
+          last_read_at?: string | null
+          last_read_message_id?: string | null
           updated_at?: string
         }
         Update: {
@@ -634,6 +774,8 @@ export type Database = {
           id?: string
           identification_asked?: boolean
           last_confirmed_at?: string | null
+          last_read_at?: string | null
+          last_read_message_id?: string | null
           updated_at?: string
         }
         Relationships: [
@@ -649,6 +791,13 @@ export type Database = {
             columns: ["current_participant_id"]
             isOneToOne: false
             referencedRelation: "participants"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversation_participant_state_last_read_message_id_fkey"
+            columns: ["last_read_message_id"]
+            isOneToOne: false
+            referencedRelation: "messages"
             referencedColumns: ["id"]
           },
         ]
@@ -716,21 +865,32 @@ export type Database = {
           assigned_by: string | null
           assigned_to: string | null
           chat_id: string | null
-          contact_id: string
+          contact_id: string | null
           created_at: string
           human_control: boolean | null
+          human_control_at: string | null
           id: string
+          is_group: boolean | null
+          last_human_message_at: string | null
+          last_message: string | null
           last_message_at: string | null
+          last_message_type: string | null
           marked_unread: boolean | null
+          pending_field: string | null
+          pending_payload: Json | null
+          pending_set_at: string | null
           priority: string | null
+          processing_token: string | null
+          processing_until: string | null
           protocol: string | null
+          reopened_at: string | null
+          reopened_by: string | null
           resolved_at: string | null
           resolved_by: string | null
           snoozed_until: string | null
           status: Database["public"]["Enums"]["conversation_status"]
           thread_key: string
           title: string | null
-          is_group: boolean
           typing_by_user_id: string | null
           typing_lock_until: string | null
           unread_count: number
@@ -747,21 +907,32 @@ export type Database = {
           assigned_by?: string | null
           assigned_to?: string | null
           chat_id?: string | null
-          contact_id: string
+          contact_id?: string | null
           created_at?: string
           human_control?: boolean | null
+          human_control_at?: string | null
           id?: string
+          is_group?: boolean | null
+          last_human_message_at?: string | null
+          last_message?: string | null
           last_message_at?: string | null
+          last_message_type?: string | null
           marked_unread?: boolean | null
+          pending_field?: string | null
+          pending_payload?: Json | null
+          pending_set_at?: string | null
           priority?: string | null
+          processing_token?: string | null
+          processing_until?: string | null
           protocol?: string | null
+          reopened_at?: string | null
+          reopened_by?: string | null
           resolved_at?: string | null
           resolved_by?: string | null
           snoozed_until?: string | null
           status?: Database["public"]["Enums"]["conversation_status"]
           thread_key: string
           title?: string | null
-          is_group?: boolean
           typing_by_user_id?: string | null
           typing_lock_until?: string | null
           unread_count?: number
@@ -778,21 +949,32 @@ export type Database = {
           assigned_by?: string | null
           assigned_to?: string | null
           chat_id?: string | null
-          contact_id?: string
+          contact_id?: string | null
           created_at?: string
           human_control?: boolean | null
+          human_control_at?: string | null
           id?: string
+          is_group?: boolean | null
+          last_human_message_at?: string | null
+          last_message?: string | null
           last_message_at?: string | null
+          last_message_type?: string | null
           marked_unread?: boolean | null
+          pending_field?: string | null
+          pending_payload?: Json | null
+          pending_set_at?: string | null
           priority?: string | null
+          processing_token?: string | null
+          processing_until?: string | null
           protocol?: string | null
+          reopened_at?: string | null
+          reopened_by?: string | null
           resolved_at?: string | null
           resolved_by?: string | null
           snoozed_until?: string | null
           status?: Database["public"]["Enums"]["conversation_status"]
           thread_key?: string
           title?: string | null
-          is_group?: boolean
           typing_by_user_id?: string | null
           typing_lock_until?: string | null
           unread_count?: number
@@ -818,6 +1000,140 @@ export type Database = {
             columns: ["contact_id"]
             isOneToOne: false
             referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      conversations_backup_20260115: {
+        Row: {
+          active_condominium_confidence: number | null
+          active_condominium_id: string | null
+          active_condominium_set_at: string | null
+          active_condominium_set_by: string | null
+          ai_mode: string | null
+          ai_paused_until: string | null
+          assigned_at: string | null
+          assigned_by: string | null
+          assigned_to: string | null
+          chat_id: string | null
+          contact_id: string | null
+          created_at: string | null
+          human_control: boolean | null
+          id: string | null
+          last_message: string | null
+          last_message_at: string | null
+          last_message_type: string | null
+          marked_unread: boolean | null
+          priority: string | null
+          protocol: string | null
+          reopened_at: string | null
+          reopened_by: string | null
+          resolved_at: string | null
+          resolved_by: string | null
+          snoozed_until: string | null
+          status: Database["public"]["Enums"]["conversation_status"] | null
+          thread_key: string | null
+          typing_by_user_id: string | null
+          typing_lock_until: string | null
+          unread_count: number | null
+          updated_at: string | null
+        }
+        Insert: {
+          active_condominium_confidence?: number | null
+          active_condominium_id?: string | null
+          active_condominium_set_at?: string | null
+          active_condominium_set_by?: string | null
+          ai_mode?: string | null
+          ai_paused_until?: string | null
+          assigned_at?: string | null
+          assigned_by?: string | null
+          assigned_to?: string | null
+          chat_id?: string | null
+          contact_id?: string | null
+          created_at?: string | null
+          human_control?: boolean | null
+          id?: string | null
+          last_message?: string | null
+          last_message_at?: string | null
+          last_message_type?: string | null
+          marked_unread?: boolean | null
+          priority?: string | null
+          protocol?: string | null
+          reopened_at?: string | null
+          reopened_by?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          snoozed_until?: string | null
+          status?: Database["public"]["Enums"]["conversation_status"] | null
+          thread_key?: string | null
+          typing_by_user_id?: string | null
+          typing_lock_until?: string | null
+          unread_count?: number | null
+          updated_at?: string | null
+        }
+        Update: {
+          active_condominium_confidence?: number | null
+          active_condominium_id?: string | null
+          active_condominium_set_at?: string | null
+          active_condominium_set_by?: string | null
+          ai_mode?: string | null
+          ai_paused_until?: string | null
+          assigned_at?: string | null
+          assigned_by?: string | null
+          assigned_to?: string | null
+          chat_id?: string | null
+          contact_id?: string | null
+          created_at?: string | null
+          human_control?: boolean | null
+          id?: string | null
+          last_message?: string | null
+          last_message_at?: string | null
+          last_message_type?: string | null
+          marked_unread?: boolean | null
+          priority?: string | null
+          protocol?: string | null
+          reopened_at?: string | null
+          reopened_by?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          snoozed_until?: string | null
+          status?: Database["public"]["Enums"]["conversation_status"] | null
+          thread_key?: string | null
+          typing_by_user_id?: string | null
+          typing_lock_until?: string | null
+          unread_count?: number | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      employee_phones: {
+        Row: {
+          created_at: string
+          id: string
+          is_active: boolean
+          phone: string
+          profile_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          phone: string
+          profile_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          phone?: string
+          profile_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "employee_phones_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
         ]
@@ -1007,6 +1323,38 @@ export type Database = {
         }
         Relationships: []
       }
+      material_requests: {
+        Row: {
+          created_at: string
+          id: string
+          items: Json
+          status: string
+          work_item_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          items?: Json
+          status?: string
+          work_item_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          items?: Json
+          status?: string
+          work_item_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "material_requests_work_item_id_fkey"
+            columns: ["work_item_id"]
+            isOneToOne: false
+            referencedRelation: "protocol_work_items"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       message_feedback: {
         Row: {
           conversation_id: string | null
@@ -1065,6 +1413,59 @@ export type Database = {
           },
         ]
       }
+      message_outbox: {
+        Row: {
+          conversation_id: string | null
+          created_at: string | null
+          error: string | null
+          id: string
+          idempotency_key: string
+          payload: Json
+          provider: string
+          provider_message_id: string | null
+          recipient: string
+          sent_at: string | null
+          status: string
+          to_chat_id: string | null
+        }
+        Insert: {
+          conversation_id?: string | null
+          created_at?: string | null
+          error?: string | null
+          id?: string
+          idempotency_key: string
+          payload: Json
+          provider?: string
+          provider_message_id?: string | null
+          recipient: string
+          sent_at?: string | null
+          status?: string
+          to_chat_id?: string | null
+        }
+        Update: {
+          conversation_id?: string | null
+          created_at?: string | null
+          error?: string | null
+          id?: string
+          idempotency_key?: string
+          payload?: Json
+          provider?: string
+          provider_message_id?: string | null
+          recipient?: string
+          sent_at?: string | null
+          status?: string
+          to_chat_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "message_outbox_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       messages: {
         Row: {
           agent_id: string | null
@@ -1073,13 +1474,14 @@ export type Database = {
           client_message_id: string | null
           content: string | null
           conversation_id: string
+          created_at: string
           delivered_at: string | null
           direction: string | null
           id: string
           media_url: string | null
           message_type: Database["public"]["Enums"]["message_type"]
           provider: string | null
-          provider_message_id: string | null
+          provider_message_id: string
           raw_payload: Json | null
           read_at: string | null
           sender_id: string | null
@@ -1100,13 +1502,14 @@ export type Database = {
           client_message_id?: string | null
           content?: string | null
           conversation_id: string
+          created_at?: string
           delivered_at?: string | null
           direction?: string | null
           id?: string
           media_url?: string | null
           message_type?: Database["public"]["Enums"]["message_type"]
           provider?: string | null
-          provider_message_id?: string | null
+          provider_message_id: string
           raw_payload?: Json | null
           read_at?: string | null
           sender_id?: string | null
@@ -1127,13 +1530,14 @@ export type Database = {
           client_message_id?: string | null
           content?: string | null
           conversation_id?: string
+          created_at?: string
           delivered_at?: string | null
           direction?: string | null
           id?: string
           media_url?: string | null
           message_type?: Database["public"]["Enums"]["message_type"]
           provider?: string | null
-          provider_message_id?: string | null
+          provider_message_id?: string
           raw_payload?: Json | null
           read_at?: string | null
           sender_id?: string | null
@@ -1156,6 +1560,90 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      messages_backup_20260115: {
+        Row: {
+          agent_id: string | null
+          agent_name: string | null
+          chat_id: string | null
+          client_message_id: string | null
+          content: string | null
+          conversation_id: string | null
+          delivered_at: string | null
+          direction: string | null
+          id: string | null
+          media_url: string | null
+          message_type: Database["public"]["Enums"]["message_type"] | null
+          provider: string | null
+          provider_message_id: string | null
+          raw_payload: Json | null
+          read_at: string | null
+          sender_id: string | null
+          sender_name: string | null
+          sender_phone: string | null
+          sender_type: Database["public"]["Enums"]["sender_type"] | null
+          sent_at: string | null
+          status: string | null
+          transcribed_at: string | null
+          transcript: string | null
+          transcript_provider: string | null
+          whatsapp_message_id: string | null
+        }
+        Insert: {
+          agent_id?: string | null
+          agent_name?: string | null
+          chat_id?: string | null
+          client_message_id?: string | null
+          content?: string | null
+          conversation_id?: string | null
+          delivered_at?: string | null
+          direction?: string | null
+          id?: string | null
+          media_url?: string | null
+          message_type?: Database["public"]["Enums"]["message_type"] | null
+          provider?: string | null
+          provider_message_id?: string | null
+          raw_payload?: Json | null
+          read_at?: string | null
+          sender_id?: string | null
+          sender_name?: string | null
+          sender_phone?: string | null
+          sender_type?: Database["public"]["Enums"]["sender_type"] | null
+          sent_at?: string | null
+          status?: string | null
+          transcribed_at?: string | null
+          transcript?: string | null
+          transcript_provider?: string | null
+          whatsapp_message_id?: string | null
+        }
+        Update: {
+          agent_id?: string | null
+          agent_name?: string | null
+          chat_id?: string | null
+          client_message_id?: string | null
+          content?: string | null
+          conversation_id?: string | null
+          delivered_at?: string | null
+          direction?: string | null
+          id?: string | null
+          media_url?: string | null
+          message_type?: Database["public"]["Enums"]["message_type"] | null
+          provider?: string | null
+          provider_message_id?: string | null
+          raw_payload?: Json | null
+          read_at?: string | null
+          sender_id?: string | null
+          sender_name?: string | null
+          sender_phone?: string | null
+          sender_type?: Database["public"]["Enums"]["sender_type"] | null
+          sent_at?: string | null
+          status?: string | null
+          transcribed_at?: string | null
+          transcript?: string | null
+          transcript_provider?: string | null
+          whatsapp_message_id?: string | null
+        }
+        Relationships: []
       }
       notifications: {
         Row: {
@@ -1252,6 +1740,171 @@ export type Database = {
           },
         ]
       }
+      participants_backup_20260115: {
+        Row: {
+          confidence: number | null
+          contact_id: string | null
+          created_at: string | null
+          entity_id: string | null
+          id: string | null
+          is_primary: boolean | null
+          name: string | null
+          role_type: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          confidence?: number | null
+          contact_id?: string | null
+          created_at?: string | null
+          entity_id?: string | null
+          id?: string | null
+          is_primary?: boolean | null
+          name?: string | null
+          role_type?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          confidence?: number | null
+          contact_id?: string | null
+          created_at?: string | null
+          entity_id?: string | null
+          id?: string | null
+          is_primary?: boolean | null
+          name?: string | null
+          role_type?: string | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      plan_items: {
+        Row: {
+          assignment_group_id: string | null
+          condominium_id: string | null
+          created_at: string
+          created_by: string | null
+          end_minute: number
+          id: string
+          is_fixed: boolean | null
+          manual_notes: string | null
+          manual_title: string | null
+          plan_date: string
+          sequence: number
+          source: string | null
+          start_minute: number
+          technician_id: string
+          work_item_id: string | null
+        }
+        Insert: {
+          assignment_group_id?: string | null
+          condominium_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          end_minute: number
+          id?: string
+          is_fixed?: boolean | null
+          manual_notes?: string | null
+          manual_title?: string | null
+          plan_date: string
+          sequence?: number
+          source?: string | null
+          start_minute: number
+          technician_id: string
+          work_item_id?: string | null
+        }
+        Update: {
+          assignment_group_id?: string | null
+          condominium_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          end_minute?: number
+          id?: string
+          is_fixed?: boolean | null
+          manual_notes?: string | null
+          manual_title?: string | null
+          plan_date?: string
+          sequence?: number
+          source?: string | null
+          start_minute?: number
+          technician_id?: string
+          work_item_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plan_items_condominium_id_fkey"
+            columns: ["condominium_id"]
+            isOneToOne: false
+            referencedRelation: "condominiums"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "plan_items_technician_id_fkey"
+            columns: ["technician_id"]
+            isOneToOne: false
+            referencedRelation: "technicians"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "plan_items_work_item_id_fkey"
+            columns: ["work_item_id"]
+            isOneToOne: false
+            referencedRelation: "protocol_work_items"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      planner_locks: {
+        Row: {
+          id: number
+          lock_key: string
+          locked_at: string
+        }
+        Insert: {
+          id?: number
+          lock_key: string
+          locked_at?: string
+        }
+        Update: {
+          id?: number
+          lock_key?: string
+          locked_at?: string
+        }
+        Relationships: []
+      }
+      profile_whatsapp_ids: {
+        Row: {
+          created_at: string
+          id: string
+          is_active: boolean
+          profile_id: string
+          wa_id: string
+          wa_type: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          profile_id: string
+          wa_id: string
+          wa_type?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          profile_id?: string
+          wa_id?: string
+          wa_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "profile_whatsapp_ids_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -1296,6 +1949,54 @@ export type Database = {
           },
         ]
       }
+      protocol_notifications: {
+        Row: {
+          channel: string
+          created_at: string | null
+          error: string | null
+          id: string
+          protocol_id: string
+          recipient: string | null
+          sent_at: string
+          status: string | null
+        }
+        Insert: {
+          channel: string
+          created_at?: string | null
+          error?: string | null
+          id?: string
+          protocol_id: string
+          recipient?: string | null
+          sent_at?: string
+          status?: string | null
+        }
+        Update: {
+          channel?: string
+          created_at?: string | null
+          error?: string | null
+          id?: string
+          protocol_id?: string
+          recipient?: string | null
+          sent_at?: string
+          status?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "protocol_notifications_protocol_id_fkey"
+            columns: ["protocol_id"]
+            isOneToOne: false
+            referencedRelation: "protocols"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "protocol_notifications_protocol_id_fkey"
+            columns: ["protocol_id"]
+            isOneToOne: false
+            referencedRelation: "v_planning_week"
+            referencedColumns: ["protocol_id"]
+          },
+        ]
+      }
       protocol_sequences: {
         Row: {
           created_at: string | null
@@ -1317,6 +2018,75 @@ export type Database = {
         }
         Relationships: []
       }
+      protocol_work_items: {
+        Row: {
+          assignment_group_id: string | null
+          category: string
+          created_at: string
+          criticality: string
+          due_date: string | null
+          estimated_minutes: number
+          id: string
+          location_text: string | null
+          priority: string
+          protocol_id: string
+          required_people: number
+          required_skill_codes: string[]
+          sla_business_days: number
+          status: string
+          title: string
+        }
+        Insert: {
+          assignment_group_id?: string | null
+          category: string
+          created_at?: string
+          criticality?: string
+          due_date?: string | null
+          estimated_minutes?: number
+          id?: string
+          location_text?: string | null
+          priority?: string
+          protocol_id: string
+          required_people?: number
+          required_skill_codes?: string[]
+          sla_business_days?: number
+          status?: string
+          title: string
+        }
+        Update: {
+          assignment_group_id?: string | null
+          category?: string
+          created_at?: string
+          criticality?: string
+          due_date?: string | null
+          estimated_minutes?: number
+          id?: string
+          location_text?: string | null
+          priority?: string
+          protocol_id?: string
+          required_people?: number
+          required_skill_codes?: string[]
+          sla_business_days?: number
+          status?: string
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "protocol_work_items_protocol_id_fkey"
+            columns: ["protocol_id"]
+            isOneToOne: false
+            referencedRelation: "protocols"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "protocol_work_items_protocol_id_fkey"
+            columns: ["protocol_id"]
+            isOneToOne: false
+            referencedRelation: "v_planning_week"
+            referencedColumns: ["protocol_id"]
+          },
+        ]
+      }
       protocols: {
         Row: {
           ai_classified: boolean | null
@@ -1326,6 +2096,7 @@ export type Database = {
           asana_task_gid: string | null
           category: string | null
           condominium_id: string | null
+          condominium_raw_name: string | null
           contact_id: string | null
           conversation_id: string | null
           created_at: string
@@ -1356,6 +2127,7 @@ export type Database = {
           asana_task_gid?: string | null
           category?: string | null
           condominium_id?: string | null
+          condominium_raw_name?: string | null
           contact_id?: string | null
           conversation_id?: string | null
           created_at?: string
@@ -1386,6 +2158,7 @@ export type Database = {
           asana_task_gid?: string | null
           category?: string | null
           condominium_id?: string | null
+          condominium_raw_name?: string | null
           contact_id?: string | null
           conversation_id?: string | null
           created_at?: string
@@ -1446,6 +2219,24 @@ export type Database = {
           },
         ]
       }
+      skills: {
+        Row: {
+          code: string
+          id: string
+          label: string
+        }
+        Insert: {
+          code: string
+          id?: string
+          label: string
+        }
+        Update: {
+          code?: string
+          id?: string
+          label?: string
+        }
+        Relationships: []
+      }
       system_alerts: {
         Row: {
           created_at: string | null
@@ -1473,6 +2264,54 @@ export type Database = {
           message?: string
           metadata?: Json | null
           source?: string
+        }
+        Relationships: []
+      }
+      task_templates: {
+        Row: {
+          active: boolean
+          category: string
+          created_at: string
+          criticality: string
+          default_materials: Json
+          default_minutes: number
+          id: string
+          match_keywords: string[] | null
+          match_priority: number | null
+          required_people: number
+          required_skill_codes: string[]
+          sla_business_days: number
+          title: string
+        }
+        Insert: {
+          active?: boolean
+          category: string
+          created_at?: string
+          criticality?: string
+          default_materials?: Json
+          default_minutes?: number
+          id?: string
+          match_keywords?: string[] | null
+          match_priority?: number | null
+          required_people?: number
+          required_skill_codes?: string[]
+          sla_business_days?: number
+          title: string
+        }
+        Update: {
+          active?: boolean
+          category?: string
+          created_at?: string
+          criticality?: string
+          default_materials?: Json
+          default_minutes?: number
+          id?: string
+          match_keywords?: string[] | null
+          match_priority?: number | null
+          required_people?: number
+          required_skill_codes?: string[]
+          sla_business_days?: number
+          title?: string
         }
         Relationships: []
       }
@@ -1582,6 +2421,66 @@ export type Database = {
         }
         Relationships: []
       }
+      technician_skills: {
+        Row: {
+          level: number
+          skill_id: string
+          technician_id: string
+        }
+        Insert: {
+          level?: number
+          skill_id: string
+          technician_id: string
+        }
+        Update: {
+          level?: number
+          skill_id?: string
+          technician_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "technician_skills_skill_id_fkey"
+            columns: ["skill_id"]
+            isOneToOne: false
+            referencedRelation: "skills"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "technician_skills_technician_id_fkey"
+            columns: ["technician_id"]
+            isOneToOne: false
+            referencedRelation: "technicians"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      technicians: {
+        Row: {
+          created_at: string
+          dispatch_priority: number
+          id: string
+          is_active: boolean
+          is_wildcard: boolean
+          name: string
+        }
+        Insert: {
+          created_at?: string
+          dispatch_priority?: number
+          id?: string
+          is_active?: boolean
+          is_wildcard?: boolean
+          name: string
+        }
+        Update: {
+          created_at?: string
+          dispatch_priority?: number
+          id?: string
+          is_active?: boolean
+          is_wildcard?: boolean
+          name?: string
+        }
+        Relationships: []
+      }
       user_roles: {
         Row: {
           id: string
@@ -1662,16 +2561,84 @@ export type Database = {
         }
         Relationships: []
       }
+      v_planning_week: {
+        Row: {
+          assignment_group_id: string | null
+          condominium_id: string | null
+          condominium_name: string | null
+          conversation_id: string | null
+          end_minute: number | null
+          estimated_minutes: number | null
+          id: string | null
+          is_fixed: boolean | null
+          manual_notes: string | null
+          manual_title: string | null
+          plan_date: string | null
+          protocol_code: string | null
+          protocol_id: string | null
+          protocol_summary: string | null
+          sequence: number | null
+          source: string | null
+          start_minute: number | null
+          technician_id: string | null
+          technician_name: string | null
+          work_item_category: string | null
+          work_item_id: string | null
+          work_item_priority: string | null
+          work_item_status: string | null
+          work_item_title: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plan_items_condominium_id_fkey"
+            columns: ["condominium_id"]
+            isOneToOne: false
+            referencedRelation: "condominiums"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "plan_items_technician_id_fkey"
+            columns: ["technician_id"]
+            isOneToOne: false
+            referencedRelation: "technicians"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "plan_items_work_item_id_fkey"
+            columns: ["work_item_id"]
+            isOneToOne: false
+            referencedRelation: "protocol_work_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "protocols_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
+      acquire_conversation_lock: {
+        Args: { p_conversation_id: string; p_ttl_seconds?: number }
+        Returns: {
+          ok: boolean
+          token: string
+          until: string
+        }[]
+      }
       can_access_conversation: {
         Args: { _conversation_id: string; _user_id: string }
         Returns: boolean
       }
       cleanup_expired_data: { Args: never; Returns: undefined }
+      cleanup_message_outbox: { Args: never; Returns: undefined }
       cleanup_old_ai_logs: { Args: never; Returns: undefined }
       cleanup_old_messages: { Args: never; Returns: undefined }
       cleanup_old_notifications: { Args: never; Returns: undefined }
+      delete_plan_item: { Args: { p_item_id: string }; Returns: Json }
       detect_display_name_type: {
         Args: { display_name: string }
         Returns: string
@@ -1708,6 +2675,61 @@ export type Database = {
         }[]
       }
       normalize_chat_id: { Args: { raw_chat_id: string }; Returns: string }
+      normalize_chat_key: { Args: { chat_id: string }; Returns: string }
+      normalize_phone: { Args: { v: string }; Returns: string }
+      normalize_phone_for_unique: {
+        Args: { phone_val: string }
+        Returns: string
+      }
+      release_conversation_lock: {
+        Args: { p_conversation_id: string; p_token: string }
+        Returns: boolean
+      }
+      resolve_contact_identity: {
+        Args: {
+          p_chat_id: string
+          p_chat_lid: string
+          p_lid: string
+          p_name?: string
+          p_phone: string
+        }
+        Returns: {
+          chat_key: string
+          contact_id: string
+          out_chat_key: string
+          used_key: string
+        }[]
+      }
+      resolve_contact_identity_v6: {
+        Args: {
+          p_chat_id: string
+          p_chat_lid: string
+          p_lid: string
+          p_name?: string
+          p_phone: string
+        }
+        Returns: {
+          chat_key: string
+          contact_id: string
+          out_chat_key: string
+          used_key: string
+        }[]
+      }
+      resolve_contact_identity_v7: {
+        Args: {
+          p_chat_id: string
+          p_chat_lid: string
+          p_lid: string
+          p_name?: string
+          p_phone: string
+        }
+        Returns: {
+          chat_key: string
+          contact_id: string
+          out_chat_key: string
+          used_key: string
+        }[]
+      }
       resume_expired_ai_pauses: {
         Args: never
         Returns: {
@@ -1737,7 +2759,7 @@ export type Database = {
       app_role: "admin" | "agent"
       conversation_status: "open" | "resolved"
       message_type: "text" | "image" | "video" | "audio" | "document" | "system"
-      sender_type: "contact" | "agent" | "system"
+      sender_type: "contact" | "agent" | "system" | "assistant"
       task_priority: "low" | "normal" | "high" | "urgent"
       task_status: "pending" | "in_progress" | "waiting" | "done" | "cancelled"
     }
@@ -1753,116 +2775,116 @@ type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
 
 export type Tables<
   DefaultSchemaTableNameOrOptions extends
-  | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
-  | { schema: keyof DatabaseWithoutInternals },
+    | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
+    | { schema: keyof DatabaseWithoutInternals },
   TableName extends DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
-  ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
-    DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-  : never = never,
+    ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+        DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
+    : never = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
   ? (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
-    DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])[TableName] extends {
+      DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])[TableName] extends {
       Row: infer R
     }
-  ? R
-  : never
+    ? R
+    : never
   : DefaultSchemaTableNameOrOptions extends keyof (DefaultSchema["Tables"] &
-    DefaultSchema["Views"])
-  ? (DefaultSchema["Tables"] &
-    DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
-      Row: infer R
-    }
-  ? R
-  : never
-  : never
+        DefaultSchema["Views"])
+    ? (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
+        Row: infer R
+      }
+      ? R
+      : never
+    : never
 
 export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
-  | keyof DefaultSchema["Tables"]
-  | { schema: keyof DatabaseWithoutInternals },
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
   TableName extends DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
-  ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-  : never = never,
+    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    : never = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
   ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
-    Insert: infer I
-  }
-  ? I
-  : never
+      Insert: infer I
+    }
+    ? I
+    : never
   : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
-  ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
-    Insert: infer I
-  }
-  ? I
-  : never
-  : never
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Insert: infer I
+      }
+      ? I
+      : never
+    : never
 
 export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
-  | keyof DefaultSchema["Tables"]
-  | { schema: keyof DatabaseWithoutInternals },
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
   TableName extends DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
-  ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-  : never = never,
+    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    : never = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
   ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
-    Update: infer U
-  }
-  ? U
-  : never
+      Update: infer U
+    }
+    ? U
+    : never
   : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
-  ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
-    Update: infer U
-  }
-  ? U
-  : never
-  : never
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Update: infer U
+      }
+      ? U
+      : never
+    : never
 
 export type Enums<
   DefaultSchemaEnumNameOrOptions extends
-  | keyof DefaultSchema["Enums"]
-  | { schema: keyof DatabaseWithoutInternals },
+    | keyof DefaultSchema["Enums"]
+    | { schema: keyof DatabaseWithoutInternals },
   EnumName extends DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
-  ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-  : never = never,
+    ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
+    : never = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
   ? DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"][EnumName]
   : DefaultSchemaEnumNameOrOptions extends keyof DefaultSchema["Enums"]
-  ? DefaultSchema["Enums"][DefaultSchemaEnumNameOrOptions]
-  : never
+    ? DefaultSchema["Enums"][DefaultSchemaEnumNameOrOptions]
+    : never
 
 export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
-  | keyof DefaultSchema["CompositeTypes"]
-  | { schema: keyof DatabaseWithoutInternals },
+    | keyof DefaultSchema["CompositeTypes"]
+    | { schema: keyof DatabaseWithoutInternals },
   CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
-  ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-  : never = never,
+    ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
+    : never = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
   ? DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"][CompositeTypeName]
   : PublicCompositeTypeNameOrOptions extends keyof DefaultSchema["CompositeTypes"]
-  ? DefaultSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
-  : never
+    ? DefaultSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
+    : never
 
 export const Constants = {
   public: {
@@ -1870,7 +2892,7 @@ export const Constants = {
       app_role: ["admin", "agent"],
       conversation_status: ["open", "resolved"],
       message_type: ["text", "image", "video", "audio", "document", "system"],
-      sender_type: ["contact", "agent", "system"],
+      sender_type: ["contact", "agent", "system", "assistant"],
       task_priority: ["low", "normal", "high", "urgent"],
       task_status: ["pending", "in_progress", "waiting", "done", "cancelled"],
     },
