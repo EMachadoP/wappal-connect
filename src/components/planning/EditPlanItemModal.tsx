@@ -71,11 +71,14 @@ export function EditPlanItemModal({ item, open, onOpenChange, onSaved }: EditPla
 
             if (planError) throw planError;
 
-            // Update protocol summary
-            if (summary !== item.protocol_summary) {
+            // Update protocol summary and condominium name
+            if (summary !== item.protocol_summary || condoName !== item.condominium_name) {
                 const { error: protocolError } = await supabase
                     .from('protocols')
-                    .update({ summary })
+                    .update({
+                        summary,
+                        condominium_name: condoName
+                    })
                     .eq('id', item.protocol_id);
 
                 if (protocolError) throw protocolError;

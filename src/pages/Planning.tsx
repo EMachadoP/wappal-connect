@@ -341,15 +341,35 @@ export default function Planning() {
             setPlanItems(updatedItems);
 
             // Persist to DB
-            const { error } = await supabase
-                .from('plan_items' as any)
-                .update({
-                    technician_id: targetTechId,
-                    plan_date: targetDate
-                })
-                .match({ id: draggedId });
+            const groupId = originalItem.assignment_group_id;
 
-            if (error) throw error;
+            if (groupId) {
+                // move todos do grupo no banco
+                const groupItemIds = planItems
+                    .filter(p => p.assignment_group_id === groupId)
+                    .map(p => p.id);
+
+                const { error } = await supabase
+                    .from('plan_items' as any)
+                    .update({
+                        technician_id: targetTechId,
+                        plan_date: targetDate
+                    })
+                    .in('id', groupItemIds);
+
+                if (error) throw error;
+            } else {
+                // move só 1
+                const { error } = await supabase
+                    .from('plan_items' as any)
+                    .update({
+                        technician_id: targetTechId,
+                        plan_date: targetDate
+                    })
+                    .match({ id: draggedId });
+
+                if (error) throw error;
+            }
 
             // If it's a group (2 technicians), we might want to move both, but user MVP only asked for basic DND
             // For now, let's just move the dragged one.

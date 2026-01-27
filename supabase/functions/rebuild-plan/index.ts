@@ -11,7 +11,7 @@ const MORNING_START = 8 * 60;  // 08:00
 const MORNING_END = 12 * 60;   // 12:00
 const AFTERNOON_START = 13 * 60; // 13:00
 const AFTERNOON_END = 17 * 60;   // 17:00
-const DAILY_CAP = 360; // Max 6 hours per day per technician
+const DAILY_CAP = 480; // Max 8 hours per day per technician
 
 // Priority order (higher = more urgent)
 const PRIORITY_ORDER: Record<string, number> = {
@@ -80,6 +80,13 @@ serve(async (req) => {
             d.setDate(d.getDate() + i);
             dates.push(d.toISOString().split('T')[0]);
         }
+
+        const isWeekday = (dateStr: string) => {
+            const d = new Date(dateStr + "T00:00:00");
+            const day = d.getDay(); // 0 dom, 6 sáb
+            return day >= 1 && day <= 5;
+        };
+        const weekdayDates = dates.filter(isWeekday);
         const endDate = dates[dates.length - 1];
 
         // 3. Lock
@@ -89,18 +96,33 @@ serve(async (req) => {
 
         try {
             // 4. Clean up
+            const { data: plannedInRange, error: pirErr } = await admin
+                .from('plan_items')
+                .select('work_item_id')
+                .gte('plan_date', start_date)
+                .lte('plan_date', endDate);
+
+            if (pirErr) throw new Error(`Error loading planned ids: ${pirErr.message}`);
+
+            const workItemIdsInRange = Array.from(
+                new Set((plannedInRange || []).map((x: any) => x.work_item_id).filter(Boolean))
+            );
+
             await admin.from('plan_items').delete().gte('plan_date', start_date).lte('plan_date', endDate);
 
-            // Reset previously planned items to open and clear their assignment group
-            await admin.from('protocol_work_items')
-                .update({ assignment_group_id: null, status: 'open' })
-                .in('status', ['planned']);
+            // Reseta SOMENTE os work items que estavam agendados nesse range
+            if (workItemIdsInRange.length > 0) {
+                await admin.from('protocol_work_items')
+                    .update({ assignment_group_id: null, status: 'open' })
+                    .in('id', workItemIdsInRange);
+            }
 
             // 5. Load Work Items
             const { data: workItems, error: wiErr } = await admin
                 .from('protocol_work_items')
                 .select('*')
-                .in('status', ['open', 'planned']);
+                .in('status', ['open', 'planned'])
+                .eq('category', 'technical');
 
             if (wiErr) throw new Error(`Error loading work items: ${wiErr.message}`);
             if (!workItems || workItems.length === 0) return json(200, { scheduled: 0, reqId });
@@ -160,8 +182,8 @@ serve(async (req) => {
 
                 // Heuristic: non-critical items prefer D+1 and D+2 before D0
                 const preferredDates = isCritical
-                    ? dates
-                    : [...dates.slice(1, 3), dates[0], ...dates.slice(3)];
+                    ? weekdayDates
+                    : [...weekdayDates.slice(1, 3), weekdayDates[0], ...weekdayDates.slice(3)];
 
                 let allocated = false;
                 for (const dateStr of preferredDates) {
