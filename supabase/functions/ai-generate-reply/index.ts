@@ -33,6 +33,67 @@ function hasUsefulText(t: string) {
   return true;
 }
 
+// ✅ NOVO: Detectar mensagens que são apenas confirmação/agradecimento
+function isJustConfirmation(text: string): boolean {
+  const normalized = (text || '').trim().toLowerCase()
+    .replace(/[!.?,;:]+/g, '')  // Remove pontuação
+    .replace(/\s+/g, ' ')        // Normaliza espaços
+    .trim();
+
+  // Lista de confirmações simples que NÃO devem abrir protocolo
+  const CONFIRMATIONS = [
+    'ok', 'okay', 'oks', 'okk', 'okok',
+    'sim', 'sims', 'ss', 'sss',
+    'nao', 'não', 'n',
+    'blz', 'beleza', 'bele',
+    'certo', 'certinho', 'ctz',
+    'entendi', 'entendido',
+    'combinado', 'fechado',
+    'valeu', 'vlw', 'vlww',
+    'obrigado', 'obrigada', 'obg', 'brigado', 'brigada',
+    'ta', 'tá', 'ta bom', 'tá bom', 'tudo bem',
+    'perfeito', 'otimo', 'ótimo',
+    'show', 'top', 'massa',
+    'pode ser', 'bora', 'vamos',
+    'legal', 'tranquilo', 'tranquila',
+    'boa', 'boa tarde', 'bom dia', 'boa noite',
+    'ate mais', 'até mais', 'ate logo', 'até logo',
+    'tchau', 'flw', 'falou', 'abraco', 'abraço'
+  ];
+
+  // Verifica match exato
+  if (CONFIRMATIONS.includes(normalized)) return true;
+
+  // Verifica se é muito curto (< 5 chars) e não é problema técnico
+  if (normalized.length < 5 && !isOperationalIssue(normalized)) return true;
+
+  // Verifica padrões comuns de confirmação
+  if (/^(ok+|sim+|ss+|n[aã]o+|blz+|vlw+|obg|ta\s*bom)$/i.test(normalized)) return true;
+
+  return false;
+}
+
+// ✅ NOVO: Verificar se protocolo foi criado recentemente nessa conversa
+async function hasRecentProtocol(supabase: any, conversationId: string, withinMinutes: number = 30): Promise<boolean> {
+  if (!conversationId) return false;
+
+  const cutoff = new Date(Date.now() - withinMinutes * 60 * 1000).toISOString();
+
+  const { data, error } = await supabase
+    .from('protocols')
+    .select('id, created_at')
+    .eq('conversation_id', conversationId)
+    .gte('created_at', cutoff)
+    .limit(1);
+
+  if (error) {
+    console.warn('[AI] Error checking recent protocols:', error.message);
+    return false;
+  }
+
+  return (data?.length || 0) > 0;
+}
+
 function extractApartment(text: string): string | null {
   const t = (text || "").trim();
 
@@ -1106,12 +1167,28 @@ serve(async (req: Request) => {
     // Se o contexto operacional é muito forte (ex: "portão quebrado"), relaxamos a exigência de pergunta prévia da IA
     const strongOperationalContext = /quebrado|parado|não funciona|travou|emergência/i.test(recentText);
 
-    const canOpenNow = hasCondoInfo && hasOperationalContext && (!needsApartment || Boolean(aptCandidate)) && (hasMinimumConversation || strongOperationalContext) && (aiAskedQuestion || strongOperationalContext) && !isQuestion;
+    // ✅ FIX: Verificar se a mensagem é apenas confirmação (Patch 14)
+    const isConfirmationOnly = isJustConfirmation(lastUserMsgText);
+
+    if (isConfirmationOnly) {
+      console.log(`[AI] 🛑 Skipping protocol - message is just confirmation: "${lastUserMsgText}"`);
+    }
+
+    const canOpenNow = hasCondoInfo
+      && hasOperationalContext
+      && (!needsApartment || Boolean(aptCandidate))
+      && (hasMinimumConversation || strongOperationalContext)
+      && (aiAskedQuestion || strongOperationalContext)
+      && !isQuestion
+      && !isConfirmationOnly; // ✅ NOVO: Não abrir se for apenas confirmação
 
     // ✅ FIX: re-declare for downstream uses
     const isProvidingApartment = Boolean(extractApartment(lastUserMsgText)) && hasOperationalContext;
     const isProvidingApartmentWithCondo = isProvidingApartment && hasCondoInfo && hasMinimumConversation;
     const canActuallyOpen = canOpenNow;
+
+    // ✅ FIX: Verificar se já tem protocolo recente antes de abrir outro (Patch 14)
+    const alreadyHasRecentProtocol = conversationId ? await hasRecentProtocol(supabase, conversationId, 30) : false;
 
     // ✅ FIX: Log para debug
     if (canOpenNow && !hasMinimumConversation && !strongOperationalContext) {
@@ -1120,9 +1197,12 @@ serve(async (req: Request) => {
     if (canOpenNow && !aiAskedQuestion && !strongOperationalContext) {
       console.log(`[AI] ⏸️ Skipping auto-open: AI hasn't asked any questions yet`);
     }
+    if (alreadyHasRecentProtocol && isConfirmationOnly) {
+      console.log(`[AI] 🛑 Skipping - recent protocol exists and message is confirmation`);
+    }
 
     // ✅ FIX: NUNCA abrir protocolo automaticamente na primeira interação
-    if (conversationId && (canActuallyOpen || isProvidingApartmentWithCondo) && !isFirstInteraction) {
+    if (conversationId && (canActuallyOpen || isProvidingApartmentWithCondo) && !isFirstInteraction && !alreadyHasRecentProtocol && !isConfirmationOnly) {
       try {
         const ticketData = await executeCreateProtocol(
           supabase,
@@ -1179,6 +1259,45 @@ serve(async (req: Request) => {
       }
     }
 
+    // ✅ NOVO: Resposta inteligente para confirmações após protocolo recente (Patch 14)
+    if (conversationId && isConfirmationOnly && alreadyHasRecentProtocol) {
+      // Variações de resposta curta para confirmações
+      const CONFIRMATION_RESPONSES = [
+        null, // Não responder (40% das vezes)
+        null,
+        "👍",
+        "Combinado!",
+        "Perfeito, qualquer coisa estou por aqui.",
+        "Certo!",
+      ];
+
+      // Hash para escolha determinística
+      let hash = 0;
+      for (let i = 0; i < conversationId.length; i++) {
+        hash = ((hash << 5) - hash) + conversationId.charCodeAt(i);
+        hash |= 0;
+      }
+
+      const response = CONFIRMATION_RESPONSES[Math.abs(hash) % CONFIRMATION_RESPONSES.length];
+
+      if (response === null) {
+        console.log(`[AI] 🤫 Silencing response to confirmation after recent protocol`);
+        return new Response(JSON.stringify({
+          text: null,
+          skipped: "confirmation_after_protocol",
+          finish_reason: 'SKIPPED'
+        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
+      console.log(`[AI] 👍 Short response to confirmation: "${response}"`);
+      return new Response(JSON.stringify({
+        text: response,
+        finish_reason: 'CONFIRMATION_RESPONSE',
+        provider: 'deterministic',
+        model: 'confirmation-handler'
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
     // --- TIER 5: IA (LLM) ---
 
     // 5.1 Recarregar estado atualizado para o Hint
@@ -1231,6 +1350,8 @@ ${stateHint}
 
 REGRAS DE EXECUÇÃO:
 - Se existir PENDENTE, faça apenas 1 pergunta curta para resolver. Não faça checklists longos.
+- Se o cliente responder apenas "Ok", "Sim", "Obrigado" ou similar após um chamado registrado, NÃO abra novo protocolo. Apenas agradeça brevemente ou não responda.
+- Se já foi aberto um protocolo nessa conversa recentemente, NÃO abra outro a menos que o cliente relate um NOVO problema claramente diferente.
 - Não repita perguntas já respondidas no histórico.
 - Só chame create_protocol quando tiver: nome do condomínio + descrição clara + (apartamento quando for unidade) + nome do solicitante.
 - CATEGORIAS DE PROTOCOLO:
