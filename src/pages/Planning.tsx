@@ -195,15 +195,26 @@ const SortableItem = ({ item, openConversation, handleUpdateStatus, onEditItem, 
                 {item.work_item_status !== 'done' && (
                     <>
                         {item.work_item_status !== 'in_progress' ? (
-                            <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6 hover:bg-amber-100 text-amber-600"
-                                onClick={(e) => handleUpdateStatus(item.work_item_id, 'in_progress', e)}
-                                title="Iniciar"
-                            >
-                                <Play className="h-3 w-3 fill-current" />
-                            </Button>
+                            <div className="flex items-center gap-1">
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6 hover:bg-amber-100 text-amber-600"
+                                    onClick={(e) => handleUpdateStatus(item.work_item_id, 'in_progress', e)}
+                                    title="Iniciar"
+                                >
+                                    <Play className="h-3 w-3 fill-current" />
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6 hover:bg-green-100 text-green-600"
+                                    onClick={(e) => handleUpdateStatus(item.work_item_id, 'done', e)}
+                                    title="Concluir Direto"
+                                >
+                                    <CheckCircle className="h-3 w-3" />
+                                </Button>
+                            </div>
                         ) : (
                             <Button
                                 variant="ghost"
@@ -343,6 +354,8 @@ export default function Planning() {
             if (status === 'in_progress') updates.started_at = new Date().toISOString();
             if (status === 'done') updates.completed_at = new Date().toISOString();
 
+            // Se estiver concluindo, opcionalmente podemos remover o agendamento?
+            // Para simplicidade MVP: apenas atualiza o status. Se for 'done', a view v_planning_week já marca como concluído visualmente.
             const { error } = await supabase.from('protocol_work_items' as any).update(updates).eq('id', itemId);
             if (error) throw error;
             toast.success(`Status atualizado`);
@@ -352,18 +365,20 @@ export default function Planning() {
         }
     };
 
-    const handleDeleteItem = async () => {
+    const handleDeleteItem = async (resolveFirst = false) => {
         if (!itemToDelete) return;
 
         try {
             // Usar a função do banco que faz cleanup
+            // Agora aceita p_set_done para resolver o protocolo ao remover
             const { error } = await supabase.rpc('delete_plan_item', {
-                p_item_id: itemToDelete.id
+                p_item_id: itemToDelete.id,
+                p_set_done: resolveFirst
             });
 
             if (error) throw error;
 
-            toast.success('Agendamento removido');
+            toast.success(resolveFirst ? 'Protocolo concluído e removido' : 'Agendamento removido');
             fetchData();
         } catch (err: any) {
             console.error('Error deleting item:', err);
@@ -683,9 +698,14 @@ export default function Planning() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                        <AlertDialogAction onClick={handleDeleteItem} className="bg-red-600 hover:bg-red-700">
-                            Remover
+                        <AlertDialogAction onClick={() => handleDeleteItem(false)} className="bg-amber-600 hover:bg-amber-700">
+                            Apenas Remover
                         </AlertDialogAction>
+                        {itemToDelete?.protocol_id && (
+                            <AlertDialogAction onClick={() => handleDeleteItem(true)} className="bg-green-600 hover:bg-green-700">
+                                Resolver e Remover
+                            </AlertDialogAction>
+                        )}
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>
