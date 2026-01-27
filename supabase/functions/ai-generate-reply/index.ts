@@ -1178,7 +1178,7 @@ serve(async (req: Request) => {
       && hasOperationalContext
       && (!needsApartment || Boolean(aptCandidate))
       && (hasMinimumConversation || strongOperationalContext)
-      && (aiAskedQuestion || strongOperationalContext)
+      && aiAskedQuestion // ✅ FIX: SEMPRE exige que a IA tenha feito pelo menos 1 pergunta
       && !isQuestion
       && !isConfirmationOnly; // ✅ NOVO: Não abrir se for apenas confirmação
 
@@ -1261,35 +1261,29 @@ serve(async (req: Request) => {
 
     // ✅ NOVO: Resposta inteligente para confirmações após protocolo recente (Patch 14)
     if (conversationId && isConfirmationOnly && alreadyHasRecentProtocol) {
-      // Variações de resposta curta para confirmações
+      // ✅ FIX: Respostas SEMPRE humanizadas (sem silêncio)
       const CONFIRMATION_RESPONSES = [
-        null, // Não responder (40% das vezes)
-        null,
         "👍",
         "Combinado!",
-        "Perfeito, qualquer coisa estou por aqui.",
-        "Certo!",
+        "Perfeito!",
+        "Certo, qualquer coisa me avise.",
+        "Disponha!",
+        "Fico à disposição.",
+        "Beleza!",
+        "Pode contar comigo.",
       ];
 
-      // Hash para escolha determinística
+      // Hash para escolha determinística (mas variada por conversa + tempo)
       let hash = 0;
-      for (let i = 0; i < conversationId.length; i++) {
-        hash = ((hash << 5) - hash) + conversationId.charCodeAt(i);
+      const seed = `${conversationId}:${Math.floor(Date.now() / 60000)}`; // Varia a cada minuto
+      for (let i = 0; i < seed.length; i++) {
+        hash = ((hash << 5) - hash) + seed.charCodeAt(i);
         hash |= 0;
       }
 
       const response = CONFIRMATION_RESPONSES[Math.abs(hash) % CONFIRMATION_RESPONSES.length];
 
-      if (response === null) {
-        console.log(`[AI] 🤫 Silencing response to confirmation after recent protocol`);
-        return new Response(JSON.stringify({
-          text: null,
-          skipped: "confirmation_after_protocol",
-          finish_reason: 'SKIPPED'
-        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-      }
-
-      console.log(`[AI] 👍 Short response to confirmation: "${response}"`);
+      console.log(`[AI] 👍 Humanized response to confirmation: "${response}"`);
       return new Response(JSON.stringify({
         text: response,
         finish_reason: 'CONFIRMATION_RESPONSE',
@@ -1327,8 +1321,12 @@ serve(async (req: Request) => {
 
     if (pp?.requester_name && !isGenericContactName(pp.requester_name)) {
       if (userMentionedName || isSafeRole) {
-        greeting = `Olá ${pp.requester_name}!\n\n`;
+        greeting = `Olá, ${pp.requester_name}! `;
+      } else {
+        greeting = "Olá! ";
       }
+    } else {
+      greeting = "Olá! ";
     }
 
     const stateHint =
@@ -1349,8 +1347,9 @@ serve(async (req: Request) => {
 ${stateHint}
 
 REGRAS DE EXECUÇÃO:
-- Se existir PENDENTE, faça apenas 1 pergunta curta para resolver. Não faça checklists longos.
-- Se o cliente responder apenas "Ok", "Sim", "Obrigado" ou similar após um chamado registrado, NÃO abra novo protocolo. Apenas agradeça brevemente ou não responda.
+- Responda sempre em português natural e amigável. Mostre empatia (ex: "Sinto muito pelo problema com o portão, vamos resolver isso").
+- Tente interpretar o que o cliente quer dizer, mesmo que ele use termos leigos ou frases incompletas.
+- Se o cliente responder apenas "Ok", "Sim", "Obrigado" ou similar após um chamado registrado, use uma resposta curta e humana como "Disponha!", "Qualquer coisa estamos aqui!", etc.
 - Se já foi aberto um protocolo nessa conversa recentemente, NÃO abra outro a menos que o cliente relate um NOVO problema claramente diferente.
 - Não repita perguntas já respondidas no histórico.
 - Só chame create_protocol quando tiver: nome do condomínio + descrição clara + (apartamento quando for unidade) + nome do solicitante.
@@ -1360,7 +1359,7 @@ REGRAS DE EXECUÇÃO:
     - 'financial': Segunda via de boleto, dúvidas de pagamento.
     - 'support': Dúvidas gerais de uso do sistema.
 - NÃO abra protocolos 'admin' ou 'support' para simples pedidos de informação que você possa responder ou que levasse o cliente a resolver sozinho, a menos que ele peça formalmente um registro/chamado.
-- Responda sempre em português natural, sem blocos estruturados, sem tom robótico.
+- Evite blocos estruturados ou listas enumeradas a menos que seja estritamente necessário para clareza. Sua fala deve ser fluida como uma pessoa.
 
 REGRAS DE SILENT MATCH (PATCH 10):
 - NUNCA repita o nome formal do Condomínio se ele foi "adivinhado" ou "auto-vinculado". 
@@ -1370,8 +1369,9 @@ REGRAS DE SILENT MATCH (PATCH 10):
 REGRAS DE FORMATO - MUITO IMPORTANTE:
 - NUNCA exiba JSON, código, ou dados estruturados na sua resposta ao cliente.
 - Se precisar usar a ferramenta create_protocol, apenas CHAME a ferramenta silenciosamente - NÃO mostre os parâmetros na mensagem.
-- Sua resposta ao cliente deve ser sempre texto natural em português, como uma pessoa falando.
-- Varie suas saudações e confirmações - não use sempre as mesmas frases.`;
+- Sua resposta ao cliente deve ser sempre texto natural em português, variando saudações e encerramentos para não parecer robótico.
+- Use emojis de forma moderada e natural, como em uma conversa de WhatsApp.
+`;
 
 
     const { data: providerConfig } = await supabase
@@ -1498,22 +1498,22 @@ REGRAS DE FORMATO - MUITO IMPORTANTE:
         const protocol = ticketData.protocol || ticketData;
         const nowBr = new Date().toLocaleString("pt-BR", { timeZone: "America/Recife" });
 
-        const lines = [
-          "🎯 Seu chamado foi registrado com sucesso:",
-          "",
-          `✅ Protocolo: ${protocol.protocol_code || protocol.code || protocol.protocol_number || protocol.id}`,
-          `📌 Categoria: ${translateCategory(protocol.category)}`,
-          `🟢 Prioridade: ${protocol.priority || "normal"}`,
-          `⏰ Vencimento: ${protocol.due_date ? String(protocol.due_date).slice(0, 10) : "-"}`,
-          `🕒 Data e hora: ${nowBr}`,
-          "",
-          "Nosso time já foi notificado.",
-          "",
-          "Grato",
-          "G7 Serv",
+        // Humanized conversational confirmation
+        const catLabel = translateCategory(protocol.category);
+        const code = protocol.protocol_code || protocol.code || protocol.protocol_number || protocol.id;
+        const officialCode = code.startsWith("G7-") ? code : `G7-${code}`;
+
+        const RESPONSES = [
+          `Tudo certo! Acabei de registrar seu chamado técnico aqui com o protocolo **${officialCode}**. Já informei nossa equipe técnica e estamos acompanhando por aqui.`,
+          `Perfeito, já protocolei seu pedido como **${officialCode}** (categoria ${catLabel}). Nossa equipe operacional já foi avisada e vamos cuidar disso o quanto antes.`,
+          `Entendido. Registrei aqui o chamado sob o protocolo **${officialCode}**. Já direcionei para o time responsável e qualquer novidade te aviso por aqui mesmo!`,
+          `Combinado. Seu protocolo é o **${officialCode}**. Já deixei tudo pronto com a nossa equipe técnica para verificarem essa questão.`
         ];
 
-        generatedText = lines.join("\n");
+        // Choose variation deterministic
+        let h = 0; const seed = `${conversationId}:${officialCode}`;
+        for (let i = 0; i < seed.length; i++) h = ((h * 31) + seed.charCodeAt(i)) >>> 0;
+        generatedText = RESPONSES[h % RESPONSES.length];
 
         if (!hasCondoInfo) {
           generatedText += "\n\nPra agilizar, me diga o condomínio quando puder (pode ser só o nome mesmo).";
