@@ -22,6 +22,19 @@ import { format, addDays, startOfWeek } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
+import { CreateManualItemModal } from '@/components/planning/CreateManualItemModal';
+import { PrintPlanningModal } from '@/components/planning/PrintPlanningModal';
+import { Trash2, Plus, Printer } from 'lucide-react';
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
     DndContext,
     closestCenter,
@@ -98,10 +111,11 @@ interface SortableItemProps {
     openConversation: (id: string) => void;
     handleUpdateStatus: (itemId: string, status: string, e: React.MouseEvent) => void;
     onEditItem: (item: PlanItem) => void;
+    confirmDelete: (item: PlanItem, e: React.MouseEvent) => void;
     otherTechs: string[];
 }
 
-const SortableItem = ({ item, openConversation, handleUpdateStatus, onEditItem, otherTechs }: SortableItemProps) => {
+const SortableItem = ({ item, openConversation, handleUpdateStatus, onEditItem, confirmDelete, otherTechs }: SortableItemProps) => {
     const {
         attributes,
         listeners,
@@ -211,6 +225,16 @@ const SortableItem = ({ item, openConversation, handleUpdateStatus, onEditItem, 
                         </Button>
                     </>
                 )}
+
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 hover:bg-red-100 text-red-600"
+                    onClick={(e) => confirmDelete(item, e)}
+                    title="Remover"
+                >
+                    <Trash2 className="h-3 w-3" />
+                </Button>
             </div>
         </div>
     );
@@ -219,15 +243,18 @@ const SortableItem = ({ item, openConversation, handleUpdateStatus, onEditItem, 
 interface DroppableCellProps {
     id: string; // techId:dateStr
     children: React.ReactNode;
+    onCreateClick: () => void;
 }
 
-const DroppableCell = ({ id, children }: DroppableCellProps) => {
+const DroppableCell = ({ id, children, onCreateClick }: DroppableCellProps) => {
     const { setNodeRef, isOver } = useDroppable({ id });
 
     return (
         <td
             ref={setNodeRef}
-            className={`border p-1 align-top min-h-[100px] transition-colors ${isOver ? 'bg-primary/10' : ''}`}
+            className={`border p-1 align-top min-h-[100px] transition-colors cursor-pointer ${isOver ? 'bg-primary/10' : 'hover:bg-muted/30'}`}
+            onDoubleClick={onCreateClick}
+            title="Duplo clique para criar novo"
         >
             <div className="space-y-1 min-h-[40px]">
                 {children}
@@ -246,6 +273,11 @@ export default function Planning() {
     const [activeId, setActiveId] = useState<string | null>(null);
     const [editingItem, setEditingItem] = useState<PlanItem | null>(null);
     const [editModalOpen, setEditModalOpen] = useState(false);
+    const [createModalOpen, setCreateModalOpen] = useState(false);
+    const [printModalOpen, setPrintModalOpen] = useState(false);
+    const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+    const [itemToDelete, setItemToDelete] = useState<PlanItem | null>(null);
+    const [createDefaults, setCreateDefaults] = useState<{ date?: string; techId?: string }>({});
 
     const sensors = useSensors(
         useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -297,6 +329,13 @@ export default function Planning() {
 
     const handleUpdateStatus = async (itemId: string, status: string, e: React.MouseEvent) => {
         e.stopPropagation();
+
+        // Se itemId não existe, pode ser um card manual
+        if (!itemId) {
+            toast.info('Card manual marcado como concluído');
+            return;
+        }
+
         try {
             const updates: any = { status };
             if (status === 'in_progress') updates.started_at = new Date().toISOString();
@@ -309,6 +348,34 @@ export default function Planning() {
         } catch (error: any) {
             toast.error('Erro ao atualizar status');
         }
+    };
+
+    const handleDeleteItem = async () => {
+        if (!itemToDelete) return;
+
+        try {
+            // Usar a função do banco que faz cleanup
+            const { error } = await supabase.rpc('delete_plan_item', {
+                p_item_id: itemToDelete.id
+            });
+
+            if (error) throw error;
+
+            toast.success('Agendamento removido');
+            fetchData();
+        } catch (err: any) {
+            console.error('Error deleting item:', err);
+            toast.error(`Erro ao remover: ${err.message}`);
+        } finally {
+            setDeleteConfirmOpen(false);
+            setItemToDelete(null);
+        }
+    };
+
+    const confirmDelete = (item: PlanItem, e: React.MouseEvent) => {
+        e.stopPropagation();
+        setItemToDelete(item);
+        setDeleteConfirmOpen(true);
     };
 
     const handleDragStart = (event: any) => {
@@ -439,6 +506,25 @@ export default function Planning() {
                             <ChevronRight className="h-4 w-4" />
                         </Button>
 
+                        <Button
+                            variant="outline"
+                            onClick={() => {
+                                setCreateDefaults({});
+                                setCreateModalOpen(true);
+                            }}
+                        >
+                            <Plus className="h-4 w-4 mr-2" />
+                            Novo
+                        </Button>
+
+                        <Button
+                            variant="outline"
+                            onClick={() => setPrintModalOpen(true)}
+                        >
+                            <Printer className="h-4 w-4 mr-2" />
+                            Imprimir
+                        </Button>
+
                         <Button onClick={handleRebuildPlan} disabled={rebuilding}>
                             <RefreshCw className={`h-4 w-4 mr-2 ${rebuilding ? 'animate-spin' : ''}`} />
                             {rebuilding ? 'Gerando...' : 'Gerar Planejamento'}
@@ -483,7 +569,14 @@ export default function Planning() {
                                                 const items = getItemsForCell(tech.id, dateStr);
 
                                                 return (
-                                                    <DroppableCell key={cellId} id={cellId}>
+                                                    <DroppableCell
+                                                        key={cellId}
+                                                        id={cellId}
+                                                        onCreateClick={() => {
+                                                            setCreateDefaults({ date: dateStr, techId: tech.id });
+                                                            setCreateModalOpen(true);
+                                                        }}
+                                                    >
                                                         <SortableContext items={items.map(i => i.id)} strategy={verticalListSortingStrategy}>
                                                             {items.map((item) => (
                                                                 <SortableItem
@@ -495,6 +588,7 @@ export default function Planning() {
                                                                         setEditingItem(item);
                                                                         setEditModalOpen(true);
                                                                     }}
+                                                                    confirmDelete={confirmDelete}
                                                                     otherTechs={getOtherTechs(item)}
                                                                 />
                                                             ))}
@@ -544,6 +638,54 @@ export default function Planning() {
                 onOpenChange={setEditModalOpen}
                 onSaved={fetchData}
             />
+
+            {/* Modal de Criar */}
+            <CreateManualItemModal
+                open={createModalOpen}
+                onOpenChange={setCreateModalOpen}
+                onSaved={fetchData}
+                technicians={technicians}
+                defaultDate={createDefaults.date}
+                defaultTechnicianId={createDefaults.techId}
+            />
+
+            {/* Modal de Impressão */}
+            <PrintPlanningModal
+                open={printModalOpen}
+                onOpenChange={setPrintModalOpen}
+                planItems={planItems}
+                technicians={technicians}
+                weekStart={weekStart}
+                weekDays={weekDays}
+            />
+
+            {/* Dialog de Confirmação de Delete */}
+            <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Remover Agendamento</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Tem certeza que deseja remover este agendamento?
+                            {itemToDelete?.assignment_group_id && (
+                                <span className="block mt-2 text-amber-600 font-medium">
+                                    ⚠️ Este item faz parte de uma equipe. Todos os técnicos do grupo serão removidos.
+                                </span>
+                            )}
+                            {itemToDelete?.work_item_id && (
+                                <span className="block mt-2">
+                                    O protocolo voltará para o status "aberto".
+                                </span>
+                            )}
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                        <AlertDialogAction onClick={handleDeleteItem} className="bg-red-600 hover:bg-red-700">
+                            Remover
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </AppLayout>
     );
 }

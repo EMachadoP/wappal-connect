@@ -108,7 +108,11 @@ serve(async (req) => {
                 new Set((plannedInRange || []).map((x: any) => x.work_item_id).filter(Boolean))
             );
 
-            await admin.from('plan_items').delete().gte('plan_date', start_date).lte('plan_date', endDate);
+            await admin.from('plan_items')
+                .delete()
+                .gte('plan_date', start_date)
+                .lte('plan_date', endDate)
+                .or('source.eq.auto,source.is.null'); // Só deleta auto, preserva manual
 
             // Reseta SOMENTE os work items que estavam agendados nesse range
             if (workItemIdsInRange.length > 0) {
