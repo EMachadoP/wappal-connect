@@ -1200,9 +1200,9 @@ serve(async (req: Request) => {
     // Se o contexto operacional é muito forte (ex: "portão quebrado"), relaxamos a exigência de pergunta prévia da IA
     const strongOperationalContext = /quebrado|parado|não funciona|travou|emergência/i.test(recentText);
 
-    const isConfirmationMessage = isJustConfirmation(lastUserMsgText);
+    const isConfirmationOnly = isJustConfirmation(lastUserMsgText);
 
-    if (isConfirmationMessage && conversationId) {
+    if (isConfirmationOnly && conversationId) {
       const recentProtocolExists = await hasRecentProtocol(supabase, conversationId, 60);
 
       if (recentProtocolExists) {
@@ -1224,7 +1224,7 @@ serve(async (req: Request) => {
       && (hasMinimumConversation || strongOperationalContext)
       && (aiAskedQuestion || strongOperationalContext) // ✅ FIX: Permite se context forte
       && !isQuestion
-      && !isConfirmationMessage; // ✅ CRÍTICO: Nunca abrir protocolo para confirmação
+      && !isConfirmationOnly; // ✅ CRÍTICO: Nunca abrir protocolo para confirmação
 
     // ✅ FIX: re-declare for downstream uses
     const isProvidingApartment = Boolean(extractApartment(lastUserMsgText)) && hasOperationalContext;
