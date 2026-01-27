@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
-import { Calendar, Clock, Users, Wrench } from 'lucide-react';
+import { Calendar, Clock, Users, Wrench, Building2, Plus, Search } from 'lucide-react';
 
 interface Technician {
     id: string;
@@ -24,6 +24,11 @@ interface CreateManualItemModalProps {
     defaultTechnicianId?: string;
 }
 
+interface Condominium {
+    id: string;
+    name: string;
+}
+
 export function CreateManualItemModal({
     open,
     onOpenChange,
@@ -33,7 +38,7 @@ export function CreateManualItemModal({
     defaultTechnicianId
 }: CreateManualItemModalProps) {
     const [loading, setLoading] = useState(false);
-    const [title, setTitle] = useState('');
+    const [title, setTitle] = useState(''); // Fallback title
     const [notes, setNotes] = useState('');
     const [date, setDate] = useState(defaultDate || '');
     const [startTime, setStartTime] = useState('08:00');
@@ -44,12 +49,62 @@ export function CreateManualItemModal({
     const [isFixed, setIsFixed] = useState(true);
     const [itemType, setItemType] = useState<'installation' | 'service'>('installation');
 
+    // Condominium state
+    const [condominiums, setCondominiums] = useState<Condominium[]>([]);
+    const [condominiumId, setCondominiumId] = useState<string>('');
+    const [loadingCondos, setLoadingCondos] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [showNewCondoForm, setShowNewCondoForm] = useState(false);
+    const [newCondoName, setNewCondoName] = useState('');
+
     useEffect(() => {
         if (open) {
             setDate(defaultDate || new Date().toISOString().split('T')[0]);
             setSelectedTechs(defaultTechnicianId ? [defaultTechnicianId] : []);
+            fetchCondominiums();
         }
     }, [open, defaultDate, defaultTechnicianId]);
+
+    const fetchCondominiums = async () => {
+        setLoadingCondos(true);
+        try {
+            const { data } = await supabase
+                .from('entities')
+                .select('id, name')
+                .eq('type', 'condominio')
+                .order('name');
+            setCondominiums(data || []);
+        } catch (err) {
+            console.error('Error fetching condos:', err);
+        } finally {
+            setLoadingCondos(false);
+        }
+    };
+
+    const handleCreateCondominium = async () => {
+        if (!newCondoName.trim()) return;
+        setLoading(true);
+        try {
+            const { data: entityData, error: entityError } = await supabase
+                .from('entities')
+                .insert({ name: newCondoName.trim(), type: 'condominio' })
+                .select().single();
+            if (entityError) throw entityError;
+
+            await supabase.from('condominiums').insert({ id: entityData.id, name: newCondoName.trim() });
+
+            toast.success('Condomínio cadastrado!');
+            setCondominiumId(entityData.id);
+            setShowNewCondoForm(false);
+            setNewCondoName('');
+            await fetchCondominiums();
+        } catch (err) {
+            console.error('Error creating condo:', err);
+            toast.error('Erro ao cadastrar condomínio');
+        } finally {
+            setLoading(false);
+        }
+    };
 
     const timeToMinutes = (time: string) => {
         const [h, m] = time.split(':').map(Number);
@@ -65,8 +120,8 @@ export function CreateManualItemModal({
     };
 
     const handleSave = async () => {
-        if (!title.trim()) {
-            toast.error('Informe o título/condomínio');
+        if (!condominiumId && !title.trim()) {
+            toast.error('Selecione um condomínio ou informe um título');
             return;
         }
         if (!date) {
@@ -92,7 +147,8 @@ export function CreateManualItemModal({
                 end_minute: endMinute,
                 sequence: index,
                 source: 'manual',
-                manual_title: title,
+                condominium_id: condominiumId || null,
+                manual_title: title || null,
                 manual_notes: notes || null,
                 is_fixed: isFixed,
                 assignment_group_id: groupId,
@@ -110,9 +166,11 @@ export function CreateManualItemModal({
             onOpenChange(false);
 
             // Reset form
+            setCondominiumId('');
             setTitle('');
             setNotes('');
             setSelectedTechs([]);
+            setSearchTerm('');
         } catch (err: any) {
             console.error('Error creating manual item:', err);
             toast.error(`Erro ao criar: ${err.message}`);
@@ -146,15 +204,83 @@ export function CreateManualItemModal({
                         </Select>
                     </div>
 
-                    {/* Título / Condomínio */}
+                    {/* Condomínio / Título */}
                     <div className="grid gap-2">
-                        <Label htmlFor="title">Condomínio / Título *</Label>
-                        <Input
-                            id="title"
-                            value={title}
-                            onChange={(e) => setTitle(e.target.value)}
-                            placeholder="Ex: Residencial Porto Seguro - Instalação CFTV"
-                        />
+                        <Label>Condomínio / Título *</Label>
+
+                        {showNewCondoForm ? (
+                            <div className="flex gap-2">
+                                <Input
+                                    placeholder="Nome do novo condomínio"
+                                    value={newCondoName}
+                                    onChange={(e) => setNewCondoName(e.target.value)}
+                                    className="flex-1"
+                                    autoFocus
+                                />
+                                <Button onClick={handleCreateCondominium} disabled={loading} size="sm">
+                                    Salvar
+                                </Button>
+                                <Button variant="ghost" size="sm" onClick={() => setShowNewCondoForm(false)}>
+                                    Cancelar
+                                </Button>
+                            </div>
+                        ) : (
+                            <div className="flex gap-2">
+                                <Select value={condominiumId} onValueChange={setCondominiumId}>
+                                    <SelectTrigger className="flex-1">
+                                        <SelectValue placeholder={loadingCondos ? 'Carregando...' : 'Selecione o condomínio'} />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <div className="px-2 py-1.5 border-b sticky top-0 bg-background z-10">
+                                            <Input
+                                                placeholder="🔍 Buscar..."
+                                                value={searchTerm}
+                                                onChange={(e) => setSearchTerm(e.target.value)}
+                                                className="h-8 text-sm"
+                                                onClick={(e) => e.stopPropagation()}
+                                            />
+                                        </div>
+                                        {condominiums
+                                            .filter(c => c.name.toLowerCase().includes(searchTerm.toLowerCase()))
+                                            .map((c) => (
+                                                <SelectItem key={c.id} value={c.id}>
+                                                    <div className="flex items-center gap-2">
+                                                        <Building2 className="h-4 w-4 text-muted-foreground" />
+                                                        {c.name}
+                                                    </div>
+                                                </SelectItem>
+                                            ))
+                                        }
+                                        {searchTerm && !condominiums.some(c => c.name.toLowerCase().includes(searchTerm.toLowerCase())) && (
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="w-full text-xs"
+                                                onClick={() => {
+                                                    setNewCondoName(searchTerm);
+                                                    setShowNewCondoForm(true);
+                                                }}
+                                            >
+                                                <Plus className="h-3 w-3 mr-1" /> Cadastrar "{searchTerm}"
+                                            </Button>
+                                        )}
+                                    </SelectContent>
+                                </Select>
+                                <Button variant="outline" size="icon" onClick={() => setShowNewCondoForm(true)}>
+                                    <Plus className="h-4 w-4" />
+                                </Button>
+                            </div>
+                        )}
+
+                        {!condominiumId && !showNewCondoForm && (
+                            <Input
+                                id="title"
+                                value={title}
+                                onChange={(e) => setTitle(e.target.value)}
+                                placeholder="Ou digite um título manual..."
+                                className="mt-1"
+                            />
+                        )}
                     </div>
 
                     {/* Notas */}

@@ -637,6 +637,7 @@ export default function Planning() {
                 open={editModalOpen}
                 onOpenChange={setEditModalOpen}
                 onSaved={fetchData}
+                technicians={technicians}
             />
 
             {/* Modal de Criar */}

@@ -53,6 +53,11 @@ export function PrintPlanningModal({
         const content = printRef.current;
         if (!content) return;
 
+        // ✅ PATCH 13: Nome do arquivo customizado para PDF
+        const todayStr = format(new Date(), 'dd-MM-yyyy');
+        const customTitle = `Planejamento Rota ${todayStr}`;
+        const oldTitle = document.title;
+
         const printWindow = window.open('', '_blank');
         if (!printWindow) {
             alert('Popup bloqueado. Permita popups para imprimir.');
@@ -63,32 +68,45 @@ export function PrintPlanningModal({
       <!DOCTYPE html>
       <html>
       <head>
-        <title>Planejamento - Semana de ${format(weekStart, "d 'de' MMMM", { locale: ptBR })}</title>
+        <title>${customTitle}</title>
         <style>
+          @page {
+            size: A4 landscape;
+            margin: 5mm;
+          }
           * { margin: 0; padding: 0; box-sizing: border-box; }
-          body { font-family: Arial, sans-serif; font-size: 10px; padding: 10px; }
-          h1 { font-size: 14px; margin-bottom: 5px; }
-          h2 { font-size: 11px; color: #666; margin-bottom: 10px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-          th, td { border: 1px solid #ccc; padding: 4px; text-align: left; vertical-align: top; }
-          th { background: #f0f0f0; font-weight: bold; }
-          .tech-name { font-weight: bold; background: #e8e8e8; }
-          .item { margin-bottom: 4px; padding: 3px; border: 1px solid #ddd; border-radius: 3px; font-size: 9px; }
-          .item-time { font-weight: bold; }
-          .item-title { }
+          body { font-family: Arial, sans-serif; font-size: 10px; padding: 10px; background: white; }
+          h1 { font-size: 14px; margin-bottom: 5px; text-align: center; }
+          h2 { font-size: 11px; color: #666; margin-bottom: 10px; text-align: center; }
+          table { width: 100%; border-collapse: collapse; margin-top: 10px; table-layout: fixed; }
+          th, td { border: 1px solid #ccc; padding: 4px; text-align: left; vertical-align: top; overflow: hidden; }
+          th { background: #f0f0f0; font-weight: bold; font-size: 9px; }
+          .tech-name { font-weight: bold; background: #e8e8e8; width: 80px; }
+          .item { margin-bottom: 4px; padding: 3px; border: 1px solid #ddd; border-radius: 3px; font-size: 8.5px; line-height: 1.1; }
+          .item-time { font-weight: bold; display: block; margin-bottom: 1px; }
+          .item-title { font-weight: 500; display: block; }
           .item-code { color: #666; font-size: 8px; }
           .done { opacity: 0.5; text-decoration: line-through; }
-          .manual { background: #fff3cd; }
+          .manual { background: #fef9c3 !important; -webkit-print-color-adjust: exact; }
+          
           @media print {
             body { padding: 0; }
             table { page-break-inside: auto; }
             tr { page-break-inside: avoid; }
+            .no-print { display: none; }
           }
         </style>
       </head>
       <body>
         ${content.innerHTML}
-        <script>window.onload = function() { window.print(); window.close(); }</script>
+        <script>
+          window.onload = function() { 
+            setTimeout(() => {
+              window.print(); 
+              window.close();
+            }, 500);
+          }
+        </script>
       </body>
       </html>
     `);
