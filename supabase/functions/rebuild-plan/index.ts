@@ -117,15 +117,26 @@ serve(async (req) => {
                     .in('id', workItemIdsInRange);
             }
 
-            // 5. Load Work Items
-            const { data: workItems, error: wiErr } = await admin
+            // 5. Load Work Items - PATCH 3.1: Filtrar por categorias agendáveis
+            const SCHEDULABLE_CATEGORIES = ['operational', 'support'];
+
+            const { data: rawItems, error: wiErr } = await admin
                 .from('protocol_work_items')
                 .select('*')
-                .in('status', ['open', 'planned'])
-                .eq('category', 'technical');
+                .in('status', ['open', 'planned']);
 
             if (wiErr) throw new Error(`Error loading work items: ${wiErr.message}`);
-            if (!workItems || workItems.length === 0) return json(200, { scheduled: 0, reqId });
+
+            const workItems = (rawItems || []).filter((wi: any) => {
+                const cat = (wi.category || '').toLowerCase();
+                return SCHEDULABLE_CATEGORIES.includes(cat);
+            });
+
+            console.log(`[rebuild-plan] Filtered: ${workItems.length} schedulable from ${rawItems?.length} total`);
+
+            if (!workItems || workItems.length === 0) {
+                return json(200, { scheduled: 0, reqId, filtered: rawItems?.length || 0 });
+            }
 
             // Sort: Critical -> Priority -> CreatedAt
             workItems.sort((a, b) => {
