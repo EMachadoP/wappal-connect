@@ -33,7 +33,7 @@ function hasUsefulText(t: string) {
   return true;
 }
 
-// ✅ NOVO: Detectar mensagens que são apenas confirmação/agradecimento
+// ✅ MODIFIED: Detectar mensagens que são apenas confirmação/agradecimento
 function isJustConfirmation(text: string): boolean {
   const normalized = (text || '').trim().toLowerCase()
     .replace(/[!.?,;:]+/g, '')  // Remove pontuação
@@ -73,15 +73,15 @@ function isJustConfirmation(text: string): boolean {
   return false;
 }
 
-// ✅ NOVO: Verificar se protocolo foi criado recentemente nessa conversa
-async function hasRecentProtocol(supabase: any, conversationId: string, withinMinutes: number = 30): Promise<boolean> {
+// ✅ MODIFIED: Verificar protocolo recente antes de processar confirmação
+async function hasRecentProtocol(supabase: any, conversationId: string, withinMinutes: number = 60): Promise<boolean> {
   if (!conversationId) return false;
 
   const cutoff = new Date(Date.now() - withinMinutes * 60 * 1000).toISOString();
 
   const { data, error } = await supabase
     .from('protocols')
-    .select('id, created_at')
+    .select('id')
     .eq('conversation_id', conversationId)
     .gte('created_at', cutoff)
     .limit(1);
@@ -666,11 +666,31 @@ serve(async (req: Request) => {
 
     const { data: convState, error: convStateErr } = await supabase
       .from('conversations')
-      .select('id, active_condominium_id, pending_field, pending_payload, pending_set_at')
+      .select('id, active_condominium_id, pending_field, pending_payload, pending_set_at, human_control, ai_mode, ai_paused_until')
       .eq('id', conversationId)
       .maybeSingle();
 
     if (convStateErr) console.error('[STATE] Failed to load conv state:', convStateErr);
+
+    // ✅ ALTERAÇÃO 3: CRÍTICO: Verificar se IA está desligada ANTES de qualquer processamento
+    if (convState) {
+      const aiMode = (convState.ai_mode || '').toUpperCase();
+      const humanControl = convState.human_control === true;
+      const isPaused = convState.ai_paused_until && new Date(convState.ai_paused_until) > new Date();
+
+      if (aiMode === 'OFF' || humanControl || isPaused) {
+        console.log(`[AI] 🛑 AI disabled for conversation ${conversationId}. ai_mode=${aiMode}, human_control=${humanControl}, paused=${isPaused}`);
+        return new Response(JSON.stringify({
+          text: null,
+          skipped: 'ai_disabled',
+          reason: humanControl ? 'human_control' : (aiMode === 'OFF' ? 'ai_mode_off' : 'ai_paused'),
+          finish_reason: 'SKIPPED',
+          provider: 'guard',
+          model: 'none',
+          request_id: crypto.randomUUID()
+        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+    }
 
     if (conversationId && convState?.pending_field === 'retry_protocol') {
       console.log('[STATE] pending_field=retry_protocol');
@@ -853,6 +873,19 @@ serve(async (req: Request) => {
       return new Response(JSON.stringify({
         text: null,
         skipped: 'employee_no_command',
+        finish_reason: 'SKIPPED',
+        provider: 'employee-detection',
+        model: 'none',
+        request_id: crypto.randomUUID()
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    // ✅ ALTERAÇÃO 4: Se funcionário enviou mensagem simples (Ok, etc), silenciar
+    if (isEmployee && lastIsFromAgent && isJustConfirmation(lastUserMsgText)) {
+      console.log(`[AI] 🤫 Employee sent confirmation "${lastUserMsgText}" - silencing`);
+      return new Response(JSON.stringify({
+        text: null,
+        skipped: 'employee_confirmation',
         finish_reason: 'SKIPPED',
         provider: 'employee-detection',
         model: 'none',
@@ -1167,20 +1200,31 @@ serve(async (req: Request) => {
     // Se o contexto operacional é muito forte (ex: "portão quebrado"), relaxamos a exigência de pergunta prévia da IA
     const strongOperationalContext = /quebrado|parado|não funciona|travou|emergência/i.test(recentText);
 
-    // ✅ FIX: Verificar se a mensagem é apenas confirmação (Patch 14)
-    const isConfirmationOnly = isJustConfirmation(lastUserMsgText);
+    const isConfirmationMessage = isJustConfirmation(lastUserMsgText);
 
-    if (isConfirmationOnly) {
-      console.log(`[AI] 🛑 Skipping protocol - message is just confirmation: "${lastUserMsgText}"`);
+    if (isConfirmationMessage && conversationId) {
+      const recentProtocolExists = await hasRecentProtocol(supabase, conversationId, 60);
+
+      if (recentProtocolExists) {
+        console.log(`[AI] 🛑 Silencing confirmation "${lastUserMsgText}" after recent protocol`);
+        return new Response(JSON.stringify({
+          text: null,
+          skipped: 'confirmation_after_protocol',
+          finish_reason: 'SKIPPED',
+          provider: 'guard',
+          model: 'none',
+          request_id: crypto.randomUUID()
+        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
     }
 
     const canOpenNow = hasCondoInfo
       && hasOperationalContext
       && (!needsApartment || Boolean(aptCandidate))
       && (hasMinimumConversation || strongOperationalContext)
-      && aiAskedQuestion // ✅ FIX: SEMPRE exige que a IA tenha feito pelo menos 1 pergunta
+      && (aiAskedQuestion || strongOperationalContext) // ✅ FIX: Permite se context forte
       && !isQuestion
-      && !isConfirmationOnly; // ✅ NOVO: Não abrir se for apenas confirmação
+      && !isConfirmationMessage; // ✅ CRÍTICO: Nunca abrir protocolo para confirmação
 
     // ✅ FIX: re-declare for downstream uses
     const isProvidingApartment = Boolean(extractApartment(lastUserMsgText)) && hasOperationalContext;
