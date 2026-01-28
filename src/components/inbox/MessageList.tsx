@@ -183,43 +183,30 @@ export function MessageList({
 
     // 1) Initial load: ALWAYS scroll to bottom (last message)
     if (isInitialLoad.current && messages.length > 0) {
-      // ✅ Triple RAF: garante que DOM + layout + paint estão prontos
-      raf2(() => {
-        requestAnimationFrame(() => {
-          const el2 = containerRef.current;
-          if (!el2) return;
+      // ✅ FIX: Múltiplas tentativas para garantir scroll ao final
+      const scrollToEndSource = () => {
+        const el2 = containerRef.current;
+        if (!el2) return;
 
-          // ✅ SEMPRE rolar pro fim ao abrir conversa
-          stickToBottom.current = true;
-          scrollToBottom("auto");
+        stickToBottom.current = true;
+        const maxScroll = el2.scrollHeight - el2.clientHeight;
+        el2.scrollTop = maxScroll;
 
-          // ✅ ALTERNATIVA: Se quiser rolar para primeira mensagem não lida
-          // Descomente o bloco a seguir e comente o scrollToBottom acima
-          /*
-          const firstUnreadIndex = messages.findIndex(
-            (m) => !m.read_at && m.sender_type !== "agent" && m.sender_type !== "system"
-          );
-
-          if (firstUnreadIndex !== -1) {
-            // Tem mensagens não lidas: rolar até primeira e NÃO stick
-            stickToBottom.current = false;
-            const wrappers = el2.querySelectorAll("[data-message-id]");
-            const target = wrappers[firstUnreadIndex] as HTMLElement | undefined;
-            if (target) {
-              target.scrollIntoView({ behavior: "auto", block: "start" });
-            } else {
-              scrollToBottom("auto");
-            }
-          } else {
-            // Tudo lido: rolar pro fim E ativar stick
-            stickToBottom.current = true;
-            scrollToBottom("auto");
-          }
-          */
-
-          isInitialLoad.current = false;
+        console.log('[MessageList] Initial scroll to bottom:', {
+          scrollHeight: el2.scrollHeight,
+          clientHeight: el2.clientHeight,
+          scrollTop: el2.scrollTop
         });
-      });
+      };
+
+      // Tentar várias vezes para garantir (imagens podem carregar depois)
+      scrollToEndSource();
+      requestAnimationFrame(scrollToEndSource);
+      setTimeout(scrollToEndSource, 100);
+      setTimeout(scrollToEndSource, 300);
+      setTimeout(scrollToEndSource, 500);
+
+      isInitialLoad.current = false;
     }
 
     // 2) After prepend: restore scroll position

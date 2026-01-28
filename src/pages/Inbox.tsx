@@ -28,6 +28,8 @@ export default function InboxPage() {
   const [currentUserName, setCurrentUserName] = useState<string>('Atendente G7');
 
   const [activeTab, setActiveTab] = useState<TabValue>('inbox');
+  const [inboxCount, setInboxCount] = useState(0);
+  const [mineCount, setMineCount] = useState(0);
 
   // Hook customizado para gerenciar a lista e realtime global
   // ✅ Passes tab/userId for SQL-level filtering
@@ -116,6 +118,36 @@ export default function InboxPage() {
       fetchActiveConversationDetails(activeConversationId);
     }
   }, [activeConversationId, fetchActiveConversationDetails]);
+
+  // ✅ Buscar contadores de todas as abas
+  useEffect(() => {
+    const fetchCounts = async () => {
+      if (!user) return;
+
+      // Contador de Entrada (não atribuídas)
+      const { count: inboxC } = await supabase
+        .from('conversations')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'open')
+        .is('assigned_to', null);
+
+      // Contador de Minhas (atribuídas ao usuário)
+      const { count: mineC } = await supabase
+        .from('conversations')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'open')
+        .eq('assigned_to', user.id);
+
+      setInboxCount(inboxC || 0);
+      setMineCount(mineC || 0);
+    };
+
+    fetchCounts();
+
+    // Atualizar a cada 30 segundos
+    const interval = setInterval(fetchCounts, 30000);
+    return () => clearInterval(interval);
+  }, [user]);
 
   // Fetch agents for assignment + current user's display name
   useEffect(() => {
@@ -462,6 +494,8 @@ export default function InboxPage() {
               activeTab={activeTab}
               onTabChange={setActiveTab}
               onRefresh={refetchConversations}
+              inboxCount={inboxCount}
+              mineCount={mineCount}
             />
           )
         ) : (
@@ -476,6 +510,8 @@ export default function InboxPage() {
                 activeTab={activeTab}
                 onTabChange={setActiveTab}
                 onRefresh={refetchConversations}
+                inboxCount={inboxCount}
+                mineCount={mineCount}
               />
             </Panel>
 

@@ -42,6 +42,9 @@ interface ConversationListProps {
   activeTab: TabValue;
   onTabChange: (tab: TabValue) => void;
   onRefresh?: () => void;
+  // ✅ NOVO: Contadores para cada aba
+  inboxCount?: number;
+  mineCount?: number;
 }
 
 export function ConversationList({
@@ -53,28 +56,33 @@ export function ConversationList({
   activeTab,
   onTabChange,
   onRefresh,
+  inboxCount,
+  mineCount,
 }: ConversationListProps) {
   const [search, setSearch] = useState('');
   const [newMessageModalOpen, setNewMessageModalOpen] = useState(false);
 
-  // Filter mainly by search now, as the LIST is already filtered by SQL based on activeTab
+  // Filtro de busca (nome ou telefone)
   const filteredConversations = conversations.filter((conv) => {
     const contactName = conv.is_group ? (conv.title || "Grupo") : (conv.contact?.name || "Contato Desconhecido");
     const contactPhone = conv.is_group ? "" : ((conv.contact as any)?.phone || "");
     const searchLower = search.toLowerCase().trim();
 
-    // ✅ Busca por nome OU telefone
     const matchesName = contactName.toLowerCase().includes(searchLower);
     const matchesPhone = contactPhone.includes(search.replace(/\D/g, ''));
 
     if (searchLower && !matchesName && !matchesPhone) return false;
 
-    // HIDE EMPTY SHELLS check (keep this for safety)
+    // Esconde conversas sem histórico ou pendência
     const hasHistory = conv.last_message_at || conv.status === 'resolved';
     if (!hasHistory) return false;
 
     return true;
   });
+
+  // ✅ Calcular contadores para exibição
+  const displayInboxCount = activeTab === 'inbox' ? filteredConversations.length : (inboxCount ?? '–');
+  const displayMineCount = activeTab === 'mine' ? filteredConversations.length : (mineCount ?? '–');
 
   return (
     <div className={`w-full border-r border-border flex flex-col bg-card h-full overflow-hidden`}>
@@ -124,13 +132,13 @@ export function ConversationList({
       <Tabs value={activeTab} onValueChange={(v) => onTabChange(v as TabValue)} className="shrink-0 border-b border-border">
         <TabsList className="w-full h-auto p-0 bg-transparent grid grid-cols-3">
           <TabsTrigger value="inbox" className="text-xs px-2 py-3 h-auto">
-            Entrada {activeTab === 'inbox' && `(${filteredConversations.length})`}
+            Entrada ({displayInboxCount})
           </TabsTrigger>
           <TabsTrigger value="mine" className="text-xs px-2 py-3 h-auto">
-            Minhas {activeTab === 'mine' && `(${filteredConversations.length})`}
+            Minhas ({displayMineCount})
           </TabsTrigger>
           <TabsTrigger value="resolved" className="text-xs px-2 py-3 h-auto">
-            Resolvidos {activeTab === 'resolved' && `(${filteredConversations.length})`}
+            Resolvidos
           </TabsTrigger>
         </TabsList>
       </Tabs>
