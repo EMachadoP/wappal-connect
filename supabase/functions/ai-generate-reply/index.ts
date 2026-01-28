@@ -57,6 +57,7 @@ function isJustConfirmation(text: string): boolean {
     "pode ser", "bora", "vamos",
     "legal", "tranquilo", "tranquila",
     "boa tarde", "bom dia", "boa noite",
+    "oi", "oie", "ola", "olá",
     "ate mais", "até mais", "ate logo", "até logo",
     "tchau", "flw", "falou", "abraco", "abraço",
   ]);
@@ -66,6 +67,15 @@ function isJustConfirmation(text: string): boolean {
   if (/^(ok+|sim+|ss+|n[aã]o+|blz+|vlw+|obg|ta\s*bom)$/i.test(normalized)) return true;
 
   return false;
+}
+
+function getGreeting(text: string): string | null {
+  const t = (text || "").toLowerCase();
+  if (t.includes("bom dia")) return "Bom dia";
+  if (t.includes("boa tarde")) return "Boa tarde";
+  if (t.includes("boa noite")) return "Boa noite";
+  if (t.includes("ola") || t.includes("olá") || t.includes("oi")) return "Olá";
+  return null;
 }
 
 function isOperationalIssue(text: string) {
@@ -571,7 +581,9 @@ serve(async (req: Request) => {
 
     // confirmation handling (deterministic variations)
     if (conversationId && isJustConfirmation(lastUserText)) {
+      const greetingFound = getGreeting(lastUserText);
       const recent = await hasRecentProtocol(supabase, conversationId, 60);
+
       if (recent) {
         const replies = ["👍", "Combinado!", "Perfeito!", "Certo, qualquer coisa me avise.", "Disponha!"];
         const seed = `${conversationId}:${nowMinuteBucket()}`;
@@ -580,7 +592,16 @@ serve(async (req: Request) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      // if no recent protocol, just be neutral (still avoid repeating names)
+
+      // se for saudação, responder de volta com saudação
+      if (greetingFound) {
+        const msg = `${greetingFound}. Em que posso ajudar?`;
+        return new Response(JSON.stringify({ text: msg, finish_reason: "GREETING" }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      // if no recent protocol, just be neutral
       const replies = ["Perfeito. Me diga como posso ajudar por aqui.", "Certo! Me diga o que você precisa.", "Entendido. Em que posso ajudar?"];
       const msg = pickDeterministic(`${conversationId}:${nowMinuteBucket()}`, replies);
       return new Response(JSON.stringify({ text: msg, finish_reason: "CONFIRMATION_NO_PROTOCOL" }), {
