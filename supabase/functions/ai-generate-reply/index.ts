@@ -433,6 +433,11 @@ function buildSystemInstruction(params: {
     "5) Use sempre o contexto (pelo menos as 20 últimas mensagens).",
     "6) Não pergunte se o equipamento/portão é da G7. Assuma que é atendimento G7.",
     "",
+    "QUALIFICAÇÃO (MUITO IMPORTANTE):",
+    "- Antes de abrir um protocolo, você DEVE qualificar o problema.",
+    "- Se o cliente for genérico (ex: \"problema no interfone\"), você NÃO deve abrir protocolo ainda. Pergunte: \"Poderia me dar mais detalhes do que está acontecendo? (ex: está mudo, não abre o portão, chiado, etc)\".",
+    "- Somente abra o protocolo quando tiver uma descrição mínima do sintoma.",
+    "",
     "REGRAS DE SAÍDA (MUITO IMPORTANTE):",
     "- O texto para o cliente NÃO PODE mencionar: protocolo, chamado registrado, prioridade alterada, técnico a caminho, atualização interna.",
     "- Se for necessário abrir/atualizar protocolo, use APENAS o bloco ###PROTOCOLO### (JSON).",
@@ -702,7 +707,22 @@ serve(async (req: Request) => {
 
     let userText = cleanText;
 
-    // ✅ Se vai criar protocolo, o backend assume a narrativa final
+    // ✅ Filtro: Se o LLM tentar criar protocolo com descrição MUITO genérica, bloquear e pedir detalhes
+    if (protocol?.criar === true) {
+      const prob = String(protocol?.problema || "").toLowerCase().trim();
+      const isGeneric = prob.length < 15 ||
+        prob.includes("problema no interfone") ||
+        prob === "defeito" ||
+        prob === "problema";
+
+      if (isGeneric) {
+        console.log("[AI] Bloqueando protocolo genérico:", prob);
+        protocol.criar = false;
+        userText = "Entendido. Poderia me dar um pouco mais de detalhe sobre o que está acontecendo com o seu interfone? (ex: está mudo, não abre o portão, som baixo, etc)";
+      }
+    }
+
+    // ✅ Se vai criar protocolo (e passou no filtro), o backend assume a narrativa final
     if (protocol?.criar === true) {
       userText = "";
     } else if (isBadFallback(userText)) {
