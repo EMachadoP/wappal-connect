@@ -26,7 +26,7 @@ function pickDeterministic(seed: string, arr: string[]) {
 }
 
 function nowMinuteBucket() {
-  return Math.floor(Date.now() / 60000); // changes every minute
+  return Math.floor(Date.now() / 60000);
 }
 
 function normalizeText(t: string) {
@@ -78,17 +78,6 @@ function getGreeting(text: string): string | null {
   return null;
 }
 
-function isOperationalIssue(text: string) {
-  return /(câmera|camera|cftv|dvr|gravador|nvr|port[aã]o|motor|cerca|interfone|controle de acesso|catraca|fechadura|tv coletiva|antena|acesso remoto|sem imagem|sem sinal|travado|n[aã]o abre|n[aã]o fecha|parou|quebrado|defeito)/i.test(text);
-}
-
-function getLastByRole(msgs: { role: string; content: string }[], role: string) {
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i]?.role === role) return msgs[i];
-  }
-  return null;
-}
-
 function isGenericContactName(name?: string | null) {
   const n = (name ?? "").trim().toLowerCase();
   if (!n) return true;
@@ -121,8 +110,6 @@ async function hasRecentProtocol(supabase: any, conversationId: string, withinMi
 async function acquireLock(supabase: any, conversationId: string) {
   try {
     const now = new Date().toISOString();
-
-    // cleanup expired (best effort)
     await supabase.from("ai_conversation_locks").delete().lt("locked_until", now);
 
     const lockedUntil = new Date(Date.now() + 20 * 1000).toISOString();
@@ -132,43 +119,33 @@ async function acquireLock(supabase: any, conversationId: string) {
       lock_owner: "ai-generate-reply",
     });
 
-    // unique violation = busy
     if (error?.code === "23505") return false;
-
-    // if table missing, proceed (resilient)
     if (error?.message?.includes("ai_conversation_locks")) return true;
-
     if (error) throw error;
     return true;
   } catch (_e) {
-    // resilience: do not block replies if lock infra fails
     return true;
   }
 }
 
 // -------------------------
-// Hydration: if few messages came in payload, load from DB
+// Hydration: load messages from DB
 // -------------------------
-async function hydrateMessagesFromDbIfNeeded(
+async function hydrateMessagesFromDb(
   supabase: any,
-  conversationId: string | undefined,
-  incoming: { role: string; content: string }[],
-  minIncoming = 10,
-  takeLast = 40,
+  conversationId: string,
+  takeLast = 20,
 ) {
-  if (!conversationId) return incoming || [];
-  if ((incoming?.length || 0) >= minIncoming) return incoming || [];
+  if (!conversationId) return [];
 
-  // 1) Busca inbound/outbound do "messages"
-  const { data: rowsM, error: errM } = await supabase
+  const { data: rowsM } = await supabase
     .from("messages")
     .select("content, transcript, direction, sent_at")
     .eq("conversation_id", conversationId)
     .order("sent_at", { ascending: false })
     .limit(takeLast);
 
-  // 2) Busca respostas enviadas da IA (outbox)
-  const { data: rowsO, error: errO } = await supabase
+  const { data: rowsO } = await supabase
     .from("message_outbox")
     .select("content, created_at")
     .eq("conversation_id", conversationId)
@@ -177,7 +154,7 @@ async function hydrateMessagesFromDbIfNeeded(
 
   const dbMsgs: { role: string; content: string; ts: string }[] = [];
 
-  if (!errM && rowsM?.length) {
+  if (rowsM?.length) {
     for (const r of rowsM) {
       const txt = (r.transcript ?? r.content ?? "").trim();
       if (!txt) continue;
@@ -186,45 +163,33 @@ async function hydrateMessagesFromDbIfNeeded(
     }
   }
 
-  if (!errO && rowsO?.length) {
+  if (rowsO?.length) {
     for (const r of rowsO) {
       const txt = (r.content ?? "").trim();
       if (!txt) continue;
-      // outbox é sempre "assistant"
       dbMsgs.push({ role: "assistant", content: txt, ts: r.created_at });
     }
   }
 
-  if (!dbMsgs.length) return incoming || [];
-
-  // Ordena cronologicamente (muito importante!)
   dbMsgs.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
-
-  // Converte para o formato do modelo
-  const normalized = dbMsgs.map(m => ({ role: m.role, content: m.content }));
-
-  // Merge + dedup leve
-  const merged = [...normalized, ...(incoming || [])].filter(m => m.role !== "system");
 
   const seen = new Set<string>();
   const deduped: { role: string; content: string }[] = [];
-  for (const m of merged) {
-    const c = (m.content || "").trim();
-    if (!c) continue;
 
-    // 🔒 Não dedupa mensagens muito curtas (evita sumir "Sim", "Ok", "1901")
+  for (const m of dbMsgs) {
+    const c = m.content.trim();
+    if (!c) continue;
     if (c.length <= 6) {
       deduped.push({ role: m.role, content: c });
       continue;
     }
-
     const k = `${m.role}::${c}`.slice(0, 600);
     if (seen.has(k)) continue;
     seen.add(k);
     deduped.push({ role: m.role, content: c });
   }
 
-  return deduped.slice(-60);
+  return deduped.slice(-20);
 }
 
 // -------------------------
@@ -243,7 +208,7 @@ async function getOpenProtocol(supabase: any, conversationId: string) {
 }
 
 // -------------------------
-// Gemini call (REST generateContent)
+// Gemini call
 // -------------------------
 async function callGeminiText({
   apiKey,
@@ -258,7 +223,6 @@ async function callGeminiText({
   history: { role: string; content: string }[];
   temperature?: number;
 }) {
-  // Map to Gemini "contents"
   const contents = history.map((m) => ({
     role: m.role === "assistant" ? "model" : "user",
     parts: [{ text: m.content }],
@@ -289,15 +253,13 @@ async function callGeminiText({
   }
 
   const json = await resp.json();
-  const text =
-    json?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).filter(Boolean).join("") ??
-    "";
+  const text = json?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).filter(Boolean).join("") ?? "";
 
   return String(text || "").trim();
 }
 
 // -------------------------
-// Protocol creation (keeps your current behavior: supports condominium_id OR raw name)
+// Protocol creation
 // -------------------------
 async function executeCreateProtocol(
   supabase: any,
@@ -309,26 +271,21 @@ async function executeCreateProtocol(
 ) {
   if (!conversationId) throw new Error("conversation_id is required");
 
-  // fetch conversation pending_payload + active_condominium_id
-  const { data: conv, error: convErr } = await supabase
+  const { data: conv } = await supabase
     .from("conversations")
     .select("id, active_condominium_id, pending_payload, contacts(name)")
     .eq("id", conversationId)
     .single();
 
-  if (convErr) throw new Error(`Failed to fetch conversation: ${convErr.message}`);
-
   const pendingPayload = (conv?.pending_payload ?? {}) as any;
   const condominiumRawName =
     pendingPayload.condo_raw_name ||
-    pendingPayload.condo_raw ||
-    pendingPayload.condominium_name ||
-    pendingPayload.condominium_raw_name ||
+    args?.condominium_name ||
+    args?.condominium_raw ||
     null;
 
   let condominiumId = conv?.active_condominium_id || null;
 
-  // fallback: conversation_participants -> entity_id (if exists)
   if (!condominiumId) {
     const { data: part } = await supabase
       .from("conversation_participants")
@@ -340,19 +297,10 @@ async function executeCreateProtocol(
     if (part?.entity_id) condominiumId = part.entity_id;
   }
 
-  if (!condominiumId && !condominiumRawName) {
-    // store raw if provided in args
-    const rawName = (args?.condominium_name || args?.condominium_raw || "").toString().trim();
-    if (rawName) {
-      pendingPayload.condo_raw_name = rawName;
-      await supabase.from("conversations").update({ pending_payload: pendingPayload }).eq("id", conversationId);
-    }
-  }
-
   const bodyObj = {
     conversation_id: conversationId,
     condominium_id: condominiumId,
-    condominium_name: condominiumRawName || (args?.condominium_name || args?.condominium_raw || null),
+    condominium_name: condominiumRawName,
     participant_id: participantId,
     summary: args.summary,
     priority: args.priority || "normal",
@@ -360,8 +308,8 @@ async function executeCreateProtocol(
     requester_name: args.requester_name || (conv?.contacts as any)?.name || "Não informado",
     requester_role: args.requester_role || "Morador",
     apartment: args.apartment || null,
-    notify_group: true,  // WhatsApp + Asana
-    notify_client: false // AI answers the user
+    notify_group: true,
+    notify_client: false
   };
 
   const response = await fetch(`${supabaseUrl}/functions/v1/create-protocol`, {
@@ -382,19 +330,8 @@ async function executeCreateProtocol(
   return await response.json();
 }
 
-function isInternalOpsText(text: string) {
-  const t = (text || "").toLowerCase();
-  return (
-    t.includes("criar agendamento:") ||
-    t.includes("operador (celular)") ||
-    t.includes("para eu abrir o chamado") ||
-    t.includes("me envie assim:") ||
-    t.includes("exemplo:")
-  );
-}
-
 // -------------------------
-// Prompt: rules anti-erro + extraction block
+// System Prompt - REGRAS CRÍTICAS
 // -------------------------
 function buildSystemInstruction(params: {
   identifiedName?: string | null;
@@ -407,48 +344,67 @@ function buildSystemInstruction(params: {
   const identifiedBlock =
     identifiedName || identifiedCondo || identifiedRole
       ? [
-        "CONTATO IDENTIFICADO (cadastro 100% confiável):",
+        "=== CONTATO IDENTIFICADO (cadastro 100% confiável) ===",
         identifiedName ? `- Nome: ${identifiedName}` : null,
         identifiedCondo ? `- Condomínio: ${identifiedCondo}` : null,
         identifiedRole ? `- Função: ${identifiedRole}` : null,
+        "",
+        "👉 USE esses dados nas respostas. Pode chamar pelo nome cadastrado.",
       ].filter(Boolean).join("\n")
-      : "CONTATO NÃO IDENTIFICADO (não repetir nomes/condomínios do texto do cliente).";
+      : [
+        "=== CONTATO NÃO IDENTIFICADO ===",
+        "👉 NÃO repita nomes ou condomínios que o cliente mencionar.",
+        "👉 Se o cliente disser 'Sou Maria do Julio II', NÃO responda 'Oi Maria!' ou 'Entendi, Julio II'.",
+        "👉 Responda de forma NEUTRA: 'Entendido!', 'Certo!', 'Vou verificar'.",
+        "👉 Isso evita erros de interpretação que irritam o cliente.",
+      ].join("\n");
 
   const protocolStatus = hasOpenProtocol
-    ? "PROTOCOLO ATUAL:\n- Existe protocolo aberto: SIM. NÃO crie outro chamado se o assunto for o mesmo. Apenas faça perguntas essenciais."
-    : "PROTOCOLO ATUAL:\n- Não há protocolo aberto recentemente.";
+    ? "⚠️ JÁ EXISTE PROTOCOLO ABERTO. NÃO crie outro para o mesmo assunto."
+    : "Não há protocolo aberto recentemente.";
 
   return [
-    "Você é Ana Mônica, atendente virtual da G7 Serv.",
+    "Você é Ana Mônica, atendente virtual da G7 Serv (segurança eletrônica e portaria remota).",
     "",
     identifiedBlock,
     "",
     protocolStatus,
     "",
-    "REGRAS CRÍTICAS (OBRIGATÓRIO):",
-    identifiedName ? `1) Nome confirmado no cadastro: ${identifiedName}. Use exatamente esse nome. Nunca use username/handle.` : "1) Se o contato NÃO estiver identificado, NÃO repita nome/condomínio (evite errar e irritar o cliente).",
-    "2) Se o contato estiver identificado, você PODE usar APENAS os dados do cadastro.",
-    "3) Seja natural, objetiva e educada. Evite soar robótica. Não invente informações.",
-    "4) Faça no máximo 1 pergunta por resposta (somente o essencial).",
-    "5) Use sempre o contexto (pelo menos as 20 últimas mensagens).",
-    "6) Não pergunte se o equipamento/portão é da G7. Assuma que é atendimento G7.",
+    "=== REGRAS CRÍTICAS (OBRIGATÓRIO) ===",
     "",
-    "QUALIFICAÇÃO (MUITO IMPORTANTE):",
-    "- Antes de abrir um protocolo, você DEVE qualificar o problema.",
-    "- Se o cliente for genérico (ex: \"problema no interfone\"), você NÃO deve abrir protocolo ainda. Pergunte: \"Poderia me dar mais detalhes do que está acontecendo? (ex: está mudo, não abre o portão, chiado, etc)\".",
-    "- Somente abra o protocolo quando tiver uma descrição mínima do sintoma.",
+    "1. SAUDAÇÕES:",
+    "   - NÃO comece TODA resposta com 'Olá!' - varie ou omita",
+    "   - Se o cliente disse 'Boa tarde', responda 'Boa tarde!' (não 'Olá!')",
     "",
-    "REGRAS DE SAÍDA (MUITO IMPORTANTE):",
-    "- O texto para o cliente NÃO PODE mencionar: protocolo, chamado registrado, prioridade alterada, técnico a caminho, atualização interna.",
-    "- Se for necessário abrir/atualizar protocolo, use APENAS o bloco ###PROTOCOLO### (JSON).",
-    "- Nunca diga \"Estou atualizando a prioridade\" ou similar. O backend cuida disso.",
+    "2. DADOS DO CLIENTE:",
+    "   - Se IDENTIFICADO: use APENAS os dados do cadastro (nome, condomínio)",
+    "   - Se NÃO IDENTIFICADO: seja NEUTRO, não repita o que o cliente disse",
     "",
-    "SE for necessário abrir chamado, inclua ao FINAL:",
-    "###PROTOCOLO###",
-    "{\"criar\": true, \"condominio_raw\": \"...\", \"problema\": \"...\", \"categoria\": \"operational|financial|commercial|admin|support\", \"prioridade\": \"normal|critical\", \"solicitante_raw\": \"...\"}",
-    "###FIM###",
+    "3. QUALIFICAÇÃO (MUITO IMPORTANTE):",
+    "   - ANTES de abrir protocolo, você DEVE qualificar o problema",
+    "   - Se a descrição for genérica (ex: 'problema no interfone'), PERGUNTE detalhes",
+    "   - Exemplos de perguntas:",
+    "     * 'O interfone está mudo, não toca, ou não abre o portão?'",
+    "     * 'O portão não abre, não fecha, ou está fazendo barulho?'",
+    "     * 'Qual câmera está com problema e o que aparece na tela?'",
+    "   - Só abra protocolo quando tiver descrição ESPECÍFICA do sintoma",
     "",
-    "IMPORTANTE: Em condominio_raw e solicitante_raw use exatamente como o cliente escreveu (sem corrigir).",
+    "4. PERGUNTAS:",
+    "   - Faça no MÁXIMO 1 pergunta por resposta",
+    "   - Seja objetiva e direta",
+    "",
+    "5. PROTOCOLO:",
+    "   - Quando tiver informações SUFICIENTES (problema detalhado + condomínio), inclua:",
+    "   ###PROTOCOLO###",
+    '   {"criar": true, "condominio_raw": "...", "problema": "descrição detalhada", "categoria": "operational", "prioridade": "normal"}',
+    "   ###FIM###",
+    "   - Em condominio_raw use EXATAMENTE como o cliente escreveu",
+    "   - NÃO mencione 'protocolo criado' no texto da resposta - o sistema cuida disso",
+    "",
+    "6. RESPOSTAS:",
+    "   - Seja natural, educada e objetiva",
+    "   - Não invente informações",
+    "   - Não mencione termos internos (protocolo, prioridade, categoria)",
   ].join("\n");
 }
 
@@ -456,10 +412,7 @@ function extractProtocolBlock(text: string) {
   const m = text.match(/###PROTOCOLO###\s*([\s\S]*?)\s*###FIM###/i);
   if (!m) return { cleanText: text.trim(), protocol: null as any };
 
-  let payload = (m[1] ?? "").trim();
-
-  // remove fences comuns (```json ou ```)
-  payload = payload
+  let payload = (m[1] ?? "").trim()
     .replace(/^```json/i, "")
     .replace(/^```/i, "")
     .replace(/```$/i, "")
@@ -469,31 +422,14 @@ function extractProtocolBlock(text: string) {
   try {
     parsed = JSON.parse(payload);
   } catch {
-    // tentativa extra: pegar primeiro objeto {...} dentro do bloco
     const obj = payload.match(/\{[\s\S]*\}/);
     if (obj) {
-      try {
-        parsed = JSON.parse(obj[0]);
-      } catch {
-        parsed = null;
-      }
+      try { parsed = JSON.parse(obj[0]); } catch { parsed = null; }
     }
   }
 
   const cleanText = text.replace(m[0], "").trim();
   return { cleanText, protocol: parsed };
-}
-
-// 🔒 Limpa respostas ruins / redundantes do LLM
-function isBadFallback(t: string) {
-  const s = (t || "").toLowerCase().trim();
-  if (!s) return true;
-  return (
-    s === "perfeito. me diga como posso ajudar por aqui." ||
-    s.includes("me diga o que você precisa") ||
-    s.includes("como posso ajudar por aqui") ||
-    s.includes("em que posso ajudar hoje")
-  );
 }
 
 // -------------------------
@@ -513,238 +449,195 @@ serve(async (req: Request) => {
 
     conversationId = rawBody.conversation_id || rawBody.conversationId || rawBody.conversation?.id;
     const participant_id = rawBody.participant_id;
-    const dryRun = Boolean(rawBody.dry_run); // helpful: test without sending/protocol
 
-    if (conversationId) {
-      const locked = await acquireLock(supabase, conversationId);
-      if (!locked) {
-        return new Response(JSON.stringify({ text: null, skipped: "lock_busy" }), {
+    if (!conversationId) {
+      return new Response(JSON.stringify({ error: "conversation_id required" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Lock
+    const locked = await acquireLock(supabase, conversationId);
+    if (!locked) {
+      return new Response(JSON.stringify({ text: null, skipped: "lock_busy" }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Load messages (sempre do banco, últimas 20)
+    const messages = await hydrateMessagesFromDb(supabase, conversationId, 20);
+
+    const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
+    const lastUserText = normalizeText(lastUserMsg?.content || "");
+
+    // Check AI mode
+    const { data: conv } = await supabase
+      .from("conversations")
+      .select("ai_mode, human_control, ai_paused_until, last_human_message_at, contact_id, active_condominium_id, contacts(name), condominiums(name)")
+      .eq("id", conversationId)
+      .maybeSingle();
+
+    if (conv) {
+      const aiMode = String(conv.ai_mode || "").toUpperCase();
+      const isPaused = conv.ai_paused_until && new Date(conv.ai_paused_until) > new Date();
+
+      const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+      const lastHumanMsgAt = conv.last_human_message_at ? new Date(conv.last_human_message_at) : null;
+      const remainsControlled = conv.human_control === true && (!lastHumanMsgAt || lastHumanMsgAt > thirtyMinutesAgo);
+
+      if (aiMode === "OFF" || remainsControlled || isPaused) {
+        return new Response(JSON.stringify({ text: null, skipped: "ai_disabled" }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
     }
 
-    // messages from payload + hydrate if needed
-    const incoming = (rawBody.messages || []).filter((m: any) => m?.role && m?.content);
-    let messages = await hydrateMessagesFromDbIfNeeded(supabase, conversationId, incoming);
+    // Employee detection
+    const { data: lastMsg } = await supabase
+      .from("messages")
+      .select("raw_payload, sender_type, direction")
+      .eq("conversation_id", conversationId)
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    // always analyze at least last 20 when available
-    const HISTORY_N = messages.length >= 20 ? 20 : Math.max(10, messages.length);
-    const last20 = messages.slice(-HISTORY_N);
-    const lastUser = getLastByRole(messages, "user");
-    const lastUserText = normalizeText(lastUser?.content || "");
+    const employee = await isEmployeeSender(supabase, lastMsg?.raw_payload ?? {});
+    const lastIsFromAgent = lastMsg?.direction === "outbound" || lastMsg?.sender_type === "agent";
 
-    // guard: load conversation mode flags
-    if (conversationId) {
-      const { data: conv } = await supabase
-        .from("conversations")
-        .select("ai_mode, human_control, ai_paused_until, last_human_message_at")
-        .eq("id", conversationId)
-        .maybeSingle();
-
-      if (conv) {
-        const aiMode = String(conv.ai_mode || "").toUpperCase();
-        const isPaused = conv.ai_paused_until && new Date(conv.ai_paused_until) > new Date();
-
-        const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
-        const lastHumanMsgAt = conv.last_human_message_at ? new Date(conv.last_human_message_at) : null;
-        const remainsControlled = conv.human_control === true && (!lastHumanMsgAt || lastHumanMsgAt > thirtyMinutesAgo);
-
-        if (aiMode === "OFF" || remainsControlled || isPaused) {
-          return new Response(JSON.stringify({ text: null, skipped: "ai_disabled" }), {
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-      }
+    if (employee?.isEmployee && lastIsFromAgent) {
+      return new Response(JSON.stringify({ text: null, skipped: "employee_sender" }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-    // employee detection (kept minimal)
-    if (conversationId) {
-      const { data: lastMsg } = await supabase
-        .from("messages")
-        .select("raw_payload, sender_type, direction, content, transcript")
-        .eq("conversation_id", conversationId)
-        .order("sent_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      const rawPayload = lastMsg?.raw_payload ?? {};
-      const employee = await isEmployeeSender(supabase, rawPayload);
-      const isEmployee = employee?.isEmployee === true;
-
-      const lastIsFromAgent =
-        (lastMsg?.direction === "outbound") ||
-        (String(lastMsg?.sender_type || "").toLowerCase() === "agent");
-
-      // if employee is sending, do not auto-answer unless you explicitly want it
-      if (isEmployee && lastIsFromAgent) {
-        return new Response(JSON.stringify({ text: null, skipped: "employee_sender" }), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-    }
-
-    // confirmation handling (deterministic variations)
-    if (conversationId && isJustConfirmation(lastUserText)) {
+    // Confirmation handling
+    if (isJustConfirmation(lastUserText)) {
       const greetingFound = getGreeting(lastUserText);
       const recent = await hasRecentProtocol(supabase, conversationId, 60);
 
       if (recent) {
-        const replies = ["👍", "Combinado!", "Perfeito!", "Certo, qualquer coisa me avise.", "Disponha!"];
-        const seed = `${conversationId}:${nowMinuteBucket()}`;
-        const msg = pickDeterministic(seed, replies);
+        const replies = ["👍", "Combinado!", "Perfeito!", "Certo!", "Disponha!"];
+        const msg = pickDeterministic(`${conversationId}:${nowMinuteBucket()}`, replies);
         return new Response(JSON.stringify({ text: msg, finish_reason: "CONFIRMATION" }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
-      // se for saudação, responder de volta com saudação
       if (greetingFound) {
-        const msg = `${greetingFound}. Em que posso ajudar?`;
-        return new Response(JSON.stringify({ text: msg, finish_reason: "GREETING" }), {
+        return new Response(JSON.stringify({ text: `${greetingFound}! Em que posso ajudar?`, finish_reason: "GREETING" }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
-      // if no recent protocol, just be neutral
-      const replies = ["Perfeito. Me diga como posso ajudar por aqui.", "Certo! Me diga o que você precisa.", "Entendido. Em que posso ajudar?"];
+      const replies = ["Certo! Me diga como posso ajudar.", "Entendido. Em que posso ajudar?", "Perfeito! O que você precisa?"];
       const msg = pickDeterministic(`${conversationId}:${nowMinuteBucket()}`, replies);
       return new Response(JSON.stringify({ text: msg, finish_reason: "CONFIRMATION_NO_PROTOCOL" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // load reliable contact/condo data (ONLY for identified)
+    // Load identified data
     let identifiedName: string | null = null;
     let identifiedCondo: string | null = null;
     let identifiedRole: string | null = null;
 
-    if (conversationId) {
-      const { data: conv } = await supabase
-        .from("conversations")
-        .select("contact_id, active_condominium_id, contacts(name), condominiums(name)")
-        .eq("id", conversationId)
-        .maybeSingle();
-
-      const contactName = (conv?.contacts as any)?.name ?? null;
-      if (contactName && !isGenericContactName(contactName)) identifiedName = contactName;
-
-      identifiedCondo = (conv?.condominiums as any)?.name ?? null;
-
-      if (conv?.contact_id) {
-        const { data: part } = await supabase
-          .from("participants")
-          .select("role_type")
-          .eq("contact_id", conv.contact_id)
-          .eq("is_primary", true)
-          .maybeSingle();
-        if (part?.role_type) identifiedRole = String(part.role_type);
-      }
+    const contactName = (conv?.contacts as any)?.name ?? null;
+    if (contactName && !isGenericContactName(contactName)) {
+      identifiedName = contactName;
     }
 
-    const existingForPrompt = conversationId ? await getOpenProtocol(supabase, conversationId) : null;
+    identifiedCondo = (conv?.condominiums as any)?.name ?? null;
+
+    if (conv?.contact_id) {
+      const { data: part } = await supabase
+        .from("participants")
+        .select("role_type")
+        .eq("contact_id", conv.contact_id)
+        .eq("is_primary", true)
+        .maybeSingle();
+      if (part?.role_type) identifiedRole = String(part.role_type);
+    }
+
+    const existingProtocol = await getOpenProtocol(supabase, conversationId);
+
     const systemInstruction = buildSystemInstruction({
       identifiedName,
       identifiedCondo,
       identifiedRole,
-      hasOpenProtocol: !!existingForPrompt
+      hasOpenProtocol: !!existingProtocol
     });
 
-    // choose model/key
-    const geminiKey =
-      Deno.env.get("GEMINI_API_KEY") ||
-      Deno.env.get("GOOGLE_GENERATIVE_AI_API_KEY") ||
-      Deno.env.get("GOOGLE_API_KEY") ||
-      "";
-    const geminiModel = Deno.env.get("GEMINI_MODEL") || "gemini-2.5-flash";
+    // Call Gemini
+    const geminiKey = Deno.env.get("GEMINI_API_KEY") || Deno.env.get("GOOGLE_API_KEY") || "";
+    const geminiModel = Deno.env.get("GEMINI_MODEL") || "gemini-2.0-flash";
 
     if (!geminiKey) {
-      // fail safe: deterministic fallback without hallucinating names
-      const fallback = pickDeterministic(
-        `${conversationId || "noid"}:${nowMinuteBucket()}`,
-        [
-          "Entendido! Vou encaminhar para a equipe e já retorno por aqui.",
-          "Certo — vou repassar para o time responsável e sigo te atualizando por aqui.",
-          "Perfeito. Já estou encaminhando internamente e volto com um posicionamento.",
-        ],
-      );
-
+      const fallback = pickDeterministic(`${conversationId}:${nowMinuteBucket()}`, [
+        "Entendido! Vou verificar e já retorno.",
+        "Certo — vou checar isso e volto com uma resposta.",
+      ]);
       return new Response(JSON.stringify({ text: fallback, finish_reason: "NO_LLM_KEY" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // The model gets at least last 20 messages for context
-    const historyForModel = last20.length ? last20 : messages.slice(-20);
-
-    if (dryRun) {
-      return new Response(JSON.stringify({
-        dry_run: true,
-        systemInstruction,
-        history: historyForModel,
-      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-
-    let llmText = await callGeminiText({
+    const llmText = await callGeminiText({
       apiKey: geminiKey,
       model: geminiModel,
       systemInstruction,
-      history: historyForModel,
+      history: messages,
       temperature: 0.4,
     });
 
     let { cleanText, protocol } = extractProtocolBlock(llmText);
-
-    // ✅ Filtro de segurança contra vazamento de instruções internas
-    if (isInternalOpsText(cleanText)) {
-      console.log("[safety] Blocked internal ops leak in cleanText");
-      cleanText = "Entendido! Vou encaminhar internamente e já retorno por aqui.";
-    }
-    if (isInternalOpsText(llmText)) {
-      console.log("[safety] Blocked internal ops leak in llmText");
-      llmText = "Entendido! Vou encaminhar internamente e já retorno por aqui.";
-    }
-
     let userText = cleanText;
 
-    // ✅ Filtro: Se o LLM tentar criar protocolo com descrição MUITO genérica, bloquear e pedir detalhes
+    // ✅ FILTRO DE QUALIFICAÇÃO - Bloquear problemas genéricos
     if (protocol?.criar === true) {
       const prob = String(protocol?.problema || "").toLowerCase().trim();
-      const isGeneric = prob.length < 15 ||
-        prob.includes("problema no interfone") ||
-        prob === "defeito" ||
-        prob === "problema";
+
+      const GENERIC_PATTERNS = [
+        /^problema\s*(no|na|com|de)?\s*(interfone|portão|portao|câmera|camera|cftv|cerca)?$/i,
+        /^defeito\s*(no|na|com|de)?/i,
+        /^não\s*(está\s*)?funciona(ndo)?$/i,
+        /^parou(\s*de\s*funcionar)?$/i,
+        /^com\s*problema$/i,
+      ];
+
+      const isGeneric = prob.length < 25 || GENERIC_PATTERNS.some(p => p.test(prob));
 
       if (isGeneric) {
         console.log("[AI] Bloqueando protocolo genérico:", prob);
         protocol.criar = false;
-        userText = "Entendido. Poderia me dar um pouco mais de detalhe sobre o que está acontecendo com o seu interfone? (ex: está mudo, não abre o portão, som baixo, etc)";
+
+        // Perguntas de qualificação específicas
+        if (/interfone/i.test(prob)) {
+          userText = "Entendido. Para eu registrar corretamente, o interfone está mudo, não toca, não abre o portão, ou é outro problema?";
+        } else if (/port[aã]o/i.test(prob)) {
+          userText = "Certo. O portão não abre, não fecha, está fazendo barulho, ou é outro problema?";
+        } else if (/c[aâ]mera|cftv/i.test(prob)) {
+          userText = "Entendi. Qual câmera está com problema e o que está acontecendo? (sem imagem, imagem escura, offline...)";
+        } else if (/cerca/i.test(prob)) {
+          userText = "Certo. A cerca está disparando, não arma, ou é outro problema?";
+        } else {
+          userText = "Entendido. Poderia me dar mais detalhes sobre o que está acontecendo?";
+        }
       }
     }
 
-    // ✅ Se vai criar protocolo (e passou no filtro), o backend assume a narrativa final
+    // Se vai criar protocolo (passou no filtro)
     if (protocol?.criar === true) {
-      userText = "";
-    } else if (isBadFallback(userText)) {
-      userText = "Certo. Pode me informar um pouco mais sobre o problema?";
-    }
-
-    // If protocol requested, create it (raw fields kept as user wrote)
-    if (conversationId && protocol?.criar === true) {
       const existing = await getOpenProtocol(supabase, conversationId);
-
-      let created: any = null;
       let protocolCode = "";
 
       if (existing) {
-        console.log("[AI] Usando protocolo existente (idempotência):", existing.protocol_code);
+        console.log("[AI] Usando protocolo existente:", existing.protocol_code);
         protocolCode = existing.protocol_code;
       } else {
         const summary = String(protocol?.problema || "").trim() || lastUserText.slice(0, 500);
         const condRaw = String(protocol?.condominio_raw || "").trim();
-        const requesterRaw = String(protocol?.solicitante_raw || "").trim();
 
-        // store raw in pending_payload so create-protocol can pass condominium_name
         if (condRaw) {
           const { data: cur } = await supabase.from("conversations").select("pending_payload").eq("id", conversationId).maybeSingle();
           const pp = (cur?.pending_payload ?? {}) as any;
@@ -752,30 +645,24 @@ serve(async (req: Request) => {
           await supabase.from("conversations").update({ pending_payload: pp }).eq("id", conversationId);
         }
 
-        created = await executeCreateProtocol(
-          supabase,
-          supabaseUrl,
-          supabaseServiceKey,
-          conversationId,
-          participant_id,
+        const created = await executeCreateProtocol(
+          supabase, supabaseUrl, supabaseServiceKey, conversationId, participant_id,
           {
             summary: summary.slice(0, 500),
             category: protocol?.categoria || "operational",
             priority: protocol?.prioridade || "normal",
-            requester_name: requesterRaw || undefined,
             condominium_name: condRaw || undefined,
           },
         );
-        protocolCode = created?.protocol?.protocol_code || created?.protocol_code || created?.protocol?.code || "";
+        protocolCode = created?.protocol?.protocol_code || created?.protocol_code || "";
       }
 
       const code = protocolCode ? (String(protocolCode).startsWith("G7-") ? protocolCode : `G7-${protocolCode}`) : "registrado";
 
-      // deterministic variation message (no condo/name repetition if not identified)
       const confirms = [
-        `Certo. Chamado registrado sob o protocolo ${code}. Já encaminhei para a equipe e seguimos por aqui.`,
-        `Perfeito — protocolei como ${code}. Já direcionei para o time responsável e vou te atualizando.`,
-        `Entendido. Protocolo ${code} registrado e encaminhado. Se tiver algum detalhe adicional, me avise por aqui.`,
+        `Certo. Chamado registrado (${code}). Já encaminhei para a equipe e seguimos por aqui.`,
+        `Entendido. Protocolo ${code} registrado. Qualquer novidade, te aviso por aqui.`,
+        `Perfeito. Registrei o chamado (${code}) e já encaminhei para o time.`,
       ];
 
       const msg = pickDeterministic(`${conversationId}:${code}`, confirms);
@@ -789,27 +676,21 @@ serve(async (req: Request) => {
       }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // Normal reply (keep it, but do not force greetings)
-    if (identifiedName && userText) {
-      // 🔒 Blindagem final: se vazar handle do Thiago, troca pelo nome real
-      userText = userText.replace(/\bthiag0simoes\b/gi, identifiedName);
-    }
-
+    // Normal reply
     return new Response(JSON.stringify({
       text: userText || llmText || null,
       finish_reason: "LLM_REPLY",
       provider: "gemini",
       model: geminiModel,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+
   } catch (e: any) {
-    const safe = pickDeterministic(
-      `${conversationId || "noid"}:${nowMinuteBucket()}`,
-      [
-        "Entendido! Vou verificar por aqui e já retorno.",
-        "Certo — vou checar isso agora e te dou um retorno por aqui.",
-        "Perfeito. Já estou verificando e volto com uma atualização.",
-      ],
-    );
+    console.error("[AI] Error:", e);
+
+    const safe = pickDeterministic(`${conversationId || "err"}:${nowMinuteBucket()}`, [
+      "Entendido! Vou verificar e já retorno.",
+      "Certo — vou checar isso e volto com uma resposta.",
+    ]);
 
     return new Response(JSON.stringify({
       text: safe,
