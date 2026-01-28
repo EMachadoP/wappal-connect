@@ -31,7 +31,7 @@ export default function InboxPage() {
 
   // Hook customizado para gerenciar a lista e realtime global
   // ✅ Passes tab/userId for SQL-level filtering
-  const { conversations, loading: loadingConversations, refetch: refetchConversations } = useRealtimeInbox({
+  const { conversations, loading: loadingConversations, refetch: refetchConversations, markAsReadOptimistic } = useRealtimeInbox({
     onNewInboundMessage: playNotificationSound,
     tab: activeTab,
     userId: user?.id
@@ -85,6 +85,9 @@ export default function InboxPage() {
 
       // ✅ Marcar como lida via Edge Function (evita problemas de RLS)
       if (data.unread_count > 0) {
+        // ✅ FIX: Atualizar UI imediatamente (optimistic update)
+        markAsReadOptimistic(id);
+
         try {
           const { data: result, error } = await supabase.functions.invoke('mark-conversation-read', {
             body: { conversation_id: id }
@@ -159,7 +162,8 @@ export default function InboxPage() {
     try {
       // ✅ Optimistic UI: mostra a mensagem imediatamente na tela
       const nowIso = new Date().toISOString();
-      const optimisticId = (globalThis.crypto?.randomUUID?.() ?? `tmp_${Date.now()}_${Math.random().toString(16).slice(2)}`);
+      // ✅ FIX: SEMPRE usar prefixo tmp_ para que useRealtimeMessages detecte e substitua
+      const optimisticId = `tmp_${Date.now()}_${Math.random().toString(16).slice(2)}`;
       setMessages((prev: any[]) => {
         const next = [
           ...prev,

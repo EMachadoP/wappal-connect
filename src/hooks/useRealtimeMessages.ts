@@ -142,19 +142,24 @@ export function useRealtimeMessages(conversationId: string | null) {
               if (newMessage.conversation_id !== conversationId) return prev;
               if (prev.some((m) => m.id === newMessage.id)) return prev;
 
-              // ✅ Detectar e substituir mensagem optimistic (tmp_xxx)
-              // Uma mensagem é considerada optimistic se:
-              // 1. ID começa com "tmp_"
-              // 2. Mesmo content
-              // 3. Mesmo direction (outbound)
-              // 4. sent_at dentro de 30 segundos
+              // ✅ FIX: Detecção mais robusta de mensagem optimistic
               const newTime = new Date(newMessage.sent_at).getTime();
               const optimisticIdx = prev.findIndex((m) => {
-                if (!String(m.id).startsWith('tmp_')) return false;
+                // 1. Verifica se ID parece temporário
+                const isTemporaryId = String(m.id).startsWith('tmp_') ||
+                  (String(m.id).length < 20 && !m.provider_message_id);
+
+                if (!isTemporaryId) return false;
+
+                // 2. Mesmo conteúdo
                 if (m.content !== newMessage.content) return false;
+
+                // 3. Mesma direção (outbound)
                 if (m.direction !== newMessage.direction) return false;
+
+                // 4. Dentro da janela de tempo (60s para ser mais tolerante)
                 const prevTime = new Date(m.sent_at).getTime();
-                return Math.abs(newTime - prevTime) < 30000; // 30s tolerance
+                return Math.abs(newTime - prevTime) < 60000;
               });
 
               let updated: Message[];

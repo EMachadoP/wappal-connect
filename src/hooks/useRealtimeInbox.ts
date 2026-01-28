@@ -34,9 +34,12 @@ export function useRealtimeInbox({ onNewInboundMessage, tab = 'inbox', userId }:
   const fetchSeq = useRef(0);
 
   const fetchConversations = useCallback(async () => {
-    // Throttle fetches to max once every 300ms
+    // ✅ FIX: Throttle mais suave (100ms ao invés de 300ms)
     const now = Date.now();
-    if (now - lastFetchTime.current < 300) return;
+    if (now - lastFetchTime.current < 100) {
+      console.log('[RealtimeInbox] Throttled fetch, skipping');
+      return;
+    }
     lastFetchTime.current = now;
 
     const seq = ++fetchSeq.current;
@@ -95,6 +98,15 @@ export function useRealtimeInbox({ onNewInboundMessage, tab = 'inbox', userId }:
     setLoading(false);
   }, [tab, userId]);
 
+  // ✅ FIX: Função para atualizar unread_count otimisticamente
+  const markAsReadOptimistic = useCallback((conversationId: string) => {
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === conversationId ? { ...c, unread_count: 0 } : c
+      )
+    );
+  }, []);
+
   useEffect(() => {
     fetchConversations();
 
@@ -141,5 +153,5 @@ export function useRealtimeInbox({ onNewInboundMessage, tab = 'inbox', userId }:
     };
   }, [fetchConversations, onNewInboundMessage, tab, userId]);
 
-  return { conversations, loading, refetch: fetchConversations };
+  return { conversations, loading, refetch: fetchConversations, markAsReadOptimistic };
 }

@@ -956,20 +956,22 @@ serve(async (req: Request) => {
           updateData.assigned_at = nowIso;
           updateData.assigned_by = currentUserId;
 
+          const pausedUntil = new Date(Date.now() + 30 * 60 * 1000).toISOString();
           updateData.human_control = true;
           updateData.human_control_at = nowIso;
           updateData.last_human_message_at = nowIso;
           updateData.ai_mode = "OFF";
-          updateData.ai_paused_until = null;
-          console.log(`[zapi-send-message] 👤 Takeover success for ${currentUserId}`);
+          updateData.ai_paused_until = pausedUntil;
+          console.log(`[zapi-send-message] 👤 Takeover success for ${currentUserId}. AI paused for 30m.`);
         } else {
           // B) Mensagem manual no Inbox (sem assumir): Pausa AI e marca como controle humano
+          const pausedUntil = new Date(Date.now() + 30 * 60 * 1000).toISOString();
           updateData.human_control = true;
           updateData.human_control_at = nowIso;
           updateData.last_human_message_at = nowIso;
           updateData.ai_mode = "OFF";
-          updateData.ai_paused_until = null;
-          console.log(`[zapi-send-message] 👤 Manual message: Disabling AI`);
+          updateData.ai_paused_until = pausedUntil;
+          console.log(`[zapi-send-message] 👤 Manual message: Disabling AI (30m pause)`);
         }
       }
 

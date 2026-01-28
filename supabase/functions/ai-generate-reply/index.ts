@@ -56,7 +56,7 @@ function isJustConfirmation(text: string): boolean {
     'show', 'top', 'massa',
     'pode ser', 'bora', 'vamos',
     'legal', 'tranquilo', 'tranquila',
-    'boa', 'boa tarde', 'bom dia', 'boa noite',
+    'boa tarde', 'bom dia', 'boa noite',
     'ate mais', 'até mais', 'ate logo', 'até logo',
     'tchau', 'flw', 'falou', 'abraco', 'abraço'
   ];
@@ -666,7 +666,7 @@ serve(async (req: Request) => {
 
     const { data: convState, error: convStateErr } = await supabase
       .from('conversations')
-      .select('id, active_condominium_id, pending_field, pending_payload, pending_set_at, human_control, ai_mode, ai_paused_until')
+      .select('id, active_condominium_id, pending_field, pending_payload, pending_set_at, human_control, ai_mode, ai_paused_until, last_human_message_at')
       .eq('id', conversationId)
       .maybeSingle();
 
@@ -678,12 +678,17 @@ serve(async (req: Request) => {
       const humanControl = convState.human_control === true;
       const isPaused = convState.ai_paused_until && new Date(convState.ai_paused_until) > new Date();
 
-      if (aiMode === 'OFF' || humanControl || isPaused) {
-        console.log(`[AI] 🛑 AI disabled for conversation ${conversationId}. ai_mode=${aiMode}, human_control=${humanControl}, paused=${isPaused}`);
+      // ✅ REVERT: Permitir reativação após 30 min sem msg humana
+      const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+      const lastHumanMsgAt = convState.last_human_message_at ? new Date(convState.last_human_message_at) : null;
+      const remainsControlled = humanControl && (!lastHumanMsgAt || lastHumanMsgAt > thirtyMinutesAgo);
+
+      if (aiMode === 'OFF' || remainsControlled || isPaused) {
+        console.log(`[AI] 🛑 AI disabled for conversation ${conversationId}. ai_mode=${aiMode}, human_control=${humanControl}, paused=${isPaused}, remainsControlled=${remainsControlled}`);
         return new Response(JSON.stringify({
           text: null,
           skipped: 'ai_disabled',
-          reason: humanControl ? 'human_control' : (aiMode === 'OFF' ? 'ai_mode_off' : 'ai_paused'),
+          reason: remainsControlled ? 'human_control' : (aiMode === 'OFF' ? 'ai_mode_off' : 'ai_paused'),
           finish_reason: 'SKIPPED',
           provider: 'guard',
           model: 'none',

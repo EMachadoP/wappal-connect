@@ -551,7 +551,7 @@ serve(async (req: Request): Promise<Response> => {
             human_control: true,
             human_control_at: now,
             last_human_message_at: now,
-            ai_paused_until: null,
+            ai_paused_until: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
           })
           .eq("id", convId);
 

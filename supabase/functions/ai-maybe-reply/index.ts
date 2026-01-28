@@ -213,7 +213,7 @@ serve(async (req) => {
         }
       }
 
-      // ✅ FIX: Auto-reactivate AI when pause expires
+      // ✅ REVERT: Auto-reactivate AI when pause expires (restore original behavior)
       if (conv.ai_mode === 'OFF' && conv.ai_paused_until) {
         const pausedUntil = new Date(conv.ai_paused_until).getTime();
         if (!Number.isNaN(pausedUntil) && Date.now() >= pausedUntil) {
