@@ -149,39 +149,87 @@ async function hydrateMessagesFromDbIfNeeded(
   if (!conversationId) return incoming || [];
   if ((incoming?.length || 0) >= minIncoming) return incoming || [];
 
-  const { data: rows, error } = await supabase
+  // 1) Busca inbound/outbound do "messages"
+  const { data: rowsM, error: errM } = await supabase
     .from("messages")
-    .select("content, transcript, direction, sender_type, sent_at")
+    .select("content, transcript, direction, sent_at")
     .eq("conversation_id", conversationId)
     .order("sent_at", { ascending: false })
     .limit(takeLast);
 
-  if (error || !rows?.length) return incoming || [];
+  // 2) Busca respostas enviadas da IA (outbox)
+  const { data: rowsO, error: errO } = await supabase
+    .from("message_outbox")
+    .select("content, created_at")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: false })
+    .limit(takeLast);
 
-  const dbMsgs = rows
-    .slice()
-    .reverse()
-    .map((r: any) => {
+  const dbMsgs: { role: string; content: string; ts: string }[] = [];
+
+  if (!errM && rowsM?.length) {
+    for (const r of rowsM) {
       const txt = (r.transcript ?? r.content ?? "").trim();
-      if (!txt) return null;
+      if (!txt) continue;
       const role = r.direction === "inbound" ? "user" : "assistant";
-      return { role, content: txt };
-    })
-    .filter(Boolean) as { role: string; content: string }[];
+      dbMsgs.push({ role, content: txt, ts: r.sent_at });
+    }
+  }
 
-  // merge + light dedupe
-  const merged = [...dbMsgs, ...(incoming || [])].filter((m) => m.role !== "system");
+  if (!errO && rowsO?.length) {
+    for (const r of rowsO) {
+      const txt = (r.content ?? "").trim();
+      if (!txt) continue;
+      // outbox é sempre "assistant"
+      dbMsgs.push({ role: "assistant", content: txt, ts: r.created_at });
+    }
+  }
+
+  if (!dbMsgs.length) return incoming || [];
+
+  // Ordena cronologicamente (muito importante!)
+  dbMsgs.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+
+  // Converte para o formato do modelo
+  const normalized = dbMsgs.map(m => ({ role: m.role, content: m.content }));
+
+  // Merge + dedup leve
+  const merged = [...normalized, ...(incoming || [])].filter(m => m.role !== "system");
+
   const seen = new Set<string>();
   const deduped: { role: string; content: string }[] = [];
   for (const m of merged) {
-    const k = `${m.role}::${m.content}`.slice(0, 600);
+    const c = (m.content || "").trim();
+    if (!c) continue;
+
+    // 🔒 Não dedupa mensagens muito curtas (evita sumir "Sim", "Ok", "1901")
+    if (c.length <= 6) {
+      deduped.push({ role: m.role, content: c });
+      continue;
+    }
+
+    const k = `${m.role}::${c}`.slice(0, 600);
     if (seen.has(k)) continue;
     seen.add(k);
-    deduped.push(m);
+    deduped.push({ role: m.role, content: c });
   }
 
-  // keep last 60, and we will always use last 10 for context prompt
   return deduped.slice(-60);
+}
+
+// -------------------------
+// Protocol helpers
+// -------------------------
+async function getOpenProtocol(supabase: any, conversationId: string) {
+  const { data } = await supabase
+    .from("protocols")
+    .select("id, protocol_code, status, created_at")
+    .eq("conversation_id", conversationId)
+    .in("status", ["open", "in_progress"])
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  return data?.[0] ?? null;
 }
 
 // -------------------------
@@ -361,11 +409,12 @@ function buildSystemInstruction(params: {
     identifiedBlock,
     "",
     "REGRAS CRÍTICAS (OBRIGATÓRIO):",
-    "1) Se o contato NÃO estiver identificado, NÃO repita nome/condomínio (evite errar e irritar o cliente).",
+    identifiedName ? `1) Nome confirmado no cadastro: ${identifiedName}. Use exatamente esse nome. Nunca use username/handle.` : "1) Se o contato NÃO estiver identificado, NÃO repita nome/condomínio (evite errar e irritar o cliente).",
     "2) Se o contato estiver identificado, você PODE usar APENAS os dados do cadastro.",
     "3) Seja natural, objetiva e educada. Evite soar robótica. Não invente informações.",
     "4) Faça no máximo 1 pergunta por resposta (somente o essencial).",
-    "5) Use sempre o contexto (pelo menos as 10 últimas mensagens).",
+    "5) Use sempre o contexto (pelo menos as 20 últimas mensagens).",
+    "6) Não pergunte se o equipamento/portão é da G7. Assuma que é atendimento G7.",
     "",
     "SE já houver informações suficientes para abrir protocolo, inclua ao FINAL um bloco:",
     "###PROTOCOLO###",
@@ -424,8 +473,9 @@ serve(async (req: Request) => {
     const incoming = (rawBody.messages || []).filter((m: any) => m?.role && m?.content);
     let messages = await hydrateMessagesFromDbIfNeeded(supabase, conversationId, incoming);
 
-    // always analyze at least last 10 when available
-    const last10 = messages.slice(-10);
+    // always analyze at least last 20 when available
+    const HISTORY_N = messages.length >= 20 ? 20 : Math.max(10, messages.length);
+    const last20 = messages.slice(-HISTORY_N);
     const lastUser = getLastByRole(messages, "user");
     const lastUserText = normalizeText(lastUser?.content || "");
 
@@ -552,8 +602,8 @@ serve(async (req: Request) => {
       });
     }
 
-    // The model gets at least last 10 messages for context
-    const historyForModel = last10.length ? last10 : messages.slice(-10);
+    // The model gets at least last 20 messages for context
+    const historyForModel = last20.length ? last20 : messages.slice(-20);
 
     if (dryRun) {
       return new Response(JSON.stringify({
@@ -585,34 +635,44 @@ serve(async (req: Request) => {
 
     // If protocol requested, create it (raw fields kept as user wrote)
     if (conversationId && protocol?.criar === true) {
-      const summary = String(protocol?.problema || "").trim() || lastUserText.slice(0, 500);
-      const condRaw = String(protocol?.condominio_raw || "").trim();
-      const requesterRaw = String(protocol?.solicitante_raw || "").trim();
+      const existing = await getOpenProtocol(supabase, conversationId);
 
-      // store raw in pending_payload so create-protocol can pass condominium_name
-      if (condRaw) {
-        const { data: cur } = await supabase.from("conversations").select("pending_payload").eq("id", conversationId).maybeSingle();
-        const pp = (cur?.pending_payload ?? {}) as any;
-        pp.condo_raw_name = condRaw;
-        await supabase.from("conversations").update({ pending_payload: pp }).eq("id", conversationId);
+      let created: any = null;
+      let protocolCode = "";
+
+      if (existing) {
+        console.log("[AI] Usando protocolo existente (idempotência):", existing.protocol_code);
+        protocolCode = existing.protocol_code;
+      } else {
+        const summary = String(protocol?.problema || "").trim() || lastUserText.slice(0, 500);
+        const condRaw = String(protocol?.condominio_raw || "").trim();
+        const requesterRaw = String(protocol?.solicitante_raw || "").trim();
+
+        // store raw in pending_payload so create-protocol can pass condominium_name
+        if (condRaw) {
+          const { data: cur } = await supabase.from("conversations").select("pending_payload").eq("id", conversationId).maybeSingle();
+          const pp = (cur?.pending_payload ?? {}) as any;
+          pp.condo_raw_name = condRaw;
+          await supabase.from("conversations").update({ pending_payload: pp }).eq("id", conversationId);
+        }
+
+        created = await executeCreateProtocol(
+          supabase,
+          supabaseUrl,
+          supabaseServiceKey,
+          conversationId,
+          participant_id,
+          {
+            summary: summary.slice(0, 500),
+            category: protocol?.categoria || "operational",
+            priority: protocol?.prioridade || "normal",
+            requester_name: requesterRaw || undefined,
+            condominium_name: condRaw || undefined,
+          },
+        );
+        protocolCode = created?.protocol?.protocol_code || created?.protocol_code || created?.protocol?.code || "";
       }
 
-      const created = await executeCreateProtocol(
-        supabase,
-        supabaseUrl,
-        supabaseServiceKey,
-        conversationId,
-        participant_id,
-        {
-          summary: summary.slice(0, 500),
-          category: protocol?.categoria || "operational",
-          priority: protocol?.prioridade || "normal",
-          requester_name: requesterRaw || undefined,
-          condominium_name: condRaw || undefined,
-        },
-      );
-
-      const protocolCode = created?.protocol?.protocol_code || created?.protocol_code || created?.protocol?.code || "";
       const code = protocolCode ? (String(protocolCode).startsWith("G7-") ? protocolCode : `G7-${protocolCode}`) : "registrado";
 
       // deterministic variation message (no condo/name repetition if not identified)
