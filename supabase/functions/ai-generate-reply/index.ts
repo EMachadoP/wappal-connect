@@ -390,8 +390,9 @@ function buildSystemInstruction(params: {
   identifiedName?: string | null;
   identifiedCondo?: string | null;
   identifiedRole?: string | null;
+  hasOpenProtocol?: boolean;
 }) {
-  const { identifiedName, identifiedCondo, identifiedRole } = params;
+  const { identifiedName, identifiedCondo, identifiedRole, hasOpenProtocol } = params;
 
   const identifiedBlock =
     identifiedName || identifiedCondo || identifiedRole
@@ -403,10 +404,16 @@ function buildSystemInstruction(params: {
       ].filter(Boolean).join("\n")
       : "CONTATO NÃO IDENTIFICADO (não repetir nomes/condomínios do texto do cliente).";
 
+  const protocolStatus = hasOpenProtocol
+    ? "PROTOCOLO ATUAL:\n- Existe protocolo aberto: SIM. NÃO crie outro chamado se o assunto for o mesmo. Apenas faça perguntas essenciais."
+    : "PROTOCOLO ATUAL:\n- Não há protocolo aberto recentemente.";
+
   return [
     "Você é Ana Mônica, atendente virtual da G7 Serv.",
     "",
     identifiedBlock,
+    "",
+    protocolStatus,
     "",
     "REGRAS CRÍTICAS (OBRIGATÓRIO):",
     identifiedName ? `1) Nome confirmado no cadastro: ${identifiedName}. Use exatamente esse nome. Nunca use username/handle.` : "1) Se o contato NÃO estiver identificado, NÃO repita nome/condomínio (evite errar e irritar o cliente).",
@@ -416,9 +423,14 @@ function buildSystemInstruction(params: {
     "5) Use sempre o contexto (pelo menos as 20 últimas mensagens).",
     "6) Não pergunte se o equipamento/portão é da G7. Assuma que é atendimento G7.",
     "",
-    "SE já houver informações suficientes para abrir protocolo, inclua ao FINAL um bloco:",
+    "REGRAS DE SAÍDA (MUITO IMPORTANTE):",
+    "- O texto para o cliente NÃO PODE mencionar: protocolo, chamado registrado, prioridade alterada, técnico a caminho, atualização interna.",
+    "- Se for necessário abrir/atualizar protocolo, use APENAS o bloco ###PROTOCOLO### (JSON).",
+    "- Nunca diga \"Estou atualizando a prioridade\" ou similar. O backend cuida disso.",
+    "",
+    "SE for necessário abrir chamado, inclua ao FINAL:",
     "###PROTOCOLO###",
-    "{\"criar\": true/false, \"condominio_raw\": \"...\", \"problema\": \"...\", \"categoria\": \"operational|financial|commercial|admin|support\", \"prioridade\": \"normal|critical\", \"solicitante_raw\": \"...\"}",
+    "{\"criar\": true, \"condominio_raw\": \"...\", \"problema\": \"...\", \"categoria\": \"operational|financial|commercial|admin|support\", \"prioridade\": \"normal|critical\", \"solicitante_raw\": \"...\"}",
     "###FIM###",
     "",
     "IMPORTANTE: Em condominio_raw e solicitante_raw use exatamente como o cliente escreveu (sem corrigir).",
@@ -429,16 +441,44 @@ function extractProtocolBlock(text: string) {
   const m = text.match(/###PROTOCOLO###\s*([\s\S]*?)\s*###FIM###/i);
   if (!m) return { cleanText: text.trim(), protocol: null as any };
 
-  const jsonRaw = m[1].trim();
+  let payload = (m[1] ?? "").trim();
+
+  // remove fences comuns (```json ou ```)
+  payload = payload
+    .replace(/^```json/i, "")
+    .replace(/^```/i, "")
+    .replace(/```$/i, "")
+    .trim();
+
   let parsed: any = null;
   try {
-    parsed = JSON.parse(jsonRaw);
-  } catch (_e) {
-    parsed = null;
+    parsed = JSON.parse(payload);
+  } catch {
+    // tentativa extra: pegar primeiro objeto {...} dentro do bloco
+    const obj = payload.match(/\{[\s\S]*\}/);
+    if (obj) {
+      try {
+        parsed = JSON.parse(obj[0]);
+      } catch {
+        parsed = null;
+      }
+    }
   }
 
   const cleanText = text.replace(m[0], "").trim();
   return { cleanText, protocol: parsed };
+}
+
+// 🔒 Limpa respostas ruins / redundantes do LLM
+function isBadFallback(t: string) {
+  const s = (t || "").toLowerCase().trim();
+  if (!s) return true;
+  return (
+    s === "perfeito. me diga como posso ajudar por aqui." ||
+    s.includes("me diga o que você precisa") ||
+    s.includes("como posso ajudar por aqui") ||
+    s.includes("em que posso ajudar hoje")
+  );
 }
 
 // -------------------------
@@ -576,7 +616,13 @@ serve(async (req: Request) => {
       }
     }
 
-    const systemInstruction = buildSystemInstruction({ identifiedName, identifiedCondo, identifiedRole });
+    const existingForPrompt = conversationId ? await getOpenProtocol(supabase, conversationId) : null;
+    const systemInstruction = buildSystemInstruction({
+      identifiedName,
+      identifiedCondo,
+      identifiedRole,
+      hasOpenProtocol: !!existingForPrompt
+    });
 
     // choose model/key
     const geminiKey =
@@ -633,6 +679,15 @@ serve(async (req: Request) => {
       llmText = "Entendido! Vou encaminhar internamente e já retorno por aqui.";
     }
 
+    let userText = cleanText;
+
+    // ✅ Se vai criar protocolo, o backend assume a narrativa final
+    if (protocol?.criar === true) {
+      userText = "";
+    } else if (isBadFallback(userText)) {
+      userText = "Certo. Pode me informar um pouco mais sobre o problema?";
+    }
+
     // If protocol requested, create it (raw fields kept as user wrote)
     if (conversationId && protocol?.criar === true) {
       const existing = await getOpenProtocol(supabase, conversationId);
@@ -683,7 +738,7 @@ serve(async (req: Request) => {
       ];
 
       const msg = pickDeterministic(`${conversationId}:${code}`, confirms);
-      const finalText = cleanText ? `${cleanText}\n\n${msg}` : msg;
+      const finalText = userText ? `${userText}\n\n${msg}` : msg;
 
       return new Response(JSON.stringify({
         text: finalText,
@@ -694,8 +749,13 @@ serve(async (req: Request) => {
     }
 
     // Normal reply (keep it, but do not force greetings)
+    if (identifiedName && userText) {
+      // 🔒 Blindagem final: se vazar handle do Thiago, troca pelo nome real
+      userText = userText.replace(/\bthiag0simoes\b/gi, identifiedName);
+    }
+
     return new Response(JSON.stringify({
-      text: cleanText || llmText || null,
+      text: userText || llmText || null,
       finish_reason: "LLM_REPLY",
       provider: "gemini",
       model: geminiModel,
