@@ -80,7 +80,7 @@ export function MessageList({
     const el = containerRef.current;
     if (!el) return true;
     const distance = el.scrollHeight - (el.scrollTop + el.clientHeight);
-    return distance < 120; // threshold
+    return distance < 300; // threshold aumentado para mensagens grandes
   }, []);
 
   const getAgentName = (senderId: string | null | undefined): string | null => {
@@ -94,7 +94,7 @@ export function MessageList({
 
     // ✅ Atualiza stickToBottom: se usuário saiu do fim, desliga auto-scroll
     const distance = target.scrollHeight - (target.scrollTop + target.clientHeight);
-    stickToBottom.current = distance < 120;
+    stickToBottom.current = distance < 300;
 
     if (target.scrollTop < 100 && hasMore && !loadingMore && onLoadMore && !loading) {
       console.log("[MessageList] Scrolled to top, fetching more...");
@@ -222,9 +222,16 @@ export function MessageList({
       });
     }
 
-    // 3) After append: only autoscroll if user is near bottom
+    // 3) After append: force scroll if outbound OR if user is near bottom
     else if (wasAppended) {
-      if (isNearBottom()) {
+      const lastMsg = messages[messages.length - 1];
+      const isOutbound =
+        lastMsg?.direction === "outbound" ||
+        lastMsg?.sender_type === "agent" ||
+        lastMsg?.sender_type === "assistant";
+
+      if (isOutbound || isNearBottom()) {
+        stickToBottom.current = true;
         raf2(() => scrollToBottom("smooth"));
       }
     }
