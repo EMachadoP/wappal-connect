@@ -324,6 +324,17 @@ async function executeCreateProtocol(
   return await response.json();
 }
 
+function isInternalOpsText(text: string) {
+  const t = (text || "").toLowerCase();
+  return (
+    t.includes("criar agendamento:") ||
+    t.includes("operador (celular)") ||
+    t.includes("para eu abrir o chamado") ||
+    t.includes("me envie assim:") ||
+    t.includes("exemplo:")
+  );
+}
+
 // -------------------------
 // Prompt: rules anti-erro + extraction block
 // -------------------------
@@ -552,7 +563,7 @@ serve(async (req: Request) => {
       }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    const llmText = await callGeminiText({
+    let llmText = await callGeminiText({
       apiKey: geminiKey,
       model: geminiModel,
       systemInstruction,
@@ -560,7 +571,17 @@ serve(async (req: Request) => {
       temperature: 0.4,
     });
 
-    const { cleanText, protocol } = extractProtocolBlock(llmText);
+    let { cleanText, protocol } = extractProtocolBlock(llmText);
+
+    // ✅ Filtro de segurança contra vazamento de instruções internas
+    if (isInternalOpsText(cleanText)) {
+      console.log("[safety] Blocked internal ops leak in cleanText");
+      cleanText = "Entendido! Vou encaminhar internamente e já retorno por aqui.";
+    }
+    if (isInternalOpsText(llmText)) {
+      console.log("[safety] Blocked internal ops leak in llmText");
+      llmText = "Entendido! Vou encaminhar internamente e já retorno por aqui.";
+    }
 
     // If protocol requested, create it (raw fields kept as user wrote)
     if (conversationId && protocol?.criar === true) {

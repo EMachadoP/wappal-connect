@@ -16,6 +16,33 @@ serve(async (req) => {
   let conversation_id: string | null = null;
   let lockToken: string | null = null;
 
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  async function getLatestInboundMessageId(supabase: any, conversationId: string) {
+    const { data, error } = await supabase
+      .from("messages")
+      .select("id, sent_at")
+      .eq("conversation_id", conversationId)
+      .eq("direction", "inbound")
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data?.id ?? null;
+  }
+
+  function isInternalOpsText(text: string) {
+    const t = (text || "").toLowerCase();
+    return (
+      t.includes("criar agendamento:") ||
+      t.includes("operador (celular)") ||
+      t.includes("para eu abrir o chamado") ||
+      t.includes("me envie assim:") ||
+      t.includes("exemplo:")
+    );
+  }
+
   // -----------------------------
   // AI Logs - padronizado
   // -----------------------------
@@ -96,79 +123,34 @@ serve(async (req) => {
     lockToken = lock.token;
 
     try {
-      // ✅ debounce existente (4s + 2s)
-      let initialId = initial_message_id;
+      // ---- DEBOUNCE RESILIENTE (não aborta, re-debounce) ----
+      const MAX_LOOPS = 4;
+      const DEBOUNCE_MS = 4000;
 
-      if (!initialId) {
-        const { data: initialLatest } = await supabase
-          .from('messages')
-          .select('id')
-          .eq('conversation_id', conversation_id)
-          .eq('sender_type', 'contact')
-          .order('sent_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        initialId = initialLatest?.id;
+      let latestId = await getLatestInboundMessageId(supabase, conversation_id);
+      if (!latestId) {
+        console.log("[ai-maybe-reply] Sem msg inbound. Saindo.");
+        return new Response(JSON.stringify({ ok: true, skipped: "no_inbound" }), { status: 200, headers: corsHeaders });
       }
 
-      console.log('[ai-maybe-reply] Debounce: Msg inicial:', initialId);
-      await new Promise(r => setTimeout(r, 4000));
+      for (let i = 1; i <= MAX_LOOPS; i++) {
+        console.log(`[ai-maybe-reply] Debounce loop ${i}/${MAX_LOOPS}. Msg inicial: ${latestId}`);
 
-      const { data: check1 } = await supabase
-        .from('messages')
-        .select('id')
-        .eq('conversation_id', conversation_id)
-        .eq('sender_type', 'contact')
-        .order('sent_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        await sleep(DEBOUNCE_MS);
 
-      if (check1 && check1.id !== initialId) {
-        console.log('[ai-maybe-reply] ⏸️ Debounce: Nova msg após 4s. Abortando.', { current: check1.id, expected: initialId });
-        await logAiSkip(supabase, conversation_id, {
-          status: 'skipped',
-          skip_reason: 'debounced',
-          error_message: 'Debounce: New message after 4s'
-        });
-        return new Response(JSON.stringify({ success: false, reason: 'Debounced at 4s' }));
+        const afterWait = await getLatestInboundMessageId(supabase, conversation_id);
+
+        if (afterWait && afterWait !== latestId) {
+          console.log(`[ai-maybe-reply] Debounce: Nova msg durante janela. Reiniciando. { before: "${latestId}", now: "${afterWait}" }`);
+          latestId = afterWait;
+          continue; // NÃO aborta. Recomeça o debounce aqui mesmo.
+        }
+
+        console.log("[ai-maybe-reply] Debounce: Estabilizou. Seguindo para geração.");
+        break;
       }
 
-      await new Promise(r => setTimeout(r, 2000));
-
-      const { data: check2 } = await supabase
-        .from('messages')
-        .select('id')
-        .eq('conversation_id', conversation_id)
-        .eq('sender_type', 'contact')
-        .order('sent_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (check2 && check2.id !== initialId) {
-        console.log('[ai-maybe-reply] ⏸️ Debounce: Nova msg após 6s. Abortando.', { current: check2.id, expected: initialId });
-        return new Response(JSON.stringify({ success: false, reason: 'Debounced at 6s' }));
-      }
-
-      const { data: latestInbound } = await supabase
-        .from('messages')
-        .select('id, sent_at')
-        .eq('conversation_id', conversation_id)
-        .eq('direction', 'inbound')
-        .order('sent_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (latestInbound?.id && initialId && latestInbound.id !== initialId) {
-        console.log('[ai-maybe-reply] ⏭️ Atropelado por mensagem mais nova, cancelando resposta.', { latest: latestInbound.id, initial: initialId });
-        await logAiSkip(supabase, conversation_id, {
-          status: 'skipped',
-          skip_reason: 'debounced',
-          error_message: 'Superseded by newer inbound'
-        });
-        return new Response(JSON.stringify({ success: false, reason: 'superseded_by_newer_inbound' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-      }
-
-      console.log('[ai-maybe-reply] 🚀 Debounce finalizado. Iniciando processamento...');
+      console.log("[ai-maybe-reply] 🚀 Debounce finalizado. Iniciando processamento...");
 
       // 2. Carregar dados da conversa e configurações
       const { data: conv } = await supabase
@@ -339,7 +321,13 @@ serve(async (req) => {
       let text = (aiData?.text ?? "Em que posso ajudar hoje?").toString().trim();
 
       // 7. Enviar via Z-API
-      const idempotencyKey = `ai_${conversation_id}_${initialId || 'unknown'}`;
+      const idempotencyKey = `ai_${conversation_id}_${latestId || 'unknown'}`;
+
+      if (isInternalOpsText(text)) {
+        console.log("[safety] blocked internal ops text leak", { text });
+        text = "Entendido! Vou encaminhar internamente e já retorno por aqui.";
+      }
+
       await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}`, 'apikey': supabaseServiceKey },
