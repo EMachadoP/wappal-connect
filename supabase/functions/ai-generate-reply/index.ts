@@ -134,7 +134,7 @@ async function acquireLock(supabase: any, conversationId: string) {
 async function hydrateMessagesFromDb(
   supabase: any,
   conversationId: string,
-  takeLast = 20,
+  takeLast = 25,
 ) {
   if (!conversationId) return [];
 
@@ -171,12 +171,28 @@ async function hydrateMessagesFromDb(
     }
   }
 
+  // Ordenar cronologicamente
   dbMsgs.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+
+  // ✅ SOLUÇÃO 3: Consolidação de mensagens rápidas do mesmo usuário
+  const consolidated: { role: string; content: string; ts: string }[] = [];
+  for (const m of dbMsgs) {
+    const last = consolidated[consolidated.length - 1];
+    if (last && last.role === m.role && m.role === "user") {
+      const diff = new Date(m.ts).getTime() - new Date(last.ts).getTime();
+      if (diff < 45000) { // Janela de 45 segundos para agrupar
+        last.content += " " + m.content;
+        last.ts = m.ts; // atualiza timestamp
+        continue;
+      }
+    }
+    consolidated.push({ ...m });
+  }
 
   const seen = new Set<string>();
   const deduped: { role: string; content: string }[] = [];
 
-  for (const m of dbMsgs) {
+  for (const m of consolidated) {
     const c = m.content.trim();
     if (!c) continue;
     if (c.length <= 6) {
@@ -189,7 +205,7 @@ async function hydrateMessagesFromDb(
     deduped.push({ role: m.role, content: c });
   }
 
-  return deduped.slice(-20);
+  return deduped.slice(-25);
 }
 
 // -------------------------
@@ -380,31 +396,25 @@ function buildSystemInstruction(params: {
     "   - Se IDENTIFICADO: use APENAS os dados do cadastro (nome, condomínio)",
     "   - Se NÃO IDENTIFICADO: seja NEUTRO, não repita o que o cliente disse",
     "",
-    "3. QUALIFICAÇÃO (MUITO IMPORTANTE):",
-    "   - ANTES de abrir protocolo, você DEVE qualificar o problema",
-    "   - Se a descrição for genérica (ex: 'problema no interfone'), PERGUNTE detalhes",
-    "   - Exemplos de perguntas:",
-    "     * 'O interfone está mudo, não toca, ou não abre o portão?'",
-    "     * 'O portão não abre, não fecha, ou está fazendo barulho?'",
-    "     * 'Qual câmera está com problema e o que aparece na tela?'",
-    "   - Só abra protocolo quando tiver descrição ESPECÍFICA do sintoma",
+    "3. QUALIFICAÇÃO E DADOS FALTANTES (MANTRA):",
+    "   - ANTES de abrir protocolo, você DEVE qualificar o problema.",
+    "   - BLOQUEIO: Se for Interfone, Acesso ou Portão em APARTAMENTO, você PRECISA do número do apartamento.",
+    "   - Se você NÃO tem o número do apartamento no cadastro (Contato Identificado) nem o cliente disse ainda, você DEVE perguntar o número antes de qualquer outra coisa.",
+    "   - NÃO use o bloco ###PROTOCOLO### se não tiver o número do apartamento e a descrição específica do problema.",
     "",
     "4. PERGUNTAS:",
-    "   - Faça no MÁXIMO 1 pergunta por resposta",
-    "   - Seja objetiva e direta",
+    "   - Faça no MÁXIMO 1 pergunta por resposta. Seja direta.",
     "",
     "5. PROTOCOLO:",
-    "   - Quando tiver informações SUFICIENTES (problema detalhado + condomínio), inclua:",
+    "   - Quando tiver informações COMPLETAS (problema detalhado + condomínio + apartamento), inclua:",
     "   ###PROTOCOLO###",
-    '   {"criar": true, "condominio_raw": "...", "problema": "descrição detalhada", "categoria": "operational", "prioridade": "normal"}',
+    '   {"criar": true, "condominio_raw": "...", "problema": "descrição detalhada + apto X", "categoria": "operational", "prioridade": "normal"}',
     "   ###FIM###",
-    "   - Em condominio_raw use EXATAMENTE como o cliente escreveu",
-    "   - NÃO mencione 'protocolo criado' no texto da resposta - o sistema cuida disso",
+    "   - IMPORTANTE: Se criar o protocolo, mantenha sua resposta de texto extremamente curta ou vazia. O sistema já confirma o registro.",
     "",
     "6. RESPOSTAS:",
-    "   - Seja natural, educada e objetiva",
-    "   - Não invente informações",
-    "   - Não mencione termos internos (protocolo, prioridade, categoria)",
+    "   - Seja natural, educada e objetiva. Não invente informações.",
+    "   - Não mencione termos internos (protocolo, prioridade, categoria).",
   ].join("\n");
 }
 
@@ -465,8 +475,23 @@ serve(async (req: Request) => {
       });
     }
 
-    // Load messages (sempre do banco, últimas 20)
-    const messages = await hydrateMessagesFromDb(supabase, conversationId, 20);
+    // Load messages (Payload first, then DB as fallback)
+    let messages = rawBody.messages || [];
+    if (!messages.length) {
+      messages = await hydrateMessagesFromDb(supabase, conversationId, 25);
+    } else {
+      // ✅ Consolidação também nas mensagens que vieram no payload
+      const consolidated: any[] = [];
+      for (const m of messages) {
+        const last = consolidated[consolidated.length - 1];
+        if (last && last.role === m.role && m.role === "user") {
+          last.content += " " + m.content;
+          continue;
+        }
+        consolidated.push({ ...m });
+      }
+      messages = consolidated.slice(-25);
+    }
 
     const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
     const lastUserText = normalizeText(lastUserMsg?.content || "");
@@ -666,7 +691,15 @@ serve(async (req: Request) => {
       ];
 
       const msg = pickDeterministic(`${conversationId}:${code}`, confirms);
-      const finalText = userText ? `${userText}\n\n${msg}` : msg;
+
+      // ✅ Se o LLM já mandou uma saudação ou algo útil, mantém. 
+      // Mas se mandou "Vou abrir o chamado", limpa para não duplicar.
+      let finalText = userText;
+      if (userText.toLowerCase().includes("chamado") || userText.toLowerCase().includes("protocolo") || userText.length < 5) {
+        finalText = msg;
+      } else {
+        finalText = `${userText}\n\n${msg}`;
+      }
 
       return new Response(JSON.stringify({
         text: finalText,

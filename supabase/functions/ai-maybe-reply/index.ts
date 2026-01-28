@@ -32,6 +32,21 @@ serve(async (req) => {
     return data?.id ?? null;
   }
 
+  async function getLatestAssistantMessageSentAt(supabase: any, conversationId: string): Promise<string | null> {
+    const { data, error } = await supabase
+      .from("messages")
+      .select("sent_at")
+      .eq("conversation_id", conversationId)
+      .eq("direction", "outbound")
+      .eq("sender_type", "assistant")
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) return null;
+    return data?.sent_at ?? null;
+  }
+
   function isInternalOpsText(text: string) {
     const t = (text || "").toLowerCase();
     return (
@@ -150,7 +165,22 @@ serve(async (req) => {
         break;
       }
 
-      console.log("[ai-maybe-reply] 🚀 Debounce finalizado. Iniciando processamento...");
+      console.log("[ai-maybe-reply] 🚀 Debounce finalizado. Verificando resposta recente...");
+
+      // ✅ SOLUÇÃO 2: Verificar se já respondeu recentemente (últimos 7 seg)
+      const lastAssistantAt = await getLatestAssistantMessageSentAt(supabase, conversation_id);
+      if (lastAssistantAt) {
+        const diff = Date.now() - new Date(lastAssistantAt).getTime();
+        if (diff < 7000) {
+          console.log("[ai-maybe-reply] ✋ Skip: IA já respondeu recentemente.", { diff_ms: diff });
+          await logAiSkip(supabase, conversation_id, {
+            status: "skipped",
+            skip_reason: "debounced",
+            error_message: "Recent assistant reply detected"
+          });
+          return new Response(JSON.stringify({ ok: true, skipped: "recent_reply" }), { status: 200, headers: corsHeaders });
+        }
+      }
 
       // 2. Carregar dados da conversa e configurações
       const { data: conv } = await supabase
