@@ -124,12 +124,16 @@ async function hasRecentProtocol(supabase: any, conversationId: string, withinMi
 // -------------------------
 // Lock (table ai_conversation_locks)
 // -------------------------
-async function acquireLock(supabase: any, conversationId: string) {
+async function acquireLock(supabase: any, conversationId: string, skip = false) {
+  if (skip) {
+    console.log("[AI] Bypassing lock as requested.");
+    return true;
+  }
   try {
     const now = new Date().toISOString();
     await supabase.from("ai_conversation_locks").delete().lt("locked_until", now);
 
-    const lockedUntil = new Date(Date.now() + 20 * 1000).toISOString();
+    const lockedUntil = new Date(Date.now() + 25 * 1000).toISOString();
     const { error } = await supabase.from("ai_conversation_locks").insert({
       conversation_id: conversationId,
       locked_until: lockedUntil,
@@ -137,6 +141,7 @@ async function acquireLock(supabase: any, conversationId: string) {
     });
 
     if (error?.code === "23505") return false;
+    // Fallback if table doesn't exist or other minor issues - we prefer to answer
     if (error?.message?.includes("ai_conversation_locks")) return true;
     if (error) throw error;
     return true;
@@ -757,6 +762,7 @@ serve(async (req: Request) => {
 
     conversationId = rawBody.conversation_id || rawBody.conversationId || rawBody.conversation?.id;
     const participant_id = rawBody.participant_id;
+    const skipLock = rawBody.skip_lock === true || rawBody.skipLock === true;
 
     if (!conversationId) {
       return new Response(JSON.stringify({ error: "conversation_id required" }), {
@@ -766,7 +772,7 @@ serve(async (req: Request) => {
     }
 
     // Lock
-    const locked = await acquireLock(supabase, conversationId);
+    const locked = await acquireLock(supabase, conversationId, skipLock);
     if (!locked) {
       return new Response(JSON.stringify({ text: null, skipped: "lock_busy" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },

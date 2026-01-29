@@ -282,73 +282,31 @@ serve(async (req) => {
         console.log('[ai-maybe-reply] ⚠️ Nenhum participante identificado ainda');
       }
 
-      // 4. Buscar histórico de mensagens (AUMENTADO PARA MELHOR CONTEXTO)
-      const TAKE_LAST = 30; // ✅ Aumentado de 10 para 30 para evitar "perguntas bobas"
-
-      const { data: msgs, error: msgsErr } = await supabase
-        .from('messages')
-        .select('content, transcript, sender_type, message_type, sent_at')
-        .eq('conversation_id', conversation_id)
-        .order('sent_at', { ascending: false })
-        .limit(TAKE_LAST);
-
-      if (msgsErr) {
-        console.error('[ai-maybe-reply] Erro ao buscar mensagens:', msgsErr);
-        throw msgsErr;
-      }
-
-      const messages = (msgs || [])
-        .map((m) => {
-          const text = (m.transcript || m.content || '').trim();
-          if (!text || text === '...' || text.startsWith('[Mídia:') || text.startsWith('[Arquivo:')) {
-            return null;
-          }
-          const sender = (m.sender_type || '').toLowerCase();
-          const role = sender === 'contact' ? 'user' : 'assistant';
-          return { role, content: text };
-        })
-        .filter(Boolean)
-        .reverse() as { role: string; content: string }[];
-
-      console.log(`[ai-maybe-reply] Carregadas ${messages.length} mensagens úteis de ${msgs?.length || 0} totais`);
-
-      // 5. Buscar prompt e configurações globais
-      const { data: settings } = await supabase.from('ai_settings').select('*').maybeSingle();
-      let systemPrompt = settings?.base_system_prompt || "Você é um assistente virtual.";
-      let contextInfo = '';
-
-      if (participantState?.participants) {
-        const participant = participantState.participants as any;
-        const roleLabels: Record<string, string> = {
-          'sindico': 'Síndico', 'subsindico': 'Subsíndico', 'porteiro': 'Porteiro', 'zelador': 'Zelador', 'morador': 'Morador',
-          'administrador': 'Administrador', 'conselheiro': 'Conselheiro', 'funcionario': 'Funcionário', 'supervisor_condominial': 'Supervisor Condominial',
-          'visitante': 'Visitante', 'prestador': 'Prestador de Serviço', 'fornecedor': 'Fornecedor', 'outro': 'Outro'
-        };
-        const roleLabel = roleLabels[participant.role_type] || participant.role_type;
-        const entityName = participant.entities?.name || 'não especificado';
-        const entityType = participant.entities?.type || 'condominio';
-        const entityTypeLabels: Record<string, string> = { 'empresa': 'Empresa', 'administradora': 'Administradora', 'condominio': 'Condomínio', 'prestador': 'Prestador' };
-        const entityTypeLabel = entityTypeLabels[entityType] || 'Entidade';
-
-        contextInfo += `\n👤 Nome: ${participant.name}\n💼 Função: ${roleLabel}\n🏢 ${entityTypeLabel}: ${entityName}\n`;
-        contextInfo += `\n⚠️ NUNCA pergunte nome, função ou entidade - você JÁ SABE.\n`;
-      }
-
-      const now = new Date();
-      const currentTimeStr = new Intl.DateTimeFormat('pt-BR', { timeZone: settings?.timezone || 'America/Recife', dateStyle: 'full', timeStyle: 'medium' }).format(now);
-      systemPrompt = systemPrompt.replace(/{{customer_name}}/g, conv.contacts?.name || 'Cliente').replace(/{{current_time}}/g, currentTimeStr) + contextInfo;
-
       // 6. Gerar resposta
-      console.log('[ai-maybe-reply] Chamando geração...');
+      console.log('[ai-maybe-reply] Chamando geração (delegando contexto)...');
       const aiResponse = await fetch(`${supabaseUrl}/functions/v1/ai-generate-reply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}`, 'apikey': supabaseServiceKey },
-        body: JSON.stringify({ messages, systemPrompt, conversation_id, participant_id: participantState?.current_participant_id }),
+        body: JSON.stringify({
+          conversation_id,
+          participant_id: participantState?.current_participant_id,
+          skip_lock: true, // Já seguramos o lock aqui
+          messages: null // Força o ai-generate-reply a hidratar do DB com consolidação robusta
+        }),
       });
 
-      if (!aiResponse.ok) throw new Error(`ai-generate-reply failed: ${aiResponse.status}`);
+      if (!aiResponse.ok) {
+        console.error(`[ai-maybe-reply] ai-generate-reply failed: ${aiResponse.status}`);
+        return new Response(JSON.stringify({ success: false, reason: 'Brain failed' }));
+      }
+
       const aiData = await aiResponse.json();
-      let text = (aiData?.text ?? "Em que posso ajudar hoje?").toString().trim();
+      let text = (aiData?.text ?? "").toString().trim();
+
+      if (!text) {
+        console.log("[ai-maybe-reply] Brain returned empty. Skipping reply.");
+        return new Response(JSON.stringify({ success: true, skipped: "empty_response" }));
+      }
 
       // 7. Enviar via Z-API
       const idempotencyKey = `ai_${conversation_id}_${latestId || 'unknown'}`;
