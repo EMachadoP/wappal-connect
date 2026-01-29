@@ -454,12 +454,24 @@ serve(async (req: Request) => {
         );
       }
 
-      // ✅ FIX DEFINITIVO: SEMPRE usa o chat_id da conversa aberta
-      if (!foundConv.chat_id) {
-        throw new Error("Conversa sem chat_id. Não é possível enviar.");
-      }
+      // ✅ FIX: Tenta usar o chat_id da conversa, mas se estiver nulo, tenta o telefone do contato como fallback
+      if (foundConv.chat_id) {
+        recipient = foundConv.chat_id;
+      } else {
+        const contact = (foundConv.contacts as any);
+        const contactPhone = Array.isArray(contact) ? contact[0]?.phone : contact?.phone;
+        const contactLid = Array.isArray(contact) ? contact[0]?.lid : contact?.lid;
 
-      recipient = foundConv.chat_id;
+        if (contactPhone) {
+          console.log(`[zapi-send-message] ⚠️ chat_id missing for conv ${conversation_id}, falling back to contact phone: ${contactPhone}`);
+          recipient = contactPhone;
+        } else if (contactLid) {
+          console.log(`[zapi-send-message] ⚠️ chat_id missing for conv ${conversation_id}, falling back to contact lid: ${contactLid}`);
+          recipient = contactLid;
+        } else {
+          throw new Error("Conversa sem chat_id e contato sem telefone/lid. Não é possível enviar.");
+        }
+      }
 
       // Ainda passa phone/is_group do contact para ajudar na normalização (opcional)
       const contact = foundConv.contacts as any;
