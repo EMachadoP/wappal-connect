@@ -80,7 +80,6 @@ function isJustConfirmation(text: string): boolean {
   ]);
 
   if (CONFIRMATIONS.has(normalized)) return true;
-  if (normalized.length < 5) return true;
   if (/^(ok+|sim+|ss+|n[aã]o+|blz+|vlw+|obg|ta\s*bom)$/i.test(normalized)) return true;
 
   return false;
@@ -853,17 +852,9 @@ serve(async (req: Request) => {
         });
       }
 
-      if (greetingFound) {
-        return new Response(JSON.stringify({ text: `${greetingFound}! Em que posso ajudar?`, finish_reason: "GREETING" }), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-
-      const replies = ["Certo! Me diga como posso ajudar.", "Entendido. Em que posso ajudar?", "Perfeito! O que você precisa?"];
-      const msg = pickDeterministic(`${conversationId}:${nowMinuteBucket()}`, replies);
-      return new Response(JSON.stringify({ text: msg, finish_reason: "CONFIRMATION_NO_PROTOCOL" }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      // ✅ IMPORTANTE: Se não tem protocolo recente, NÃO respondemos com fallback genérico.
+      // Deixamos seguir para o LLM, para que ele trate mensagens curtas (ex: número do apê)
+      // ou use seu próprio discernimento conforme o prompt "3.1 RESPOSTAS CURTAS".
     }
 
     // Load identified data
