@@ -64,7 +64,7 @@ export function MessageList({
   const prevFirstId = useRef<string | null>(null);
   const prevLastId = useRef<string | null>(null);
 
-  const isInitialLoad = useRef(true);
+  const lastScrolledConvId = useRef<string | null>(null);
   const scrollSnapshot = useRef<{ height: number; top: number } | null>(null);
   const stickToBottom = useRef(false); // ✅ Flag para manter no fim quando imagens carregam
 
@@ -105,7 +105,6 @@ export function MessageList({
 
   // Reset when switching conversation
   useEffect(() => {
-    isInitialLoad.current = true;
     scrollSnapshot.current = null;
     prevFirstId.current = null;
     prevLastId.current = null;
@@ -181,18 +180,35 @@ export function MessageList({
     const wasAppended =
       !!prevLastId.current && !!last && last !== prevLastId.current && messages.length > 0;
 
-    // 1) Initial load: ALWAYS scroll to bottom (last message)
-    if (isInitialLoad.current && messages.length > 0) {
-      // ✅ FIX: Múltiplas tentativas para garantir scroll ao final
-      const scrollToEndSource = () => {
+    // Check if these messages actually belong to this conversation
+    const messagesBelongToCurrentConv =
+      messages.length > 0 && messages[0].conversation_id === conversationId;
+
+    // 1) Initial load: ALWAYS scroll to bottom (last message) or first unread
+    if (lastScrolledConvId.current !== conversationId && messagesBelongToCurrentConv) {
+      // Tentar encontrar a primeira mensagem não lida
+      const firstUnread = messages.find(
+        (m) => m.direction === "inbound" && m.read_at === null
+      );
+
+      const scrollToTarget = () => {
         const el2 = containerRef.current;
         if (!el2) return;
 
+        if (firstUnread) {
+          const target = el2.querySelector(`[data-message-id="${firstUnread.id}"]`);
+          if (target) {
+            target.scrollIntoView({ behavior: "auto", block: "center" });
+            return;
+          }
+        }
+
+        // Fallback: scroll to bottom
         stickToBottom.current = true;
         const maxScroll = el2.scrollHeight - el2.clientHeight;
         el2.scrollTop = maxScroll;
 
-        console.log('[MessageList] Initial scroll to bottom:', {
+        console.log('[MessageList] Initial scroll to bottom/unread:', {
           scrollHeight: el2.scrollHeight,
           clientHeight: el2.clientHeight,
           scrollTop: el2.scrollTop
@@ -200,13 +216,13 @@ export function MessageList({
       };
 
       // Tentar várias vezes para garantir (imagens podem carregar depois)
-      scrollToEndSource();
-      requestAnimationFrame(scrollToEndSource);
-      setTimeout(scrollToEndSource, 100);
-      setTimeout(scrollToEndSource, 300);
-      setTimeout(scrollToEndSource, 500);
+      scrollToTarget();
+      requestAnimationFrame(scrollToTarget);
+      setTimeout(scrollToTarget, 100);
+      setTimeout(scrollToTarget, 300);
+      setTimeout(scrollToTarget, 500);
 
-      isInitialLoad.current = false;
+      lastScrolledConvId.current = conversationId || null;
     }
 
     // 2) After prepend: restore scroll position
