@@ -82,7 +82,7 @@ export function ConversationItem({
           </span>
 
           {unreadCount > 0 && (
-            <Badge className="bg-red-500 hover:bg-red-600 text-white h-5 min-w-5 flex items-center justify-center px-1.5 shadow-sm ring-2 ring-red-500/20 shadow-red-500/50">
+            <Badge className="bg-destructive hover:bg-destructive/90 text-destructive-foreground h-5 min-w-5 flex items-center justify-center px-1.5 shadow-sm ring-2 ring-destructive/20 shadow-destructive/50 animate-pulse">
               {unreadCount}
             </Badge>
           )}

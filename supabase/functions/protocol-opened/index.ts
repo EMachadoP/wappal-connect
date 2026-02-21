@@ -155,6 +155,45 @@ ${code} - Resolvido`;
 
     console.log(`[protocol-opened] Card enviado: ${cardResult.deduped ? "deduped" : "sent"}, messageId=${cardResult.messageId || 'N/A'}`);
 
+    // --- NOVA FUNCIONALIDADE: RESUMO DE PENDÊNCIAS ---
+    try {
+      const { data: openProtocols, error: openErr } = await supabase
+        .from("protocols")
+        .select(`
+          protocol_code,
+          condominium_raw_name,
+          condominiums(name)
+        `)
+        .in("status", ["open", "in_progress"])
+        .order("created_at", { ascending: true });
+
+      if (!openErr && openProtocols && openProtocols.length > 0) {
+        let summaryText = `📊 *RESUMO DE PENDÊNCIAS* (${openProtocols.length}):\n\n`;
+        openProtocols.forEach((p: any) => {
+          const cName = p.condominiums?.name || p.condominium_raw_name || "Não Identificado";
+          summaryText += `▪️ *${p.protocol_code}* - ${cName}\n`;
+        });
+
+        await fetch(`${supabaseUrl}/functions/v1/zapi-send-message`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${supabaseServiceKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            recipient: techGroupId,
+            content: summaryText.trim(),
+            isGroup: true,
+            idempotency_key: `${idempotency_key}:summary`
+          }),
+        });
+        console.log(`[protocol-opened] Resumo de pendências enviado.`);
+      }
+    } catch (e: any) {
+      console.warn(`[protocol-opened] Failed to send pending summary:`, e.message);
+    }
+    // --- FIM DA NOVA FUNCIONALIDADE ---
+
     return new Response(
       JSON.stringify({ success: true, techGroupId, protocol_code: code }),
       {
