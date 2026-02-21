@@ -233,11 +233,13 @@ async function hydrateMessagesFromDb(
 // Protocol helpers
 // -------------------------
 async function getOpenProtocol(supabase: any, conversationId: string) {
+  const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
   const { data } = await supabase
     .from("protocols")
     .select("id, protocol_code, status, created_at")
     .eq("conversation_id", conversationId)
     .in("status", ["open", "in_progress"])
+    .gte("created_at", thirtyMinutesAgo)
     .order("created_at", { ascending: false })
     .limit(1);
 
@@ -346,7 +348,8 @@ async function executeCreateProtocol(
     requester_role: args.requester_role || "Morador",
     apartment: args.apartment || null,
     notify_group: true,
-    notify_client: false
+    notify_client: false,
+    force_new: true
   };
 
   const response = await fetch(`${supabaseUrl}/functions/v1/create-protocol`, {
@@ -409,22 +412,11 @@ Atendimento no horário comercial: {{is_business_hours}}
 Você é Ana Mônica, atendente da G7 Serv.  
 Atende condomínios com suporte técnico e administrativo: portaria, controle de acesso, CFTV, cerca elétrica, interfonia, TV coletiva, semáforos internos e suporte geral.
 
-2) OBJETIVO  
-Atender com agilidade e empatia.
-Orientar testes simples e seguros (sem excesso de perguntas).
-Coletar dados faltantes somente quando necessários para registrar/encaminhar.
-Classificar urgência: Crítico x Próximo dia útil.
-Encaminhar corretamente: Suporte / Administrativo / Comercial / Financeiro.
-Não prometer prazos nem “contato garantido”.
+⚠️ REGRA DE OURO: SÓ crie protocolos (bloco ###PROTOCOLO###) para falhas técnicas de MANUTENÇÃO (Seção 10).
+⚠️ NUNCA crie protocolos para: Vendas, Financeiro, Administrativo puro ou apenas para "falar com André". Para esses casos, apenas informe que está encaminhando.
 
-3) TOM E ESTILO (obrigatório)  
-Profissional, humano e empático.
-Mensagens curtas primeiro. Só detalhar se o cliente pedir.
-Sem jargões e sem tom robótico.
-Nunca dizer que é IA/robô/automação.
-Nome: usar só o primeiro nome quando tiver certeza e raramente. Se houver dúvida, não usar nome.
-Emojis: no máximo 1 e só ocasionalmente. Se cliente estiver irritado/sério, não usar.
-
+2) OBJETIVO
+... (truncated) ...
 ${identifiedBlock}
 
 ${protocolStatus}
@@ -660,6 +652,7 @@ Se não for crítico, será tratado no próximo dia útil.”
 12) ESCALONAMENTO (quando acionar André / humano)  
 Casos Críticos: priorizar André internamente.  
 Se cliente pedir “humano”: sinalizar internamente “Precisa humano” e parar de responder automaticamente.
+⚠️ NÃO GERAR PROTOCOLO para solicitações de falar com supervisor.
 Antes de repassar o contato do André, perguntar:  
 “Posso repassar o contato do supervisor para tratar diretamente?”  
 
@@ -701,17 +694,13 @@ Como usar (na prática, sem complicar)
 Sempre siga: Abertura → Entender → 1 teste → (se necessário) identificação mínima → encaminhar → protocolo quando existir.
 Regra prática: se estiver em dúvida entre perguntar mais ou encaminhar, faça apenas 1 pergunta que destrave (ex: “é uma câmera ou várias?” / “é geral ou só um apê?”) e depois encaminhe.
 
-[INSTRUÇÃO TÉCNICA - TOOL CALLING]
-⚠️ REGRA DE OURO: Sempre que você decidir que um problema precisa de atendimento presencial ou quando você usar frases como "Vou registrar...", "Já registrei...", "Encaminhei para o time..." ou similares, você DEVE OBRIGATORIAMENTE chamar a função "create_ticket" na MESMA resposta.
-- O registro no sistema deve acontecer no exato momento em que você confirma ao cliente.
-- Nunca prometer registro sem disparar a função.
-- O summary deve ser em português, claro e completo.
-- Se faltarem dados obrigatórios, NÃO chamar create_ticket. Fazer 1 pergunta curta e aguardar.
+[INSTRUÇÃO TÉCNICA - PROTOCOLO]
+Sempre que você decidir que um problema precisa de atendimento da equipe (manutenção técnica, etc) ou quando você disser ao cliente "Vou registrar...", "Já registrei...", "Encaminhei para o time..." você DEVE OBRIGATORIAMENTE incluir o bloco ###PROTOCOLO### ao final.
 
 [REGRA CRÍTICA PARA PROTOCOLO (SISTEMA)]
 Quando você tiver informações COMPLETAS para registrar, inclua EXCLUSIVAMENTE este bloco ao final:
 ###PROTOCOLO###
-{"criar": true, "condominio_raw": "...", "problema": "descrição detalhada + apto X", "categoria": "operational", "prioridade": "normal"}
+{"criar": true, "condominio_raw": "nome do condominio", "problema": "descrição detalhada do problema", "categoria": "operational", "prioridade": "normal", "solicitante_nome": "Nome do morador ou portaria", "solicitante_funcao": "Morador / Zelador / etc", "apartamento": "Nº do apto se houver"}
 ###FIM###
 `;
 
@@ -941,6 +930,9 @@ serve(async (req: Request) => {
             category: protocol?.categoria || "operational",
             priority: protocol?.prioridade || "normal",
             condominium_name: condRaw || undefined,
+            requester_name: protocol?.solicitante_nome || undefined,
+            requester_role: protocol?.solicitante_funcao || undefined,
+            apartment: protocol?.apartamento || undefined,
           },
         );
         protocolCode = created?.protocol?.protocol_code || created?.protocol_code || "";
@@ -962,14 +954,21 @@ serve(async (req: Request) => {
       // ✅ Se o LLM já mandou uma saudação ou algo útil, mantém. 
       // Mas se mandou apenas "Vou abrir o chamado" ou texto curto redundante, usa a msg padrão.
       let finalText = userTextWithCode;
-      if (userTextWithCode.toLowerCase().includes("chamado") || userTextWithCode.toLowerCase().includes("protocolo") || userTextWithCode.length < 5) {
-        // Se o LLM usou o tag {{ticket_protocol}} explicitamente, confiamos no texto dele
-        if (userText.includes("{{ticket_protocol}}")) {
-          finalText = userTextWithCode;
-        } else {
-          finalText = msg;
-        }
+
+      const mentionsAction =
+        userTextWithCode.toLowerCase().includes("encaminhar") ||
+        userTextWithCode.toLowerCase().includes("direcionar") ||
+        userTextWithCode.toLowerCase().includes("repassar") ||
+        userTextWithCode.toLowerCase().includes("chamado") ||
+        userTextWithCode.toLowerCase().includes("protocolo");
+
+      if (userTextWithCode.length < 5 || (userTextWithCode.toLowerCase().includes("chamado") && !userText.includes("{{ticket_protocol}}"))) {
+        finalText = msg;
+      } else if (mentionsAction || userText.includes("{{ticket_protocol}}")) {
+        // Se o LLM já disse que está encaminhando ou usou o código, não precisamos da msg redundante
+        finalText = userTextWithCode;
       } else {
+        // Se o texto for puramente empático ou uma pergunta, anexa a confirmação técnica
         finalText = `${userTextWithCode}\n\n${msg}`;
       }
 

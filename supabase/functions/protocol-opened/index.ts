@@ -94,17 +94,35 @@ serve(async (req: Request): Promise<Response> => {
     const priorityEmoji = protocol.priority === 'urgent' || protocol.priority === 'critical' ? '🔴' : '🟢';
     const priorityLabel = protocol.priority || 'normal';
 
-    const groupMsgCard = `G7 Serv | Abertura de Chamado
-📅 ${dateStr} | 🧾 Seq.: ${sequenceCode}
+    const categoryMap: Record<string, string> = {
+      operational: 'Operacional',
+      financial: 'Financeiro',
+      support: 'Suporte',
+      admin: 'Administrativo'
+    };
+    const categoryLabel = categoryMap[protocol.category || 'operational'] || 'Operacional';
 
-✅ Protocolo: ${code}
-🏢 Condomínio: ${condominiumName}
-👤 Solicitante: ${protocol.requester_name || "Não identificado"} (${protocol.requester_role || "Não informada"})
-📝 Resumo: ${protocol.summary || "Sem descrição"}
-${priorityEmoji} ${priorityLabel.charAt(0).toUpperCase() + priorityLabel.slice(1)} Prioridade: ${priorityLabel}
-⏰ Vencimento: ${dueDate}
+    const dtParts = dueDate.split('-');
+    const formattedDueDate = dtParts.length === 3 ? `${dtParts[2]}/${dtParts[1]}/${dtParts[0]}` : dueDate;
 
-➡️ Para encerrar, responda:
+    const prioLabelRaw = priorityLabel === 'urgent' || priorityLabel === 'critical' ? 'Urgente' : 'Normal';
+
+    const groupMsgCard = `📋 *NOVO PROTOCOLO*
+
+🔖 *Protocolo:* ${code}
+🏢 *Condomínio:* ${condominiumName}
+👤 *Solicitante:* ${protocol.requester_name || "Não identificado"}
+📌 *Função:* ${protocol.requester_role || "Não informada"}
+📂 *Categoria:* ${categoryLabel}
+
+📝 *Resumo:*
+${protocol.summary || "Sem descrição"}
+
+${priorityEmoji} *${prioLabelRaw}*
+⏰ *Prazo:* Resolver até ${formattedDueDate}
+
+━━━━━━━━━━━━━━━━━━━━
+✅ Para encerrar, digite:
 ${code} - Resolvido`;
 
     console.log(`[protocol-opened] Enviando para grupo: ${techGroupId}`);
