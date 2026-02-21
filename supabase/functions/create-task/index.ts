@@ -128,11 +128,18 @@ serve(async (req) => {
             if (msgErr) {
                 console.warn("[create-task] Failed to create system message:", msgErr.message);
             } else {
-                // ✅ Update last_message_at so conversation appears in assignee's inbox
+                // ✅ Update last_message_at and force unread_count so it drops into assignee's attention
                 const now = new Date().toISOString();
+                const updates: any = { last_message_at: now };
+
+                // If it's assigned to someone other than the creator, bump unread_count
+                if (payload.assignee_id !== userId) {
+                    updates.unread_count = 1;
+                }
+
                 await admin
                     .from("conversations")
-                    .update({ last_message_at: now })
+                    .update(updates)
                     .eq("id", payload.conversation_id);
             }
         }

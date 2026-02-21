@@ -19,7 +19,7 @@ export default function InboxPage() {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const { user, loading: authLoading } = useAuth();
-  const { playNotificationSound } = useNotificationSound();
+  const { playNotificationSound, playLongNotificationSound } = useNotificationSound();
 
   const [activeConversationId, setActiveConversationId] = useState<string | null>(conversationIdParam || null);
   const [activeContact, setActiveContact] = useState<any>(null);
@@ -34,7 +34,13 @@ export default function InboxPage() {
   // Hook customizado para gerenciar a lista e realtime global
   // ✅ Passes tab/userId for SQL-level filtering
   const { conversations, loading: loadingConversations, refetch: refetchConversations, markAsReadOptimistic } = useRealtimeInbox({
-    onNewInboundMessage: playNotificationSound,
+    onNewInboundMessage: (isMine?: boolean) => {
+      if (isMine) {
+        playLongNotificationSound();
+      } else {
+        playNotificationSound();
+      }
+    },
     tab: activeTab,
     userId: user?.id
   });

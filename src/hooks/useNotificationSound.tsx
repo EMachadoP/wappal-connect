@@ -73,5 +73,54 @@ export function useNotificationSound() {
     }
   }, []);
 
-  return { playNotificationSound };
+  const playLongNotificationSound = useCallback(async () => {
+    // Throttle: don't play more than once every 2 seconds
+    const now = Date.now();
+    if (now - lastPlayedRef.current < 2000) return;
+    lastPlayedRef.current = now;
+
+    if (!unlockedRef.current) {
+      console.log('[Notification] Long Sound skipped (context not unlocked)');
+      return;
+    }
+
+    try {
+      const ctx = audioContextRef.current;
+      if (!ctx) return;
+
+      if (ctx.state === 'suspended') {
+        await ctx.resume();
+      }
+
+      // Play a sequence of 3 emphatic beeps
+      const playBeep = (startTime: number, freq: number, duration: number) => {
+        const oscillator = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        oscillator.type = 'triangle';
+        oscillator.frequency.setValueAtTime(freq, startTime);
+
+        gainNode.gain.setValueAtTime(0, startTime);
+        gainNode.gain.linearRampToValueAtTime(0.3, startTime + duration * 0.2);
+        gainNode.gain.linearRampToValueAtTime(0, startTime + duration);
+
+        oscillator.start(startTime);
+        oscillator.stop(startTime + duration);
+      };
+
+      const t = ctx.currentTime;
+      playBeep(t, 659.25, 0.15); // E5
+      playBeep(t + 0.2, 880.00, 0.15); // A5
+      playBeep(t + 0.4, 1318.51, 0.3); // E6 
+
+      console.log('[Notification] Long Sound played');
+    } catch (error) {
+      console.warn('[Notification] Could not play long sound:', error);
+    }
+  }, []);
+
+  return { playNotificationSound, playLongNotificationSound };
 }

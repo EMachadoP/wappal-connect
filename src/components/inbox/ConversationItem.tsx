@@ -19,9 +19,9 @@ interface ConversationItemProps {
 
 function getMessagePreview(message: string | null | undefined, type?: string): React.ReactNode {
   if (!message && !type) return 'Nenhuma mensagem';
-  
+
   const iconClass = "w-4 h-4 inline mr-1";
-  
+
   switch (type) {
     case 'image':
       return <><Image className={iconClass} />[Imagem]</>;
@@ -59,7 +59,7 @@ export function ConversationItem({
       )}
     >
       <ConversationAvatar name={contactName} imageUrl={contactImageUrl} />
-      
+
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-2">
           <span className={cn(
@@ -72,7 +72,7 @@ export function ConversationItem({
             {timeAgo}
           </span>
         </div>
-        
+
         <div className="flex items-center justify-between gap-2 mt-0.5">
           <span className={cn(
             "text-sm truncate",
@@ -80,9 +80,9 @@ export function ConversationItem({
           )}>
             {getMessagePreview(lastMessage, lastMessageType)}
           </span>
-          
+
           {unreadCount > 0 && (
-            <Badge className="bg-primary text-primary-foreground h-5 min-w-5 flex items-center justify-center px-1.5">
+            <Badge className="bg-red-500 hover:bg-red-600 text-white h-5 min-w-5 flex items-center justify-center px-1.5 shadow-sm ring-2 ring-red-500/20 shadow-red-500/50">
               {unreadCount}
             </Badge>
           )}

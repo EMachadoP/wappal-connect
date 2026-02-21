@@ -18,7 +18,7 @@ export interface Conversation {
 type InboxTab = 'inbox' | 'mine' | 'resolved';
 
 interface UseRealtimeInboxProps {
-  onNewInboundMessage?: () => void;
+  onNewInboundMessage?: (isMine?: boolean) => void;
   tab?: InboxTab;
   userId?: string | null;
 }
@@ -118,11 +118,22 @@ export function useRealtimeInbox({ onNewInboundMessage, tab = 'inbox', userId }:
 
     const channel = supabase
       .channel(`global-inbox-updates:${tab}:${userId ?? 'anon'}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, (payload) => {
         console.log('[RealtimeInbox] Conversation record update');
+
+        if (payload.eventType === 'UPDATE') {
+          const newRecord = payload.new as any;
+          const oldRecord = payload.old as any;
+
+          // Se acabou de ser atribuído para mim
+          if (newRecord.assigned_to === userId && oldRecord.assigned_to !== userId) {
+            onNewInboundMessage?.(true);
+          }
+        }
+
         fetchConversations();
       })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, async (payload) => {
         const newMessage: any = payload.new;
         if (!newMessage || processedMessageIds.current.has(newMessage.id)) return;
 
@@ -130,7 +141,15 @@ export function useRealtimeInbox({ onNewInboundMessage, tab = 'inbox', userId }:
         console.log('[RealtimeInbox] New message incoming:', newMessage.id);
 
         if (newMessage.sender_type === 'contact') {
-          onNewInboundMessage?.();
+          // Check if this conversation is assigned to me
+          const { data } = await supabase
+            .from('conversations')
+            .select('assigned_to')
+            .eq('id', newMessage.conversation_id)
+            .single();
+
+          const isMine = data?.assigned_to === userId;
+          onNewInboundMessage?.(isMine);
         }
 
         fetchConversations();
