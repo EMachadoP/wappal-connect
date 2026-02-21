@@ -6,7 +6,7 @@ Sistema completo de atendimento multi-canal com IA conversacional para gestão d
 
 **Wappal Connect** é uma plataforma SaaS de atendimento ao cliente que integra WhatsApp, IA conversacional, gestão de protocolos e automação de processos.
 
-**URL Produção:** https://wappal-connect.vercel.app
+**URL Produção:** https://wappal-connect.pages.dev
 
 ---
 
@@ -197,14 +197,13 @@ npm run test:coverage
 
 ## 📦 Deploy
 
-### Vercel (Frontend)
+### Cloudflare Pages (Frontend)
 
 ```bash
-# Deploy automático via GitHub
+# Deploy automático via GitHub na branch principal (main)
 git push origin main
 
-# Deploy manual
-vercel --prod
+# Deploy configurado para Vite (npm run build)
 ```
 
 ### Supabase (Backend)
