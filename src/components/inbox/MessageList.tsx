@@ -71,9 +71,11 @@ export function MessageList({
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const el = containerRef.current;
     if (!el) return;
-    // ✅ FIX: Calcular top correto para evitar overflow
-    const top = Math.max(0, el.scrollHeight - el.clientHeight);
-    el.scrollTo({ top, behavior });
+    if (behavior === "smooth") {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
   }, []);
 
   const isNearBottom = useCallback(() => {
@@ -116,21 +118,12 @@ export function MessageList({
     }
   }, [conversationId]);
 
-  // ✅ ResizeObserver: mantém scroll no fim quando imagens carregam
+  // ✅ CRÍTICO: Forçar scroll reset para evitar cache do browser
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-
-    const ro = new ResizeObserver(() => {
-      // Só "gruda" no fim quando stickToBottom está ativo
-      if (stickToBottom.current) {
-        scrollToBottom('auto');
-      }
-    });
-
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [scrollToBottom]);
+    if (containerRef.current) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    }
+  }, [conversationId]);
 
   // ✅ Scroll para mensagem específica (com "load more")
   useEffect(() => {
@@ -186,27 +179,11 @@ export function MessageList({
 
     // 1) Initial load: ALWAYS scroll to bottom (last message)
     if (lastScrolledConvId.current !== conversationId && messagesBelongToCurrentConv) {
-      const scrollToLast = () => {
-        const el2 = containerRef.current;
-        if (!el2) return;
-
+      const el2 = containerRef.current;
+      if (el2) {
         stickToBottom.current = true;
-        const maxScroll = Math.max(0, el2.scrollHeight - el2.clientHeight);
-        el2.scrollTo({ top: maxScroll, behavior: "auto" });
-
-        console.log('[MessageList] Initial scroll to bottom:', {
-          scrollHeight: el2.scrollHeight,
-          clientHeight: el2.clientHeight,
-          scrollTop: el2.scrollTop
-        });
-      };
-
-      // Tentar várias vezes para garantir (imagens podem carregar depois)
-      scrollToLast();
-      requestAnimationFrame(scrollToLast);
-      setTimeout(scrollToLast, 100);
-      setTimeout(scrollToLast, 500);
-
+        el2.scrollTop = el2.scrollHeight;
+      }
       lastScrolledConvId.current = conversationId || null;
     }
 
