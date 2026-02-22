@@ -148,8 +148,8 @@ export function MessageList({
         // ✅ achou: centraliza e para
         target.scrollIntoView({ behavior: "smooth", block: "center" });
         // destaque (opcional)
-        target.classList.add("ring-2", "ring-primary", "ring-offset-2", "rounded-lg", "transition-all", "duration-1000");
-        setTimeout(() => target.classList.remove("ring-2", "ring-primary", "ring-offset-2"), 3000);
+        target.classList.add("ring-2", "ring-destructive/50", "ring-offset-2", "rounded-lg", "transition-all", "duration-1000", "bg-destructive/10");
+        setTimeout(() => target.classList.remove("ring-2", "ring-destructive/50", "ring-offset-2", "bg-destructive/10"), 3000);
         return;
       }
 
@@ -196,9 +196,11 @@ export function MessageList({
         if (!el2) return;
 
         if (firstUnread) {
-          const target = el2.querySelector(`[data-message-id="${firstUnread.id}"]`);
+          // Precisamos dar escape no CSS selector se houver caracteres estranhos no ID
+          const target = el2.querySelector(`[data-message-id="${firstUnread.id}"]`) as HTMLElement | null;
           if (target) {
             target.scrollIntoView({ behavior: "auto", block: "center" });
+            console.log('[MessageList] Scrolled to FIRST UNREAD');
             return;
           }
         }
@@ -208,7 +210,7 @@ export function MessageList({
         const maxScroll = el2.scrollHeight - el2.clientHeight;
         el2.scrollTop = maxScroll;
 
-        console.log('[MessageList] Initial scroll to bottom/unread:', {
+        console.log('[MessageList] Initial scroll to bottom (No unread found/rendered):', {
           scrollHeight: el2.scrollHeight,
           clientHeight: el2.clientHeight,
           scrollTop: el2.scrollTop
@@ -219,7 +221,6 @@ export function MessageList({
       scrollToTarget();
       requestAnimationFrame(scrollToTarget);
       setTimeout(scrollToTarget, 100);
-      setTimeout(scrollToTarget, 300);
       setTimeout(scrollToTarget, 500);
 
       lastScrolledConvId.current = conversationId || null;

@@ -84,6 +84,14 @@ export function ConversationList({
   const displayInboxCount = activeTab === 'inbox' ? filteredConversations.length : (inboxCount ?? '–');
   const displayMineCount = activeTab === 'mine' ? filteredConversations.length : (mineCount ?? '–');
 
+  // ✅ Calcular mensagens não lidas específicas da aba "Minhas"
+  const unreadMineCount = conversations.reduce((acc, conv) => {
+    if (conv.status === 'open' && conv.assigned_to === userId) {
+      return acc + (conv.unread_count || 0);
+    }
+    return acc;
+  }, 0);
+
   return (
     <div className={`w-full border-r border-border flex flex-col bg-card h-full overflow-hidden`}>
       <div className="shrink-0 p-4 border-b border-border space-y-4 bg-muted/5">
@@ -134,8 +142,13 @@ export function ConversationList({
           <TabsTrigger value="inbox" className="text-xs px-2 py-3 h-auto">
             Entrada ({displayInboxCount})
           </TabsTrigger>
-          <TabsTrigger value="mine" className="text-xs px-2 py-3 h-auto">
+          <TabsTrigger value="mine" className="text-xs px-2 py-3 h-auto relative flex items-center justify-center gap-1">
             Minhas ({displayMineCount})
+            {unreadMineCount > 0 && (
+              <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive text-[9px] font-bold text-destructive-foreground shadow-sm ring-2 ring-destructive/20 animate-pulse px-1">
+                {unreadMineCount > 99 ? '99+' : unreadMineCount}
+              </span>
+            )}
           </TabsTrigger>
           <TabsTrigger value="resolved" className="text-xs px-2 py-3 h-auto">
             Resolvidos
