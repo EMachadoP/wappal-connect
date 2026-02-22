@@ -157,6 +157,10 @@ ${code} - Resolvido`;
 
     // --- NOVA FUNCIONALIDADE: RESUMO DE PENDÊNCIAS ---
     try {
+      // Definir início do dia atual em UTC (para comparar no banco)
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+
       const { data: openProtocols, error: openErr } = await supabase
         .from("protocols")
         .select(`
@@ -165,6 +169,7 @@ ${code} - Resolvido`;
           condominiums(name)
         `)
         .in("status", ["open", "in_progress"])
+        .gte("created_at", startOfDay.toISOString())
         .order("created_at", { ascending: true });
 
       if (!openErr && openProtocols && openProtocols.length > 0) {
