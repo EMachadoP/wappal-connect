@@ -184,33 +184,17 @@ export function MessageList({
     const messagesBelongToCurrentConv =
       messages.length > 0 && messages[0].conversation_id === conversationId;
 
-    // 1) Initial load: ALWAYS scroll to bottom (last message) or first unread
+    // 1) Initial load: ALWAYS scroll to bottom (last message)
     if (lastScrolledConvId.current !== conversationId && messagesBelongToCurrentConv) {
-      // Tentar encontrar a primeira mensagem não lida
-      const firstUnread = messages.find(
-        (m) => m.direction === "inbound" && m.read_at === null
-      );
-
-      const scrollToTarget = () => {
+      const scrollToLast = () => {
         const el2 = containerRef.current;
         if (!el2) return;
 
-        if (firstUnread) {
-          // Precisamos dar escape no CSS selector se houver caracteres estranhos no ID
-          const target = el2.querySelector(`[data-message-id="${firstUnread.id}"]`) as HTMLElement | null;
-          if (target) {
-            target.scrollIntoView({ behavior: "auto", block: "center" });
-            console.log('[MessageList] Scrolled to FIRST UNREAD');
-            return;
-          }
-        }
-
-        // Fallback: scroll to bottom
         stickToBottom.current = true;
-        const maxScroll = el2.scrollHeight - el2.clientHeight;
-        el2.scrollTop = maxScroll;
+        const maxScroll = Math.max(0, el2.scrollHeight - el2.clientHeight);
+        el2.scrollTo({ top: maxScroll, behavior: "auto" });
 
-        console.log('[MessageList] Initial scroll to bottom (No unread found/rendered):', {
+        console.log('[MessageList] Initial scroll to bottom:', {
           scrollHeight: el2.scrollHeight,
           clientHeight: el2.clientHeight,
           scrollTop: el2.scrollTop
@@ -218,10 +202,10 @@ export function MessageList({
       };
 
       // Tentar várias vezes para garantir (imagens podem carregar depois)
-      scrollToTarget();
-      requestAnimationFrame(scrollToTarget);
-      setTimeout(scrollToTarget, 100);
-      setTimeout(scrollToTarget, 500);
+      scrollToLast();
+      requestAnimationFrame(scrollToLast);
+      setTimeout(scrollToLast, 100);
+      setTimeout(scrollToLast, 500);
 
       lastScrolledConvId.current = conversationId || null;
     }
