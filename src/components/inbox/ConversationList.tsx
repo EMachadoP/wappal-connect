@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Search, Plus, RefreshCw } from 'lucide-react';
+import { Search, Plus, RefreshCw, CheckSquare, X } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ConversationItem } from './ConversationItem';
@@ -23,14 +23,6 @@ interface Conversation {
   status: string;
 }
 
-interface ConversationListProps {
-  conversations: Conversation[];
-  activeConversationId: string | null;
-  userId: string;
-  onSelectConversation: (id: string) => void;
-  isMobile?: boolean;
-}
-
 export type TabValue = 'inbox' | 'mine' | 'resolved';
 
 interface ConversationListProps {
@@ -42,9 +34,10 @@ interface ConversationListProps {
   activeTab: TabValue;
   onTabChange: (tab: TabValue) => void;
   onRefresh?: () => void;
-  // ✅ NOVO: Contadores para cada aba
   inboxCount?: number;
   mineCount?: number;
+  onBulkResolve?: (ids: string[]) => void;
+  isResolvingBulk?: boolean;
 }
 
 export function ConversationList({
@@ -58,9 +51,13 @@ export function ConversationList({
   onRefresh,
   inboxCount,
   mineCount,
+  onBulkResolve,
+  isResolvingBulk = false,
 }: ConversationListProps) {
   const [search, setSearch] = useState('');
   const [newMessageModalOpen, setNewMessageModalOpen] = useState(false);
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   // Filtro de busca (nome ou telefone)
   const filteredConversations = conversations.filter((conv) => {
@@ -92,34 +89,104 @@ export function ConversationList({
     return acc;
   }, 0);
 
+  const toggleSelection = (id: string, selected: boolean) => {
+    setSelectedIds(prev =>
+      selected ? [...prev, id] : prev.filter(item => item !== id)
+    );
+  };
+
+  const handleSelectAll = () => {
+    if (selectedIds.length === filteredConversations.length) {
+      setSelectedIds([]); // Deselect all
+    } else {
+      setSelectedIds(filteredConversations.map(c => c.id)); // Select all returned by filter
+    }
+  };
+
+  const clearSelection = () => {
+    setIsSelectionMode(false);
+    setSelectedIds([]);
+  };
+
+  const handleResolveClick = () => {
+    if (onBulkResolve && selectedIds.length > 0) {
+      onBulkResolve(selectedIds);
+      // Wait for it to finish in the parent, but we can optimistically clear here or let parent handle
+      clearSelection();
+    }
+  };
+
   return (
     <div className={`w-full border-r border-border flex flex-col bg-card h-full overflow-hidden`}>
       <div className="shrink-0 p-4 border-b border-border space-y-4 bg-muted/5">
-        <div className="flex items-center justify-between gap-2">
-          <h2 className="font-semibold text-lg px-1">Mensagens</h2>
-          <div className="flex items-center gap-2">
-            {isMobile && onRefresh && (
+        {!isSelectionMode ? (
+          <div className="flex items-center justify-between gap-1">
+            <h2 className="font-semibold text-lg px-1">Mensagens</h2>
+            <div className="flex items-center gap-1 sm:gap-2">
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
-                onClick={onRefresh}
-                className="gap-2 h-8 px-3"
-                title="Atualizar conversas"
+                onClick={() => setIsSelectionMode(true)}
+                className="gap-1 h-8 px-2 text-muted-foreground hover:text-foreground"
+                title="Selecionar conversas para resolução em lote"
               >
-                <RefreshCw className="w-4 h-4" />
+                <CheckSquare className="w-4 h-4" />
               </Button>
-            )}
-            <Button
-              variant="default"
-              size="sm"
-              onClick={() => setNewMessageModalOpen(true)}
-              className="gap-2 h-8 px-2 sm:px-3"
-            >
-              <Plus className="w-4 h-4" />
-              <span className="hidden sm:inline">Nova Conversa</span>
-            </Button>
+              {isMobile && onRefresh && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onRefresh}
+                  className="gap-2 h-8 px-3"
+                  title="Atualizar conversas"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </Button>
+              )}
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => setNewMessageModalOpen(true)}
+                className="gap-2 h-8 px-2 sm:px-3"
+              >
+                <Plus className="w-4 h-4" />
+                <span className="hidden sm:inline">Nova Conversa</span>
+              </Button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="flex items-center justify-between gap-2 bg-primary/10 p-2 rounded-md -my-2">
+            <span className="text-sm font-medium px-2">{selectedIds.length} selec.</span>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleSelectAll}
+                className="h-8 px-2 text-xs"
+              >
+                Todos
+              </Button>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={handleResolveClick}
+                disabled={selectedIds.length === 0 || isResolvingBulk}
+                className="h-8 px-2 text-xs"
+              >
+                Resolver
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearSelection}
+                className="h-8 px-2 text-muted-foreground"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+        )}
+
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
@@ -179,6 +246,9 @@ export function ConversationList({
                 lastMessageAt={conv.last_message_at}
                 unreadCount={conv.unread_count}
                 isActive={conv.id === activeConversationId}
+                selectionMode={isSelectionMode}
+                isSelected={selectedIds.includes(conv.id)}
+                onToggleSelection={toggleSelection}
                 onClick={() => onSelectConversation(conv.id)}
               />
             );

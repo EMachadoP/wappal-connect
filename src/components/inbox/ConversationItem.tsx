@@ -4,6 +4,7 @@ import { Image, Video, Mic, FileText, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ConversationAvatar } from './ConversationAvatar';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 
 interface ConversationItemProps {
   id: string;
@@ -14,6 +15,9 @@ interface ConversationItemProps {
   lastMessageAt?: string | null;
   unreadCount: number;
   isActive: boolean;
+  selectionMode?: boolean;
+  isSelected?: boolean;
+  onToggleSelection?: (id: string, selected: boolean) => void;
   onClick: () => void;
 }
 
@@ -37,6 +41,7 @@ function getMessagePreview(message: string | null | undefined, type?: string): R
 }
 
 export function ConversationItem({
+  id,
   contactName,
   contactImageUrl,
   lastMessage,
@@ -44,20 +49,43 @@ export function ConversationItem({
   lastMessageAt,
   unreadCount,
   isActive,
+  selectionMode = false,
+  isSelected = false,
+  onToggleSelection,
   onClick,
 }: ConversationItemProps) {
   const timeAgo = lastMessageAt
     ? formatDistanceToNow(new Date(lastMessageAt), { addSuffix: true, locale: ptBR })
     : '';
 
+  const handleClick = (e: React.MouseEvent) => {
+    if (selectionMode && onToggleSelection) {
+      e.preventDefault();
+      onToggleSelection(id, !isSelected);
+    } else {
+      onClick();
+    }
+  };
+
   return (
     <button
-      onClick={onClick}
+      onClick={handleClick}
       className={cn(
         'w-full p-3 flex items-start gap-3 text-left transition-colors hover:bg-muted/50',
-        isActive && 'bg-muted'
+        isActive && !selectionMode && 'bg-muted',
+        isSelected && selectionMode && 'bg-primary/5'
       )}
     >
+      {selectionMode && (
+        <div className="flex items-center justify-center pt-2.5 pr-1" onClick={(e) => e.stopPropagation()}>
+          <Checkbox
+            checked={isSelected}
+            onCheckedChange={(checked) => {
+              if (onToggleSelection) onToggleSelection(id, checked === true);
+            }}
+          />
+        </div>
+      )}
       <ConversationAvatar name={contactName} imageUrl={contactImageUrl} />
 
       <div className="flex-1 min-w-0">

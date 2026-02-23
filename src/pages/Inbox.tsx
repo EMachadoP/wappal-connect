@@ -30,6 +30,7 @@ export default function InboxPage() {
   const [activeTab, setActiveTab] = useState<TabValue>('inbox');
   const [inboxCount, setInboxCount] = useState(0);
   const [mineCount, setMineCount] = useState(0);
+  const [isResolvingBulk, setIsResolvingBulk] = useState(false);
 
   // Hook customizado para gerenciar a lista e realtime global
   // ✅ Passes tab/userId for SQL-level filtering
@@ -365,6 +366,37 @@ export default function InboxPage() {
     }
   };
 
+  const handleBulkResolve = async (ids: string[]) => {
+    if (!ids || ids.length === 0) return;
+    setIsResolvingBulk(true);
+    const loadingToast = toast.loading(`Resolvendo ${ids.length} conversas...`);
+
+    try {
+      const { error } = await supabase
+        .from('conversations')
+        .update({
+          status: 'resolved',
+          resolved_at: new Date().toISOString()
+        })
+        .in('id', ids);
+
+      if (error) throw error;
+
+      await refetchConversations();
+
+      if (activeConversationId && ids.includes(activeConversationId)) {
+        await fetchActiveConversationDetails(activeConversationId);
+      }
+
+      toast.success(`${ids.length} conversas resolvidas com sucesso`, { id: loadingToast });
+    } catch (error: any) {
+      console.error('Erro ao resolver conversas em lote:', error);
+      toast.error(`Erro ao resolver conversas: ${error.message || 'Erro desconhecido'}`, { id: loadingToast });
+    } finally {
+      setIsResolvingBulk(false);
+    }
+  };
+
   const handleReopenConversation = async () => {
     if (!activeConversationId) return;
 
@@ -502,6 +534,8 @@ export default function InboxPage() {
               onRefresh={refetchConversations}
               inboxCount={inboxCount}
               mineCount={mineCount}
+              onBulkResolve={handleBulkResolve}
+              isResolvingBulk={isResolvingBulk}
             />
           )
         ) : (
@@ -518,6 +552,8 @@ export default function InboxPage() {
                 onRefresh={refetchConversations}
                 inboxCount={inboxCount}
                 mineCount={mineCount}
+                onBulkResolve={handleBulkResolve}
+                isResolvingBulk={isResolvingBulk}
               />
             </Panel>
 
