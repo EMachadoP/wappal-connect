@@ -272,7 +272,7 @@ async function callGeminiText({
     contents,
     generationConfig: {
       temperature,
-      maxOutputTokens: 512,
+      maxOutputTokens: 1024,
     },
   };
 
@@ -706,10 +706,12 @@ Sempre que você decidir que um problema precisa de atendimento da equipe (manut
 ⚠️ PERIGO ⚠️ O sistema SÓ CRIARÁ DE FATO O CHAMADO se e SOMENTE se você gerar o bloco JSON abaixo. 
 
 [REGRA CRÍTICA PARA PROTOCOLO (SISTEMA)]
-Quando você tiver informações COMPLETAS para registrar (incluindo o telefone, se aplicável, no Estado D), inclua EXCLUSIVAMENTE este bloco ao final da sua mensagem:
-###PROTOCOLO###
+Quando você tiver informações COMPLETAS para registrar (incluindo o telefone, se aplicável, no Estado D), inclua EXCLUSIVAMENTE este bloco ao final da sua mensagem.
+⚠️ IMPORTANTE: O bloco deve vir APÓS você ter encerrado sua frase conversacional de forma completa e gramaticalmente correta. Nunca interrompa uma frase para começar o bloco.
+
+### PROTOCOLO ###
 {"criar": true, "condominio_raw": "nome do condominio", "problema": "descrição detalhada do problema. Se o cliente houver passado um telefone, INCLUA NO INÍCIO AQUI NO PROBLEMA (Ex: Tel contato: 9999).", "categoria": "operational", "prioridade": "normal", "solicitante_nome": "Nome da pessoa - Tel: numero (se houver)", "solicitante_funcao": "Morador / Zelador / etc", "apartamento": "Nº do apto se houver"}
-###FIM###
+### FIM ###
 `;
 
   return prompt
