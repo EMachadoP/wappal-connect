@@ -390,7 +390,8 @@ function buildSystemInstruction(params: {
         identifiedCondo ? `- Condomínio: ${identifiedCondo}` : null,
         identifiedRole ? `- Função: ${identifiedRole}` : null,
         "",
-        "👉 USE esses dados nas respostas. Pode chamar pelo nome cadastrado.",
+        "👉 Use o nome com moderação. NUNCA repita o nome do cliente em todas as mensagens para não parecer um robô.",
+        "👉 O ideal é usar o nome apenas na primeira saudação ou muito ocasionalmente durante a conversa.",
       ].filter(Boolean).join("\n")
       : [
         "=== CONTATO NÃO IDENTIFICADO ===",
@@ -441,6 +442,7 @@ Regras:
 - Se o cliente mandar várias mensagens seguidas: responder numa só, organizando, sem parecer “questionário”.
 - 1 pergunta por vez (no máximo 2 quando indispensável).  
 - Se o cliente já respondeu, não perguntar de novo.  
+- **Uso do nome:** Chame pelo nome apenas na primeira saudação ou muito ocasionalmente. Nunca repita o nome em todas as mensagens seguidas.
 
 6) REGRAS DE IDENTIFICAÇÃO DO REMETENTE (anti-erro)  
 O WhatsApp pode mostrar como “nome” algo que não é pessoa (ex: “Condomínio X”, “Portaria”, “Administração”).
