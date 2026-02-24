@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { extractIdentity, normalizePhoneBR } from "../_shared/wa-id.ts";
 
 declare const Deno: any;
 
@@ -201,42 +202,58 @@ function threadKeyFromJid(dbChatId: string | null | undefined) {
   return `u:${dig}`;
 }
 
-// ✅ HELPER: Resolver contactId a partir do dbChatId (LID-safe + Variance-aware via RPC V6)
+// ✅ HELPER: Resolve contactId a partir da identidade LID-first
 async function resolveContactId(params: {
   supabaseAdmin: any;
+  payload: any;
   dbChatId: string | null;
 }) {
-  const { supabaseAdmin, dbChatId } = params;
+  const { supabaseAdmin, payload, dbChatId } = params;
   if (!dbChatId) return null;
 
   const isGroup = dbChatId.endsWith("@g.us");
-  if (isGroup) {
-    console.log(`[zapi-send-message] 👥 Resolving group: skip contact identity.`);
-    return null;
+  if (isGroup) return null;
+
+  const identity = extractIdentity(payload);
+  const { lid, phoneE164 } = identity;
+
+  console.log(`[zapi-send-message] 🔍 Resolving DM (LID-first):`, identity);
+
+  let contact: any = null;
+
+  if (lid) {
+    const { data: byLid } = await supabaseAdmin.from("contacts").select("id, phone_e164").eq("lid", lid).maybeSingle();
+    if (byLid) {
+      contact = byLid;
+      if (phoneE164 && !contact.phone_e164) {
+        await supabaseAdmin.from("contacts").update({ phone_e164: phoneE164 }).eq("id", contact.id);
+      }
+    } else if (phoneE164) {
+      const { data: byPhone } = await supabaseAdmin.from("contacts").select("id, lid").eq("phone_e164", phoneE164).maybeSingle();
+      if (byPhone) {
+        contact = byPhone;
+        await supabaseAdmin.from("contacts").update({ lid }).eq("id", contact.id);
+        console.log(`[zapi-send-message] 🔀 Reconciliado por phone: ${phoneE164} -> adicionado LID ${lid}`);
+      }
+    }
+  } else if (phoneE164) {
+    const { data: byPhoneOnly } = await supabaseAdmin.from("contacts").select("id").eq("phone_e164", phoneE164).maybeSingle();
+    contact = byPhoneOnly;
   }
 
-  // Ex.: "5581997438430@s.whatsapp.net" -> "5581997438430"
-  const jidBase = dbChatId.split("@")[0] ?? "";
-  const phoneKey = digitsOnly(jidBase);
-  const isLid = dbChatId.endsWith("@lid");
-
-  console.log(`[zapi-send-message] 🔍 Resolving DM via RPC V6: ${dbChatId}`);
-
-  const { data: resolved, error: resolveErr } = await supabaseAdmin.rpc('resolve_contact_identity_v6', {
-    p_lid: isLid ? dbChatId : null,
-    p_phone: isLid ? null : phoneKey,
-    p_chat_lid: isLid ? dbChatId : null,
-    p_chat_id: dbChatId,
-    p_name: null
-  });
-
-  if (resolveErr || !resolved?.[0]?.contact_id) {
-    console.warn(`[zapi-send-message] ⚠️ RPC resolve failed for ${dbChatId}:`, resolveErr || 'No contact_id');
-    return null;
+  if (contact) {
+    console.log(`[zapi-send-message] ✅ Resolved contact: ${contact.id}`);
+    return contact.id;
   }
 
-  console.log(`[zapi-send-message] ✅ Resolved via RPC: ${resolved[0].contact_id}`);
-  return resolved[0].contact_id;
+  // Se não achou, cria um novo para garantir que a mensagem seja salva
+  const { data: newContact } = await supabaseAdmin.from("contacts").insert({
+    lid,
+    phone_e164: phoneE164,
+    name: payload.senderName || payload.contact?.name || "Contato Novo (Ext)"
+  }).select("id").single();
+
+  return newContact?.id || null;
 }
 
 // ✅ HELPER: Resolve ou cria conversation_id de forma robusta
@@ -823,7 +840,7 @@ serve(async (req: Request) => {
       console.log(`[zapi-send-message] Group thread_key: ${derivedThreadKey}`);
     } else {
       // Para DM, resolver contactId e usar formato dm:${contactId}
-      resolvedContactId = await resolveContactId({ supabaseAdmin, dbChatId });
+      resolvedContactId = await resolveContactId({ supabaseAdmin, payload: json, dbChatId });
       console.log(`[zapi-send-message] Resolved contactId = ${resolvedContactId} from dbChatId = ${dbChatId}`);
 
       if (resolvedContactId) {

@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { isEmployeeSender } from "../_shared/is-employee.ts";
 import { parseAndExtract } from "../_shared/parse.ts";
+import { extractIdentity, normalizePhoneBR, normalizeChatId, threadKeyFromChatId } from "../_shared/wa-id.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -210,46 +211,8 @@ serve(async (req: Request): Promise<Response> => {
       return `${base}@g.us`;
     };
 
-    const onlyDigits = (v?: string | null) => (v ?? "").replace(/\D/g, "");
-
-    function normalizeChatId(input: string) {
-      const v0 = (input || "").trim().toLowerCase().replace("@gus", "@g.us");
-      if (!v0) return null;
-
-      // ✅ Preserve @lid
-      if (v0.endsWith("@lid")) return v0;
-
-      const left = v0.split("@")[0] || "";
-      const hasAt = v0.includes("@");
-      const looksGroup = v0.endsWith("@g.us") || left.includes("-");
-
-      if (looksGroup) {
-        const base = hasAt ? v0 : left;
-        // Re-use our robust group normalization
-        return normalizeGroupJid(base);
-      }
-
-      // user: only digits
-      const digits = left.replace(/\D/g, "");
-      if (!digits) return null;
-
-      // LID-like (non-BR 14+ digits)
-      const isLidLike = digits.length >= 14 && !digits.startsWith('55');
-      if (isLidLike) return `${digits}@lid`;
-
-      const br = (digits.length === 10 || digits.length === 11) ? `55${digits}` : digits;
-      return `${br}@s.whatsapp.net`;
-    }
-
     const DEBUG_WEBHOOK = Deno.env.get("DEBUG_WEBHOOK") === "1";
     const mask = (s: string) => s ? `${s.slice(0, 4)}***${s.slice(-4)}` : s;
-
-    function threadKeyFromChatId(chatId: string) {
-      const cid = (chatId || "").trim().toLowerCase();
-      if (cid.endsWith("@g.us")) return `group:${cid}`;
-      // For DMs, we prefer dm:contactId, but as a fallback/lookup:
-      return `u:${cid.split("@")[0]}`;
-    }
 
     const fromMeRaw = payload.fromMe;
     const direction = String(payload.direction || '').toLowerCase(); // 'inbound' | 'outbound'
@@ -398,52 +361,99 @@ serve(async (req: Request): Promise<Response> => {
 
     console.log(`[Webhook] Identity: ${fromMe ? 'OUT' : 'IN'} | Key=${hitKey} | JID=${canonicalChatId}`);
 
-    // ✅ 1. RESOLVER CONTATO / GRUPO
+    // ✅ 1. RESOLVER CONTATO / GRUPO (Algoritmo LID-first)
     let contactId: string | null = null;
-    let resolvedChatKey: string | null = canonicalChatIdFinal;
-
-    const normalizedName = chatName && chatName !== 'Desconhecido' && !/^\d+$/.test(chatName.replace(/\D/g, ''))
-      ? chatName
-      : null;
+    const identity = extractIdentity(payload);
 
     if (isGroupChat) {
-      console.log(`[Webhook] 👥 Grupo detectado. Ignorando RPC de identidade.`);
-      contactId = null; // Grupo não é contato individual
+      console.log(`[Webhook] 👥 Grupo detectado. ThreadKey=${identity.chatKey}`);
     } else {
-      console.log(`[Webhook] 🔍 Resolvendo contato via RPC V6:`, {
-        lid: currentLid,
-        phone,
-        chatId: canonicalChatIdFinal,
-        name: normalizedName
-      });
+      console.log(`[Webhook] 🔍 Resolvendo contato (LID-first):`, identity);
 
-      const { data: resolved, error: resolveErr } = await supabase.rpc('resolve_contact_identity_v6', {
-        p_lid: currentLid || null,
-        p_phone: phone || null,
-        p_chat_lid: currentLid || null,
-        p_chat_id: canonicalChatIdFinal || null,
-        p_name: normalizedName,
-      });
+      const { lid, phoneE164 } = identity;
+      let contact: any = null;
 
-      if (resolveErr) {
-        console.error('[Webhook] ❌ resolve_contact_identity_v6 failed:', resolveErr);
-        throw new Error(`[zapi-webhook] resolve_contact_identity_v6 failed: ${resolveErr.message}`);
+      if (lid) {
+        // 1. Tenta por LID
+        const { data: byLid } = await supabase
+          .from("contacts")
+          .select("id, lid, phone_e164")
+          .eq("lid", lid)
+          .maybeSingle();
+
+        if (byLid) {
+          contact = byLid;
+          // Merge phone se veio no payload e não tinha no banco
+          if (phoneE164 && !contact.phone_e164) {
+            await supabase.from("contacts").update({ phone_e164: phoneE164 }).eq("id", contact.id);
+          }
+        } else if (phoneE164) {
+          // 2. Tenta por Phone para reconciliar
+          const { data: byPhone } = await supabase
+            .from("contacts")
+            .select("id, lid, phone_e164")
+            .eq("phone_e164", phoneE164)
+            .maybeSingle();
+
+          if (byPhone) {
+            contact = byPhone;
+            // Merge LID no registro antigo
+            await supabase.from("contacts").update({ lid }).eq("id", contact.id);
+            console.log(`[Webhook] 🔀 Reconciliado por phone: ${phoneE164} -> adicionado LID ${lid}`);
+          }
+        }
+      } else if (phoneE164) {
+        // Fallback apenas por phone
+        const { data: byPhoneOnly } = await supabase
+          .from("contacts")
+          .select("id, lid, phone_e164")
+          .eq("phone_e164", phoneE164)
+          .maybeSingle();
+        contact = byPhoneOnly;
       }
 
-      contactId = resolved?.[0]?.contact_id || null;
-      resolvedChatKey = resolved?.[0]?.out_chat_key || canonicalChatIdFinal;
+      const nameToSet = chatName && chatName !== 'Desconhecido' && !/^\d+$/.test(chatName.replace(/\D/g, '')) ? chatName : null;
+
+      if (!contact) {
+        // 3. Criar novo
+        const { data: newContact, error: createErr } = await supabase
+          .from("contacts")
+          .insert({
+            lid,
+            phone_e164: phoneE164,
+            name: nameToSet || "Contato Novo",
+          })
+          .select("id")
+          .single();
+
+        if (createErr) {
+          console.error("[Webhook] Erro ao criar contato:", createErr);
+          // Pode ter ocorrido race condition, tenta achar de novo
+          if (lid) {
+            const { data: retry } = await supabase.from("contacts").select("id").eq("lid", lid).maybeSingle();
+            contactId = retry?.id || null;
+          }
+        } else {
+          contactId = newContact?.id;
+        }
+      } else {
+        contactId = contact.id;
+        // Atualiza nome se necessário
+        if (nameToSet && (!contact.name || contact.name === 'Desconhecido')) {
+          await supabase.from("contacts").update({ name: nameToSet }).eq("id", contact.id);
+        }
+      }
 
       if (!contactId) {
-        console.error('[Webhook] ❌ RPC returned no contact_id');
-        throw new Error('[zapi-webhook] missing contactId after resolve');
+        throw new Error('[zapi-webhook] missing contactId after reconciliation');
       }
 
-      console.log(`[Webhook] ✅ Contato resolvido: ${contactId} (chat_key: ${resolvedChatKey})`);
+      console.log(`[Webhook] ✅ Contato resolvido: ${contactId}`);
     }
 
-    // ✅ Thread key CANÔNICA (não depende de phone vs lid)
+    // ✅ Thread key CANÔNICA (usando a identidade extraída)
     const finalThreadKey = isGroupChat
-      ? `group:${normalizeGroupJid(rawChatId || canonicalChatIdFinal || canonicalChatId)}`
+      ? `group:${normalizeGroupJid(identity.chatKey || canonicalChatIdFinal)}`
       : `dm:${contactId}`;
 
     // ✅ 3. RESOLVER MÍDIA/CONTEÚDO

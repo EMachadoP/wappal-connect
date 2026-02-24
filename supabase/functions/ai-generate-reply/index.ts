@@ -34,18 +34,25 @@ function normalizeText(t: string) {
 }
 
 function isCurrentlyBusinessHours(): boolean {
-  // BRT is UTC-3
-  const now = new Date();
-  const brtOffset = -3 * 60;
-  // Ajuste manual para BRT (UTC-3) independente do locale do servidor
-  const brt = new Date(now.getTime() + (brtOffset * 60 * 1000) + (now.getTimezoneOffset() * 60 * 1000));
+  try {
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat("pt-BR", {
+      timeZone: "America/Recife",
+      weekday: "long",
+      hour: "numeric",
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(now);
+    const weekdayVal = parts.find(p => p.type === "weekday")?.value || "";
+    // No locale pt-BR: "domingo", "segunda-feira"... "sexta-feira", "sábado"
+    const isWeekend = weekdayVal.toLowerCase().includes("sábado") || weekdayVal.toLowerCase().includes("domingo") || weekdayVal.toLowerCase().includes("sabado");
+    const hour = Number(parts.find(p => p.type === "hour")?.value || now.getHours());
 
-  const day = brt.getDay(); // 0=Dom, 1=Seg...
-  const hour = brt.getHours();
-
-  // Seg-Sex, 08:00 às 18:00
-  if (day >= 1 && day <= 5) {
-    return hour >= 8 && hour < 18;
+    if (!isWeekend) {
+      return hour >= 8 && hour < 18;
+    }
+  } catch (e) {
+    console.error("[AI] Error in isCurrentlyBusinessHours:", e);
   }
   return false;
 }
@@ -58,10 +65,10 @@ function isJustConfirmation(text: string): boolean {
     .replace(/\s+/g, " ")
     .trim();
 
+  // "não" removido daqui para evitar falso positivo de confirmação em negativas
   const CONFIRMATIONS = new Set([
     "ok", "okay", "oks", "okk", "okok",
     "sim", "sims", "ss", "sss",
-    "nao", "não", "n",
     "blz", "beleza", "bele",
     "certo", "certinho", "ctz",
     "entendi", "entendido",
@@ -80,9 +87,15 @@ function isJustConfirmation(text: string): boolean {
   ]);
 
   if (CONFIRMATIONS.has(normalized)) return true;
-  if (/^(ok+|sim+|ss+|n[aã]o+|blz+|vlw+|obg|ta\s*bom)$/i.test(normalized)) return true;
+  if (/^(ok+|sim+|ss+|blz+|vlw+|obg|ta\s*bom)$/i.test(normalized)) return true;
 
   return false;
+}
+
+function isNegation(text: string): boolean {
+  const t = (text || "").toLowerCase().trim();
+  // Pega "não", "nao", "n", "ñ" com ou sem pontuação
+  return /^(n[aã]?o|n|)$/i.test(t.replace(/[!.?,;:]+/g, ""));
 }
 
 function getGreeting(text: string): string | null {
@@ -90,7 +103,12 @@ function getGreeting(text: string): string | null {
   if (t.includes("bom dia")) return "Bom dia";
   if (t.includes("boa tarde")) return "Boa tarde";
   if (t.includes("boa noite")) return "Boa noite";
-  if (t.includes("ola") || t.includes("olá") || t.includes("oi")) return "Olá";
+
+  // Regex com borda de palavra e suporte a pontuação/espaços/início de linha
+  // Evita match em "dois", "foi", "atendimento@g7serv.com.br"
+  if (/(^|\s)oi([!?.,;:\s]|$)/i.test(t)) return "Olá";
+  if (/(^|\s)ol[aá]([!?.,;:\s]|$)/i.test(t)) return "Olá";
+
   return null;
 }
 
@@ -140,12 +158,16 @@ async function acquireLock(supabase: any, conversationId: string, skip = false) 
     });
 
     if (error?.code === "23505") return false;
-    // Fallback if table doesn't exist or other minor issues - we prefer to answer
-    if (error?.message?.includes("ai_conversation_locks")) return true;
-    if (error) throw error;
+    // Se a tabela não existe ou outro erro crítico de infra, logamos mas NÃO deixamos passar silenciosamente
+    // a menos que seja algo conhecido. lock_busy é mais seguro.
+    if (error) {
+      console.warn("[AI] Lock error:", error.message);
+      return false;
+    }
     return true;
-  } catch (_e) {
-    return true;
+  } catch (e) {
+    console.error("[AI] acquireLock Unhandled error:", e);
+    return false;
   }
 }
 
@@ -211,27 +233,47 @@ async function hydrateMessagesFromDb(
   }
 
   const seen = new Set<string>();
-  const deduped: { role: string; content: string }[] = [];
+  const deduped: { role: string; content: string; ts: string }[] = [];
 
   for (const m of consolidated) {
     const c = m.content.trim();
     if (!c) continue;
-    if (c.length <= 6) {
-      deduped.push({ role: m.role, content: c });
-      continue;
-    }
+
+    // ✅ Dedupe avançado: remove se for o mesmo remetente e conteúdo repetido em janela curta (30s)
     const k = `${m.role}::${c}`.slice(0, 600);
-    if (seen.has(k)) continue;
-    seen.add(k);
-    deduped.push({ role: m.role, content: c });
+    const last = deduped[deduped.length - 1];
+
+    if (last && last.role === m.role && last.content.trim() === c) {
+      const diff = new Date(m.ts).getTime() - new Date(last.ts).getTime();
+      if (diff < 30000) {
+        // Repetição detectada em menos de 30s: ignora
+        continue;
+      }
+    }
+
+    deduped.push({ role: m.role, content: c, ts: m.ts });
   }
 
-  return deduped.slice(-25);
+  return deduped.map(d => ({ role: d.role, content: d.content })).slice(-25);
 }
 
 // -------------------------
 // Protocol helpers
 // -------------------------
+function repairJson(str: string): string {
+  try {
+    // 1. Aspas "burras" (curvas)
+    let s = str.replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"');
+    // 2. Virgulas sobressalentes antes de fechamento
+    s = s.replace(/,\s*([\}\]])/g, '$1');
+    // 3. Newlines dentro de strings (heurística limitada)
+    // Se o parse falhar, o match abaixo pode ajudar a achar o JSON {..}
+    return s;
+  } catch {
+    return str;
+  }
+}
+
 async function getOpenProtocol(supabase: any, conversationId: string) {
   const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
   const { data } = await supabase
@@ -286,7 +328,7 @@ async function callGeminiText({
     safetySettings: finalSafetySettings,
   };
 
-  const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
   const resp = await fetch(url, {
     method: "POST",
     headers: {
@@ -744,21 +786,32 @@ function extractProtocolBlock(text: string) {
   if (m) {
     let payload = (m[1] ?? "").trim();
     let parsed: any = null;
+    let parseError = false;
+
     try {
       parsed = JSON.parse(payload);
     } catch (_) {
       try {
-        const jsonMatch = payload.match(/\{[\s\S]*\}/);
-        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
-      } catch (__) { }
+        // Tenta repair
+        const repaired = repairJson(payload);
+        parsed = JSON.parse(repaired);
+        console.log("[AI] JSON reparado com sucesso.");
+      } catch (__) {
+        try {
+          // Tenta pegar o que parece ser um objeto {}
+          const jsonMatch = payload.match(/\{[\s\S]*\}/);
+          if (jsonMatch) parsed = JSON.parse(repairJson(jsonMatch[0]));
+        } catch (___) {
+          parseError = true;
+        }
+      }
     }
 
     const cleanText = text.replace(m[0], "").trim();
-    return { cleanText, protocol: parsed };
+    return { cleanText, protocol: parsed, parseError };
   }
 
   // 2. Fallback para remoção de bloco TRUNCADO
-  // Se encontrar a tag de abertura mas não a de fechamento, remove tudo a partir dali para evitar vazar pro cliente
   const openingTag = "### PROTOCOLO ###";
   const openingTagAlt = "###PROTOCOLO###";
   if (text.toUpperCase().includes(openingTag) || text.toUpperCase().includes(openingTagAlt)) {
@@ -767,10 +820,10 @@ function extractProtocolBlock(text: string) {
 
     const cleanText = text.slice(0, idx).trim();
     console.warn("[AI] Removendo bloco de protocolo truncado detectado.");
-    return { cleanText, protocol: null as any };
+    return { cleanText, protocol: null as any, parseError: true };
   }
 
-  return { cleanText: text.trim(), protocol: null as any };
+  return { cleanText: text.trim(), protocol: null as any, parseError: false };
 }
 
 // -------------------------
@@ -812,13 +865,24 @@ serve(async (req: Request) => {
     if (!messages.length) {
       messages = await hydrateMessagesFromDb(supabase, conversationId, 25);
     } else {
-      // Consolidação também nas mensagens que vieram no payload
+      // Consolidação também nas mensagens que vieram no payload (se tiverem ts)
       const consolidated: any[] = [];
       for (const m of messages) {
         const last = consolidated[consolidated.length - 1];
         if (last && last.role === m.role && m.role === "user") {
-          last.content += " " + m.content;
-          continue;
+          // Só consolida se tiver timestamp e for < 45s
+          if (m.ts && last.ts) {
+            const diff = new Date(m.ts).getTime() - new Date(last.ts).getTime();
+            if (diff < 45000) {
+              last.content += " " + m.content;
+              last.ts = m.ts; // atualiza timestamp
+              continue;
+            }
+          } else if (!m.ts && !last.ts) {
+            // Se nenhum tem ts, o risco de juntar mensagens distantes é real. 
+            // Seguindo recomendação: se não tiver timestamp, não consolidar (ou consolidar apenas batch imediato)
+            // Aqui optamos por NÃO consolidar para evitar o bug manhã+tarde citado pelo usuário.
+          }
         }
         consolidated.push({ ...m });
       }
@@ -868,9 +932,25 @@ serve(async (req: Request) => {
       });
     }
 
+    // Negation handling (prioridade sobre confirmação)
+    if (isNegation(lastUserText)) {
+      const recent = await hasRecentProtocol(supabase, conversationId, 30);
+      if (recent) {
+        // Se houve protocolo recente e o cliente diz "não", provavelmente algo deu errado
+        const replies = [
+          "Entendi. O que exatamente não deu certo? O problema continua ou mudou?",
+          "Certo. Pode me dizer o que não funcionou como esperado?",
+          "Perfeito — me conta o que ainda está acontecendo para eu avisar a equipe."
+        ];
+        const msg = pickDeterministic(`${conversationId}:${nowMinuteBucket()}`, replies);
+        return new Response(JSON.stringify({ text: msg, finish_reason: "NEGATION_FOLLOWUP" }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     // Confirmation handling
     if (isJustConfirmation(lastUserText)) {
-      const greetingFound = getGreeting(lastUserText);
       const recent = await hasRecentProtocol(supabase, conversationId, 60);
 
       if (recent) {
@@ -880,10 +960,6 @@ serve(async (req: Request) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-
-      // ✅ IMPORTANTE: Se não tem protocolo recente, NÃO respondemos com fallback genérico.
-      // Deixamos seguir para o LLM, para que ele trate mensagens curtas (ex: número do apê)
-      // ou use seu próprio discernimento conforme o prompt "3.1 RESPOSTAS CURTAS".
     }
 
     // Load identified data
@@ -940,15 +1016,29 @@ serve(async (req: Request) => {
       history: messages,
       temperature: 0.4,
       safetySettings: [
-        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_ONLY_HIGH" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" },
       ],
     });
 
-    let { cleanText, protocol } = extractProtocolBlock(llmText);
+    let { cleanText, protocol, parseError } = extractProtocolBlock(llmText);
     let userText = cleanText;
+
+    // Se houve erro de parse mas parece que a intenção era criar protocolo (ex: achou tag mas JSON quebrado)
+    if (parseError && !protocol) {
+      console.warn("[AI] Protocol parse failed, applying fallback.");
+      // Fallback: tenta criar protocolo mínimo com base no histórico
+      protocol = {
+        criar: true,
+        problema: lastUserText,
+        condominio_raw: conv?.condominiums?.name || (conv?.pending_payload as any)?.condo_raw_name || "Desconhecido",
+        categoria: "operational",
+        prioridade: "normal",
+        fallback: true
+      };
+    }
 
     // Se vai criar protocolo
     if (protocol?.criar === true) {
@@ -1027,15 +1117,57 @@ serve(async (req: Request) => {
     }
 
     // Normal reply
-    return new Response(JSON.stringify({
+    const finalResp = {
       text: userText || llmText || null,
       finish_reason: finishReason || "LLM_REPLY",
       provider: "gemini",
       model: geminiModel,
-    }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    };
+
+    try {
+      if (conversationId) {
+        await supabase.from("ai_logs").insert({
+          conversation_id: conversationId,
+          status: "success",
+          input_text: lastUserText,
+          output_text: finalResp.text,
+          model: geminiModel,
+          provider: "gemini",
+          metadata: {
+            finish_reason: finishReason,
+            tokens: (userText || llmText || "").length,
+            parse_error: parseError,
+            protocol_created: protocol?.criar === true,
+            protocol_fallback: protocol?.fallback === true,
+            lock_status: "acquired"
+          }
+        });
+      }
+    } catch (logErr) {
+      console.error("[AI] Failed to log success to ai_logs:", logErr);
+    }
+
+    return new Response(JSON.stringify(finalResp), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
   } catch (e: any) {
     console.error("[AI] Error:", e);
+
+    try {
+      if (conversationId) {
+        await supabase.from("ai_logs").insert({
+          conversation_id: conversationId,
+          status: "error",
+          error_message: String(e?.message || e),
+          model: "gemini-error",
+          metadata: {
+            error: String(e?.stack || e),
+            conversation_id: conversationId
+          }
+        });
+      }
+    } catch (logErr) {
+      console.error("[AI] Failed to log error to ai_logs:", logErr);
+    }
 
     const safe = pickDeterministic(`${conversationId || "err"}:${nowMinuteBucket()}`, [
       "Entendido! Vou verificar e já retorno.",
