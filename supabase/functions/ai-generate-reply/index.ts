@@ -255,17 +255,26 @@ async function callGeminiText({
   systemInstruction,
   history,
   temperature = 0.4,
+  safetySettings,
 }: {
   apiKey: string;
   model: string;
   systemInstruction: string;
   history: { role: string; content: string }[];
   temperature?: number;
+  safetySettings?: any[];
 }) {
   const contents = history.map((m) => ({
     role: m.role === "assistant" ? "model" : "user",
     parts: [{ text: m.content }],
   }));
+
+  const finalSafetySettings = safetySettings || [
+    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+    { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+  ];
 
   const body = {
     systemInstruction: { parts: [{ text: systemInstruction }] },
@@ -274,9 +283,10 @@ async function callGeminiText({
       temperature,
       maxOutputTokens: 1024,
     },
+    safetySettings: finalSafetySettings,
   };
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent`;
   const resp = await fetch(url, {
     method: "POST",
     headers: {
@@ -292,9 +302,16 @@ async function callGeminiText({
   }
 
   const json = await resp.json();
-  const text = json?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).filter(Boolean).join("") ?? "";
+  const candidate = json?.candidates?.[0];
+  const finishReason = candidate?.finishReason || "UNKNOWN";
+  const text = candidate?.content?.parts?.map((p: any) => p?.text).filter(Boolean).join("") ?? "";
 
-  return String(text || "").trim();
+  console.log(`[AI] LLM finishReason: ${finishReason}, output length: ${text.length}`);
+  if (finishReason !== "STOP") {
+    console.warn(`[AI] Warning: LLM finishReason is not STOP: ${finishReason}`);
+  }
+
+  return { text: String(text || "").trim(), finishReason };
 }
 
 // -------------------------
@@ -722,27 +739,38 @@ Quando você tiver informações COMPLETAS para registrar (incluindo o telefone,
 }
 
 function extractProtocolBlock(text: string) {
+  // 1. Tentar extrair bloco completo
   const m = text.match(/###\s*PROTOCOLO\s*###\s*([\s\S]*?)\s*###\s*FIM\s*###/i);
-  if (!m) return { cleanText: text.trim(), protocol: null as any };
-
-  let payload = (m[1] ?? "").trim()
-    .replace(/^```json/i, "")
-    .replace(/^```/i, "")
-    .replace(/```$/i, "")
-    .trim();
-
-  let parsed: any = null;
-  try {
-    parsed = JSON.parse(payload);
-  } catch {
-    const obj = payload.match(/\{[\s\S]*\}/);
-    if (obj) {
-      try { parsed = JSON.parse(obj[0]); } catch { parsed = null; }
+  if (m) {
+    let payload = (m[1] ?? "").trim();
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(payload);
+    } catch (_) {
+      try {
+        const jsonMatch = payload.match(/\{[\s\S]*\}/);
+        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+      } catch (__) { }
     }
+
+    const cleanText = text.replace(m[0], "").trim();
+    return { cleanText, protocol: parsed };
   }
 
-  const cleanText = text.replace(m[0], "").trim();
-  return { cleanText, protocol: parsed };
+  // 2. Fallback para remoção de bloco TRUNCADO
+  // Se encontrar a tag de abertura mas não a de fechamento, remove tudo a partir dali para evitar vazar pro cliente
+  const openingTag = "### PROTOCOLO ###";
+  const openingTagAlt = "###PROTOCOLO###";
+  if (text.toUpperCase().includes(openingTag) || text.toUpperCase().includes(openingTagAlt)) {
+    let idx = text.toUpperCase().indexOf(openingTag);
+    if (idx === -1) idx = text.toUpperCase().indexOf(openingTagAlt);
+
+    const cleanText = text.slice(0, idx).trim();
+    console.warn("[AI] Removendo bloco de protocolo truncado detectado.");
+    return { cleanText, protocol: null as any };
+  }
+
+  return { cleanText: text.trim(), protocol: null as any };
 }
 
 // -------------------------
@@ -784,7 +812,7 @@ serve(async (req: Request) => {
     if (!messages.length) {
       messages = await hydrateMessagesFromDb(supabase, conversationId, 25);
     } else {
-      // ✅ Consolidação também nas mensagens que vieram no payload
+      // Consolidação também nas mensagens que vieram no payload
       const consolidated: any[] = [];
       for (const m of messages) {
         const last = consolidated[consolidated.length - 1];
@@ -905,12 +933,18 @@ serve(async (req: Request) => {
       });
     }
 
-    const llmText = await callGeminiText({
+    const { text: llmText, finishReason } = await callGeminiText({
       apiKey: geminiKey,
       model: geminiModel,
       systemInstruction,
       history: messages,
       temperature: 0.4,
+      safetySettings: [
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+      ],
     });
 
     let { cleanText, protocol } = extractProtocolBlock(llmText);
@@ -995,7 +1029,7 @@ serve(async (req: Request) => {
     // Normal reply
     return new Response(JSON.stringify({
       text: userText || llmText || null,
-      finish_reason: "LLM_REPLY",
+      finish_reason: finishReason || "LLM_REPLY",
       provider: "gemini",
       model: geminiModel,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
