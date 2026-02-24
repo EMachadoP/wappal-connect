@@ -720,7 +720,7 @@ Quando você tiver informações COMPLETAS para registrar (incluindo o telefone,
 }
 
 function extractProtocolBlock(text: string) {
-  const m = text.match(/###PROTOCOLO###\s*([\s\S]*?)\s*###FIM###/i);
+  const m = text.match(/###\s*PROTOCOLO\s*###\s*([\s\S]*?)\s*###\s*FIM\s*###/i);
   if (!m) return { cleanText: text.trim(), protocol: null as any };
 
   let payload = (m[1] ?? "").trim()
