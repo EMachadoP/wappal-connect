@@ -289,6 +289,22 @@ async function getOpenProtocol(supabase: any, conversationId: string) {
 }
 
 // -------------------------
+// Truncation sanitizer
+// -------------------------
+function sanitizeTruncatedText(text: string): string {
+  if (!text) return text;
+  // Find the last sentence-ending punctuation
+  const lastPeriod = text.lastIndexOf(".");
+  const lastExcl = text.lastIndexOf("!");
+  const lastQuestion = text.lastIndexOf("?");
+  const lastBreak = Math.max(lastPeriod, lastExcl, lastQuestion);
+  if (lastBreak > text.length * 0.3) {
+    return text.slice(0, lastBreak + 1).trim();
+  }
+  return text.trim();
+}
+
+// -------------------------
 // Gemini call
 // -------------------------
 async function callGeminiText({
@@ -297,6 +313,7 @@ async function callGeminiText({
   systemInstruction,
   history,
   temperature = 0.4,
+  maxOutputTokens,
   safetySettings,
 }: {
   apiKey: string;
@@ -304,6 +321,7 @@ async function callGeminiText({
   systemInstruction: string;
   history: { role: string; content: string }[];
   temperature?: number;
+  maxOutputTokens?: number;
   safetySettings?: any[];
 }) {
   const contents = history.map((m) => ({
@@ -323,7 +341,7 @@ async function callGeminiText({
     contents,
     generationConfig: {
       temperature,
-      maxOutputTokens: 1024,
+      maxOutputTokens: maxOutputTokens ?? 2048,
     },
     safetySettings: finalSafetySettings,
   };
@@ -1009,19 +1027,44 @@ serve(async (req: Request) => {
       });
     }
 
-    const { text: llmText, finishReason } = await callGeminiText({
+    const sharedSafetySettings = [
+      { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_ONLY_HIGH" },
+      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" },
+    ];
+
+    let { text: llmText, finishReason } = await callGeminiText({
       apiKey: geminiKey,
       model: geminiModel,
       systemInstruction,
       history: messages,
       temperature: 0.4,
-      safetySettings: [
-        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_ONLY_HIGH" },
-        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" },
-      ],
+      maxOutputTokens: 2048,
+      safetySettings: sharedSafetySettings,
     });
+
+    // Retry with higher token limit if truncated
+    if (finishReason === "MAX_TOKENS") {
+      console.warn("[AI] Response truncated (MAX_TOKENS). Retrying with 4096 tokens...");
+      const retry = await callGeminiText({
+        apiKey: geminiKey,
+        model: geminiModel,
+        systemInstruction,
+        history: messages,
+        temperature: 0.4,
+        maxOutputTokens: 4096,
+        safetySettings: sharedSafetySettings,
+      });
+      llmText = retry.text;
+      finishReason = retry.finishReason;
+    }
+
+    // If still truncated after retry, sanitize to last complete sentence
+    if (finishReason !== "STOP" && finishReason !== "UNKNOWN") {
+      console.warn(`[AI] Still truncated after retry (${finishReason}). Sanitizing text.`);
+      llmText = sanitizeTruncatedText(llmText);
+    }
 
     let { cleanText, protocol, parseError } = extractProtocolBlock(llmText);
     let userText = cleanText;
