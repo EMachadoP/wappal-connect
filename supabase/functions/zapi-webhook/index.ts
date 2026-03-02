@@ -377,22 +377,22 @@ serve(async (req: Request): Promise<Response> => {
         // 1. Tenta por LID
         const { data: byLid } = await supabase
           .from("contacts")
-          .select("id, lid, phone_e164")
+          .select("id, lid, phone")
           .eq("lid", lid)
           .maybeSingle();
 
         if (byLid) {
           contact = byLid;
           // Merge phone se veio no payload e não tinha no banco
-          if (phoneE164 && !contact.phone_e164) {
-            await supabase.from("contacts").update({ phone_e164: phoneE164 }).eq("id", contact.id);
+          if (phoneE164 && !contact.phone) {
+            await supabase.from("contacts").update({ phone: phoneE164 }).eq("id", contact.id);
           }
         } else if (phoneE164) {
           // 2. Tenta por Phone para reconciliar
           const { data: byPhone } = await supabase
             .from("contacts")
-            .select("id, lid, phone_e164")
-            .eq("phone_e164", phoneE164)
+            .select("id, lid, phone")
+            .eq("phone", phoneE164)
             .maybeSingle();
 
           if (byPhone) {
@@ -406,8 +406,8 @@ serve(async (req: Request): Promise<Response> => {
         // Fallback apenas por phone
         const { data: byPhoneOnly } = await supabase
           .from("contacts")
-          .select("id, lid, phone_e164")
-          .eq("phone_e164", phoneE164)
+          .select("id, lid, phone")
+          .eq("phone", phoneE164)
           .maybeSingle();
         contact = byPhoneOnly;
       }
@@ -420,7 +420,7 @@ serve(async (req: Request): Promise<Response> => {
           .from("contacts")
           .insert({
             lid,
-            phone_e164: phoneE164,
+            phone: phoneE164,
             name: nameToSet || "Contato Novo",
           })
           .select("id")
